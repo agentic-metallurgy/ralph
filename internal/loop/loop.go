@@ -10,10 +10,26 @@ import (
 	"time"
 )
 
+// CommandBuilder is a function that creates an exec.Cmd for running Claude.
+// This allows for dependency injection in tests.
+type CommandBuilder func(ctx context.Context, prompt string) *exec.Cmd
+
+// DefaultCommandBuilder creates the standard claude CLI command.
+func DefaultCommandBuilder(ctx context.Context, prompt string) *exec.Cmd {
+	return exec.CommandContext(ctx, "claude",
+		"--print",
+		"--output-format", "stream-json",
+		"--dangerously-skip-permissions",
+		"--verbose",
+	)
+}
+
 // Config holds the loop execution configuration.
 type Config struct {
-	Iterations int
-	Prompt     string // The prompt content to send to Claude
+	Iterations     int
+	Prompt         string         // The prompt content to send to Claude
+	CommandBuilder CommandBuilder // Optional custom command builder (for testing)
+	SleepDuration  time.Duration  // Duration to sleep between iterations (default: 1s)
 }
 
 // Message represents output from the loop.
@@ -34,6 +50,13 @@ type Loop struct {
 
 // New creates a new Loop with the given configuration.
 func New(cfg Config) *Loop {
+	// Set defaults
+	if cfg.CommandBuilder == nil {
+		cfg.CommandBuilder = DefaultCommandBuilder
+	}
+	if cfg.SleepDuration == 0 {
+		cfg.SleepDuration = 1 * time.Second
+	}
 	return &Loop{
 		config: cfg,
 		output: make(chan Message, 100),
@@ -101,7 +124,7 @@ func (l *Loop) run(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(1 * time.Second):
+			case <-time.After(l.config.SleepDuration):
 			}
 		}
 	}
@@ -116,13 +139,8 @@ func (l *Loop) run(ctx context.Context) {
 
 // executeIteration runs a single Claude CLI iteration.
 func (l *Loop) executeIteration(ctx context.Context, iteration int) error {
-	// Build the command
-	cmd := exec.CommandContext(ctx, "claude",
-		"--print",
-		"--output-format", "stream-json",
-		"--dangerously-skip-permissions",
-		"--verbose",
-	)
+	// Build the command using the configured builder
+	cmd := l.config.CommandBuilder(ctx, l.config.Prompt)
 
 	// Set up stdin with the prompt
 	stdin, err := cmd.StdinPipe()
