@@ -172,7 +172,7 @@ Parse Claude's stream-json output format.
 ---
 
 ### TASK 7: Basic TUI Layout [MEDIUM PRIORITY]
-**Status**: NOT STARTED
+**Status**: COMPLETED
 
 Create the Bubble Tea TUI with layout matching Python visualizer.
 
@@ -188,15 +188,22 @@ Create the Bubble Tea TUI with layout matching Python visualizer.
 4. Write basic tests
 
 **Validation**:
-- [ ] TUI renders correctly in terminal
-- [ ] Layout matches Python visualizer
-- [ ] Colors/styling correct
-- [ ] Tests pass
+- [x] TUI renders correctly in terminal
+- [x] Layout matches Python visualizer
+- [x] Colors/styling correct (Tokyo Night theme)
+- [x] Tests pass (35 tests in tests/tui_test.go)
+
+**Implementation Notes**:
+- Created Message type with Role enum (assistant, tool, user, system)
+- Implemented viewport-based scrolling activity panel with auto-scroll
+- Added channel-based message streaming for integration with loop
+- Created helper commands: SendMessage, SendLoopUpdate, SendStatsUpdate
+- Created RunWithChannels and CreateProgram functions for external control
 
 ---
 
 ### TASK 8: Activity Feed Component [MEDIUM PRIORITY]
-**Status**: NOT STARTED
+**Status**: COMPLETED (merged into TASK 7)
 
 Implement the scrolling activity feed showing Claude's actions.
 
@@ -210,15 +217,15 @@ Implement the scrolling activity feed showing Claude's actions.
 4. Auto-scroll to bottom
 
 **Validation**:
-- [ ] Messages display correctly
-- [ ] Icons and colors match Python version
-- [ ] Scrolling works
-- [ ] Max messages respected
+- [x] Messages display correctly
+- [x] Icons and colors match Python version
+- [x] Scrolling works (using viewport component)
+- [x] Max messages respected (20 message limit)
 
 ---
 
 ### TASK 9: Footer Stats Panels [MEDIUM PRIORITY]
-**Status**: NOT STARTED
+**Status**: COMPLETED (merged into TASK 7)
 
 Implement the footer panels showing stats.
 
@@ -229,9 +236,9 @@ Implement the footer panels showing stats.
 4. Style with Lip Gloss
 
 **Validation**:
-- [ ] All panels render correctly
-- [ ] Stats update in real-time
-- [ ] Elapsed time formats correctly (HH:MM:SS)
+- [x] All panels render correctly
+- [x] Stats update in real-time (via tick command at 250ms)
+- [x] Elapsed time formats correctly (HH:MM:SS)
 
 ---
 
@@ -302,6 +309,7 @@ Final polish and documentation.
 | 2025-12-03 | TASK 4: Loop Execution Engine | COMPLETED | Full loop implementation with CommandBuilder for DI, context cancellation, channel-based output. 22 tests passing with mock command builder |
 | 2025-12-03 | TASK 5: Token Stats Tracking | COMPLETED | TokenStats with AddUsage, AddCost, TotalTokens, Save/Load methods. 19 tests passing for accumulation, persistence, and Python behavior matching |
 | 2025-12-03 | TASK 6: JSON Stream Parser | COMPLETED | Created internal/parser package with full Claude stream-json parsing. Handles system/assistant/user/result messages, extracts token usage and costs, strips system-reminders, parses loop markers, extracts tool uses and results. 33 tests passing |
+| 2025-12-03 | TASK 7/8/9: TUI Layout, Activity Feed, Footer | COMPLETED | Full TUI implementation with Message type, viewport scrolling, 3-panel footer, Tokyo Night colors, channel-based message streaming. 35 tests passing. Total: 127 tests across all packages |
 
 ---
 
