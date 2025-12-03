@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -47,12 +48,22 @@ func main() {
 	msgChan := make(chan tui.Message, 100)
 	doneChan := make(chan struct{})
 
+	// Create the loop configuration
+	loopConfig := loop.Config{
+		Iterations: cfg.Iterations,
+		Prompt:     promptContent,
+	}
+
+	// Create the loop
+	claudeLoop := loop.New(loopConfig)
+
 	// Create the TUI model with channels
 	model := tui.NewModelWithChannels(msgChan, doneChan)
 	model.SetStats(tokenStats)
 	model.SetLoopProgress(0, cfg.Iterations)
+	model.SetLoop(claudeLoop)
 
-	// Create the Bubble Tea program
+	// Create the Bubble Tea program (must be after SetLoop so the model copy has the loop reference)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	// Set up context for graceful shutdown
@@ -67,15 +78,6 @@ func main() {
 		cancel()
 		close(doneChan)
 	}()
-
-	// Create the loop configuration
-	loopConfig := loop.Config{
-		Iterations: cfg.Iterations,
-		Prompt:     promptContent,
-	}
-
-	// Create and start the loop
-	claudeLoop := loop.New(loopConfig)
 
 	// Create the parser
 	jsonParser := parser.NewParser()
@@ -144,8 +146,13 @@ func processMessage(
 	case "loop_marker":
 		// Update loop progress
 		program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
+		// Use stop sign emoji for STOPPED messages
+		role := tui.RoleLoop
+		if strings.Contains(msg.Content, "STOPPED") {
+			role = tui.RoleLoopStopped
+		}
 		msgChan <- tui.Message{
-			Role:    tui.RoleSystem,
+			Role:    role,
 			Content: msg.Content,
 		}
 
