@@ -1,0 +1,52 @@
+version: 2
+
+project_name: ralph
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: ralph
+    main: ./cmd/ralph
+    binary: ralph
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: ralph
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+brews:
+  - name: ralph
+    repository:
+      owner: agentic-metallurgy
+      name: homebrew-ralph
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/agentic-metallurgy/ralph"
+    description: "Ralph - AI agent loop runner"
+    license: "MIT"
+    install: |
+      bin.install "ralph"
+    test: |
+      system "#{bin}/ralph", "--help"
