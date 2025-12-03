@@ -1,37 +1,46 @@
 package main
 
 import (
-	"flag"
 	"fmt"
-)
+	"os"
 
-// CLI flags
-var (
-	iterations int
-	specFile   string
-	specFolder string
-	loopPrompt string
+	"github.com/cloudosai/ralph-go/internal/config"
+	"github.com/cloudosai/ralph-go/internal/prompt"
 )
-
-// init initializes and defines all CLI flags
-func init() {
-	flag.IntVar(&iterations, "iterations", 20, "Number of loop iterations")
-	flag.StringVar(&specFile, "spec-file", "", "Specific spec file to use")
-	flag.StringVar(&specFolder, "spec-folder", "specs/", "Folder containing spec files")
-	flag.StringVar(&loopPrompt, "loop-prompt", "", "Path to loop prompt override")
-}
 
 func main() {
-	// Parse command-line flags
-	flag.Parse()
+	// Parse command-line flags and get configuration
+	cfg := config.ParseFlags()
+
+	// Validate configuration
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Load the loop prompt (embedded or from override file)
+	promptLoader := prompt.NewLoader(cfg.LoopPrompt)
+	promptContent, err := promptLoader.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading prompt: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Display configuration
-	fmt.Println("Ralph-Go CLI Configuration:")
-	fmt.Println("===========================")
-	fmt.Printf("Iterations:   %d\n", iterations)
-	fmt.Printf("Spec File:    %s\n", specFile)
-	fmt.Printf("Spec Folder:  %s\n", specFolder)
-	fmt.Printf("Loop Prompt:  %s\n", loopPrompt)
+	fmt.Println("Ralph-Go Configuration:")
+	fmt.Println("=======================")
+	fmt.Printf("Iterations:   %d\n", cfg.Iterations)
+	if cfg.IsUsingSpecFile() {
+		fmt.Printf("Spec File:    %s\n", cfg.SpecFile)
+	} else {
+		fmt.Printf("Spec Folder:  %s\n", cfg.SpecFolder)
+	}
+	if promptLoader.IsUsingOverride() {
+		fmt.Printf("Loop Prompt:  %s\n", cfg.LoopPrompt)
+	} else {
+		fmt.Println("Loop Prompt:  (embedded default)")
+	}
+	fmt.Printf("Prompt Size:  %d bytes\n", len(promptContent))
 	fmt.Println()
 
 	// TODO: Initialize TUI visualizer
