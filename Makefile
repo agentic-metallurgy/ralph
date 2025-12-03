@@ -4,7 +4,7 @@ build:
 	go build -o ralph ./cmd/ralph
 
 test:
-	go test ./...
+	go test -v ./tests
 
 clean:
 	rm -f ralph ralph-test

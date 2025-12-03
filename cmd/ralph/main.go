@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cloudosai/ralph-go/internal/config"
@@ -60,6 +61,7 @@ func main() {
 	// Create the TUI model with channels
 	model := tui.NewModelWithChannels(msgChan, doneChan)
 	model.SetStats(tokenStats)
+	model.SetBaseElapsed(time.Duration(tokenStats.TotalElapsedNs))
 	model.SetLoopProgress(0, cfg.Iterations)
 	model.SetLoop(claudeLoop)
 
