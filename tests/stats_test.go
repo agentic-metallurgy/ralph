@@ -538,3 +538,29 @@ func TestTotalTokensCount_UpdatedAfterAddUsage(t *testing.T) {
 		t.Errorf("TotalTokensCount (%d) should match TotalTokens() (%d)", s.TotalTokensCount, s.TotalTokens())
 	}
 }
+
+func TestElapsedTime_SaveAndLoad(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "ralph-stats-elapsed-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	statsFile := filepath.Join(tmpDir, ".claude_stats")
+
+	s := stats.NewTokenStats()
+	s.TotalElapsedNs = int64(5445 * 1e9) // 1h30m45s
+
+	if err := s.Save(statsFile); err != nil {
+		t.Fatalf("Failed to save stats: %v", err)
+	}
+
+	loaded, err := stats.LoadTokenStats(statsFile)
+	if err != nil {
+		t.Fatalf("Failed to load stats: %v", err)
+	}
+
+	if loaded.TotalElapsedNs != s.TotalElapsedNs {
+		t.Errorf("TotalElapsedNs mismatch: expected %d, got %d", s.TotalElapsedNs, loaded.TotalElapsedNs)
+	}
+}
