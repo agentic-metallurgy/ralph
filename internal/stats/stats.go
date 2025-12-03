@@ -13,6 +13,7 @@ type TokenStats struct {
 	CacheReadTokens     int64   `json:"cache_read_tokens"`
 	TotalCostUSD        float64 `json:"total_cost"`
 	TotalTokensCount    int64   `json:"total_tokens"`
+	TotalElapsedNs      int64   `json:"elapsed_ns"`
 }
 
 // NewTokenStats creates a new empty TokenStats instance
@@ -24,6 +25,7 @@ func NewTokenStats() *TokenStats {
 		CacheReadTokens:     0,
 		TotalCostUSD:        0.0,
 		TotalTokensCount:    0,
+		TotalElapsedNs:      0,
 	}
 }
 

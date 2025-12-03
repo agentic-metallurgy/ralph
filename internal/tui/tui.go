@@ -93,6 +93,7 @@ type Model struct {
 	currentLoop           int
 	totalLoops            int
 	startTime             time.Time
+	baseElapsed           time.Duration // elapsed time from previous sessions
 	viewport              viewport.Model
 	activityHeight        int
 	footerHeight          int
@@ -142,6 +143,11 @@ func (m *Model) SetLoopProgress(current, total int) {
 // SetLoop sets the loop reference for pause/resume control
 func (m *Model) SetLoop(l *loop.Loop) {
 	m.loop = l
+}
+
+// SetBaseElapsed sets the elapsed time from previous sessions
+func (m *Model) SetBaseElapsed(d time.Duration) {
+	m.baseElapsed = d
 }
 
 // AddMessage adds a message to the activity feed
@@ -238,6 +244,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
+			// Persist total elapsed time to stats before quitting
+			if m.stats != nil {
+				totalElapsed := m.baseElapsed + time.Since(m.startTime)
+				m.stats.TotalElapsedNs = totalElapsed.Nanoseconds()
+			}
 			m.quitting = true
 			return m, tea.Quit
 		case "up", "k":
@@ -252,7 +263,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if m.controlPanelSelection == 2 {
-				// Quit selected
+				// Quit selected - persist elapsed time
+				if m.stats != nil {
+					totalElapsed := m.baseElapsed + time.Since(m.startTime)
+					m.stats.TotalElapsedNs = totalElapsed.Nanoseconds()
+				}
 				m.quitting = true
 				return m, tea.Quit
 			}
@@ -439,7 +454,7 @@ func (m Model) renderFooter() string {
 		loopDisplay = fmt.Sprintf("%d/%d", m.currentLoop, m.totalLoops)
 	}
 
-	elapsed := time.Since(m.startTime)
+	elapsed := m.baseElapsed + time.Since(m.startTime)
 	hours := int(elapsed.Hours())
 	minutes := int(elapsed.Minutes()) % 60
 	seconds := int(elapsed.Seconds()) % 60
