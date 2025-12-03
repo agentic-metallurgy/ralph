@@ -63,7 +63,7 @@ Set up the Go project with proper module structure and dependencies.
 ---
 
 ### TASK 2: Configuration and CLI Flags [HIGH PRIORITY]
-**Status**: NOT STARTED
+**Status**: COMPLETED
 
 Implement configuration handling with CLI flags and defaults.
 
@@ -74,28 +74,28 @@ Implement configuration handling with CLI flags and defaults.
 4. Write unit tests for config parsing
 
 **Validation**:
-- [ ] Config loads with default values
-- [ ] CLI flags override defaults correctly
-- [ ] Invalid values produce helpful errors
-- [ ] Unit tests pass
+- [x] Config loads with default values
+- [x] CLI flags override defaults correctly
+- [x] Invalid values produce helpful errors
+- [x] Unit tests pass (18 tests in tests/config_test.go)
 
 ---
 
 ### TASK 3: Embed and Load prompt.md [MEDIUM PRIORITY]
-**Status**: NOT STARTED
+**Status**: COMPLETED
 
 Bundle prompt.md with the binary using Go's embed package.
 
 **Steps**:
-1. Copy `prompt.md` from ralph-template to `assets/prompt.md`
+1. Copy `prompt.md` from ralph-template to `internal/prompt/assets/prompt.md`
 2. Use `//go:embed` to bundle the file
-3. Create function to load prompt (from embed or override file)
-4. Write unit tests
+3. Create `internal/prompt/prompt.go` with Loader struct
+4. Write unit tests in `tests/prompt_test.go`
 
 **Validation**:
-- [ ] Embedded prompt loads correctly
-- [ ] `--loop-prompt` override works
-- [ ] Unit tests pass
+- [x] Embedded prompt loads correctly (704 bytes)
+- [x] `--loop-prompt` override works
+- [x] Unit tests pass (9 tests for prompt package)
 
 ---
 
@@ -296,6 +296,8 @@ Final polish and documentation.
 | Date | Task | Status | Notes |
 |------|------|--------|-------|
 | 2025-12-03 | TASK 1: Project Setup | COMPLETED | Created project structure, go.mod, all packages, CLI flags working |
+| 2025-12-03 | TASK 2: Configuration and CLI Flags | COMPLETED | Full validation, defaults, path handling. 18 tests passing |
+| 2025-12-03 | TASK 3: Embed and Load prompt.md | COMPLETED | Go embed with Loader struct, 9 tests passing |
 
 ---
 
