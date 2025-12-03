@@ -18,47 +18,40 @@ Ralph is continuously looping on a given prompt with the ability to pause/edit/r
 - **Claude CLI** installed and accessible in your PATH
 - Terminal with 256-color support (recommended)
 
-## Building
+## Quickstart
 
-```bash
-# Clone the repository
-git clone https://github.com/cloudosai/ralph-go.git
-cd ralph-go
-
-# Build the binary
-go build -o ralph ./cmd/ralph
-```
-
-## Running
-
-### Quickstart
-
-1. Create a new project directory (or use an existing repo)
-
-2. Create `specs/default.md` with 5-10 lines describing what you'd like built
-
-3. Run ralph:
+1. Install ralph:
    ```bash
-   ./ralph
+   brew tap agentic-metallurgy/ralph
+   brew install ralph
+   ```
+
+2. Create a new project directory (or use an existing repo)
+
+3. Create `specs/default.md` with 5-10 lines describing what you'd like built
+
+4. Run ralph:
+   ```bash
+   ralph
    ```
 
 ### CLI Options
 
 ```bash
 # Run with defaults (20 iterations, specs/ folder)
-./ralph
+ralph
 
 # Custom number of iterations
-./ralph --iterations 10
+ralph --iterations 10
 
 # Use a specific spec file
-./ralph --spec-file /path/to/spec.md
+ralph --spec-file /path/to/spec.md
 
 # Specify a different specs folder
-./ralph --spec-folder /path/to/specs/
+ralph --spec-folder /path/to/specs/
 
 # Use a custom loop prompt instead of the embedded default
-./ralph --loop-prompt /path/to/custom_prompt.md
+ralph --loop-prompt /path/to/custom_prompt.md
 ```
 
 | Flag | Type | Default | Description |
@@ -142,6 +135,13 @@ go test ./tests/...
 - [Bubble Tea](https://github.com/charmbracelet/bubbletea) - TUI framework
 - [Lip Gloss](https://github.com/charmbracelet/lipgloss) - Terminal styling
 - [Bubbles](https://github.com/charmbracelet/bubbles) - TUI components
+
+## Credits & Inspiration
+
+Ralph was inspired by:
+
+- **Geoffrey Huntley's** article [Ralph Wiggum as a Software Engineer](https://ghuntley.com/ralph/) - the original vision for iterative spec-driven development with AI
+- **HumanLayer's** [Advanced Context Engineering for Coding Agents](https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md) - techniques for building effective AI-assisted development workflows
 
 ## License
 
