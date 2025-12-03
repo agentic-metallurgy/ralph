@@ -21,13 +21,6 @@ func mockCommandBuilder(ctx context.Context, prompt string) *exec.Cmd {
 	return cmd
 }
 
-// mockSlowCommandBuilder creates a command that simulates a slow process
-func mockSlowCommandBuilder(ctx context.Context, prompt string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHelperProcess", "--", "claude-slow")
-	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
-	return cmd
-}
-
 // mockErrorCommandBuilder creates a command that returns an error
 func mockErrorCommandBuilder(ctx context.Context, prompt string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHelperProcess", "--", "claude-error")

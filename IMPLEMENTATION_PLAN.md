@@ -243,7 +243,7 @@ Implement the footer panels showing stats.
 ---
 
 ### TASK 10: Integration and Main Loop [HIGH PRIORITY]
-**Status**: NOT STARTED
+**Status**: COMPLETED
 
 Wire everything together in main.go.
 
@@ -255,11 +255,21 @@ Wire everything together in main.go.
 5. Stream output to TUI
 6. Handle graceful shutdown (Ctrl+C)
 
+**Implementation Details**:
+- Full integration in `cmd/ralph/main.go` (262 lines)
+- Uses channels for TUI communication (msgChan, doneChan)
+- Loop runs in goroutine via `processLoopOutput` function
+- JSON parsing pipeline: loop output → parser → TUI messages
+- OS signal handling for graceful shutdown (SIGINT, SIGTERM)
+- Stats persistence to `.claude_stats` on exit
+- Message processing handles: loop_marker, output, error, complete types
+- Parsed messages processed for: usage stats, costs, assistant text, tool uses, tool results
+
 **Validation**:
-- [ ] Full application runs end-to-end
-- [ ] TUI updates in real-time
-- [ ] Stats save on exit
-- [ ] Clean shutdown
+- [x] Full application runs end-to-end
+- [x] TUI updates in real-time (via channel-based message streaming)
+- [x] Stats save on exit (to .claude_stats)
+- [x] Clean shutdown (context cancellation + signal handling)
 
 ---
 
@@ -310,6 +320,7 @@ Final polish and documentation.
 | 2025-12-03 | TASK 5: Token Stats Tracking | COMPLETED | TokenStats with AddUsage, AddCost, TotalTokens, Save/Load methods. 19 tests passing for accumulation, persistence, and Python behavior matching |
 | 2025-12-03 | TASK 6: JSON Stream Parser | COMPLETED | Created internal/parser package with full Claude stream-json parsing. Handles system/assistant/user/result messages, extracts token usage and costs, strips system-reminders, parses loop markers, extracts tool uses and results. 33 tests passing |
 | 2025-12-03 | TASK 7/8/9: TUI Layout, Activity Feed, Footer | COMPLETED | Full TUI implementation with Message type, viewport scrolling, 3-panel footer, Tokyo Night colors, channel-based message streaming. 35 tests passing. Total: 127 tests across all packages |
+| 2025-12-03 | TASK 10: Integration and Main Loop | COMPLETED | Full integration wiring TUI, loop, parser, and stats. Channel-based communication, signal handling for graceful shutdown, stats persistence. Application runs end-to-end |
 
 ---
 
