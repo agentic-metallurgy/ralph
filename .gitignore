@@ -1,5 +1,6 @@
 # Binaries (root level only)
 /ralph
+/ralph-test
 *.exe
 
 # IDE
