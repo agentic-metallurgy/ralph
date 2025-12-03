@@ -42,10 +42,13 @@ type Message struct {
 
 // Loop manages the Claude CLI execution loop.
 type Loop struct {
-	config  Config
-	output  chan Message
-	cancel  context.CancelFunc
-	running bool
+	config          Config
+	output          chan Message
+	cancel          context.CancelFunc
+	running         bool
+	paused          bool
+	resumeCh        chan struct{}
+	iterationCancel context.CancelFunc // cancels current iteration only
 }
 
 // New creates a new Loop with the given configuration.
@@ -58,8 +61,9 @@ func New(cfg Config) *Loop {
 		cfg.SleepDuration = 1 * time.Second
 	}
 	return &Loop{
-		config: cfg,
-		output: make(chan Message, 100),
+		config:   cfg,
+		output:   make(chan Message, 100),
+		resumeCh: make(chan struct{}, 1),
 	}
 }
 
@@ -89,6 +93,30 @@ func (l *Loop) IsRunning() bool {
 	return l.running
 }
 
+// IsPaused returns whether the loop is currently paused.
+func (l *Loop) IsPaused() bool {
+	return l.paused
+}
+
+// Pause immediately interrupts the current iteration and pauses the loop.
+func (l *Loop) Pause() {
+	if !l.paused && l.running {
+		l.paused = true
+		// Cancel the current iteration to interrupt it immediately
+		if l.iterationCancel != nil {
+			l.iterationCancel()
+		}
+	}
+}
+
+// Resume resumes a paused loop.
+func (l *Loop) Resume() {
+	if l.paused {
+		l.paused = false
+		l.resumeCh <- struct{}{}
+	}
+}
+
 // run executes the main loop logic.
 func (l *Loop) run(ctx context.Context) {
 	defer close(l.output)
@@ -101,6 +129,27 @@ func (l *Loop) run(ctx context.Context) {
 		default:
 		}
 
+		// Check if paused and wait for resume
+		if l.paused {
+			l.output <- Message{
+				Type:    "loop_marker",
+				Content: "======= LOOP STOPPED =======",
+				Loop:    i,
+				Total:   l.config.Iterations,
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-l.resumeCh:
+				l.output <- Message{
+					Type:    "loop_marker",
+					Content: "======= LOOP RESUMED =======",
+					Loop:    i,
+					Total:   l.config.Iterations,
+				}
+			}
+		}
+
 		// Send loop marker
 		l.output <- Message{
 			Type:    "loop_marker",
@@ -109,8 +158,40 @@ func (l *Loop) run(ctx context.Context) {
 			Total:   l.config.Iterations,
 		}
 
+		// Create a cancellable context for this iteration
+		iterCtx, iterCancel := context.WithCancel(ctx)
+		l.iterationCancel = iterCancel
+
 		// Execute Claude CLI
-		if err := l.executeIteration(ctx, i); err != nil {
+		err := l.executeIteration(iterCtx, i)
+		iterCancel() // clean up
+		l.iterationCancel = nil
+
+		// If we were paused (interrupted), don't report as error
+		if l.paused {
+			l.output <- Message{
+				Type:    "loop_marker",
+				Content: "======= LOOP STOPPED =======",
+				Loop:    i,
+				Total:   l.config.Iterations,
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-l.resumeCh:
+				l.output <- Message{
+					Type:    "loop_marker",
+					Content: "======= LOOP RESUMED =======",
+					Loop:    i,
+					Total:   l.config.Iterations,
+				}
+			}
+			// Retry this iteration
+			i--
+			continue
+		}
+
+		if err != nil {
 			l.output <- Message{
 				Type:    "error",
 				Content: err.Error(),

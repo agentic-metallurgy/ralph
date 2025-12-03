@@ -8,27 +8,31 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/cloudosai/ralph-go/internal/loop"
 	"github.com/cloudosai/ralph-go/internal/stats"
 )
 
 // Color palette matching Python visualizer (Tokyo Night theme)
 var (
-	colorBlue     = lipgloss.Color("#7AA2F7")
-	colorPurple   = lipgloss.Color("#BB9AF7")
-	colorGreen    = lipgloss.Color("#9ECE6A")
-	colorDimGray  = lipgloss.Color("#565F89")
+	colorBlue      = lipgloss.Color("#7AA2F7")
+	colorPurple    = lipgloss.Color("#BB9AF7")
+	colorGreen     = lipgloss.Color("#9ECE6A")
+	colorDimGray   = lipgloss.Color("#565F89")
 	colorLightGray = lipgloss.Color("#C0CAF5")
-	colorBg       = lipgloss.Color("#1A1B26")
+	colorBg        = lipgloss.Color("#1A1B26")
+	colorRed       = lipgloss.Color("#F7768E")
 )
 
 // MessageRole represents the type of message sender
 type MessageRole string
 
 const (
-	RoleAssistant MessageRole = "assistant"
-	RoleTool      MessageRole = "tool"
-	RoleUser      MessageRole = "user"
-	RoleSystem    MessageRole = "system"
+	RoleAssistant   MessageRole = "assistant"
+	RoleTool        MessageRole = "tool"
+	RoleUser        MessageRole = "user"
+	RoleSystem      MessageRole = "system"
+	RoleLoop        MessageRole = "loop"
+	RoleLoopStopped MessageRole = "loop_stopped"
 )
 
 // Message represents a single activity message in the feed
@@ -48,6 +52,10 @@ func (m Message) GetIcon() string {
 		return "📝"
 	case RoleSystem:
 		return "💰"
+	case RoleLoop:
+		return "🚀"
+	case RoleLoopStopped:
+		return "🛑"
 	default:
 		return "📝"
 	}
@@ -64,6 +72,10 @@ func (m Message) GetStyle() lipgloss.Style {
 		return lipgloss.NewStyle().Foreground(colorDimGray)
 	case RoleSystem:
 		return lipgloss.NewStyle().Foreground(colorGreen)
+	case RoleLoop:
+		return lipgloss.NewStyle().Bold(true).Foreground(colorPurple)
+	case RoleLoopStopped:
+		return lipgloss.NewStyle().Bold(true).Foreground(colorRed)
 	default:
 		return lipgloss.NewStyle().Foreground(colorDimGray)
 	}
@@ -71,21 +83,23 @@ func (m Message) GetStyle() lipgloss.Style {
 
 // Model represents the TUI application state
 type Model struct {
-	ready          bool
-	width          int
-	height         int
-	quitting       bool
-	messages       []Message
-	maxMessages    int
-	stats          *stats.TokenStats
-	currentLoop    int
-	totalLoops     int
-	startTime      time.Time
-	viewport       viewport.Model
-	activityHeight int
-	footerHeight   int
-	msgChan        <-chan Message
-	doneChan       <-chan struct{}
+	ready                 bool
+	width                 int
+	height                int
+	quitting              bool
+	messages              []Message
+	maxMessages           int
+	stats                 *stats.TokenStats
+	currentLoop           int
+	totalLoops            int
+	startTime             time.Time
+	viewport              viewport.Model
+	activityHeight        int
+	footerHeight          int
+	msgChan               <-chan Message
+	doneChan              <-chan struct{}
+	controlPanelSelection int // 0 = Stop Loop, 1 = Start Loop
+	loop                  *loop.Loop
 }
 
 // NewModel creates and returns a new initialized Model
@@ -123,6 +137,11 @@ func (m *Model) SetStats(s *stats.TokenStats) {
 func (m *Model) SetLoopProgress(current, total int) {
 	m.currentLoop = current
 	m.totalLoops = total
+}
+
+// SetLoop sets the loop reference for pause/resume control
+func (m *Model) SetLoop(l *loop.Loop) {
+	m.loop = l
 }
 
 // AddMessage adds a message to the activity feed
@@ -221,6 +240,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
+		case "up", "k":
+			if m.controlPanelSelection > 0 {
+				m.controlPanelSelection--
+			}
+			return m, nil
+		case "down", "j":
+			if m.controlPanelSelection < 2 {
+				m.controlPanelSelection++
+			}
+			return m, nil
+		case "enter":
+			if m.controlPanelSelection == 2 {
+				// Quit selected
+				m.quitting = true
+				return m, tea.Quit
+			}
+			if m.loop != nil {
+				if m.controlPanelSelection == 0 {
+					// Stop Loop selected
+					m.loop.Pause()
+				} else if m.controlPanelSelection == 1 {
+					// Start Loop selected
+					m.loop.Resume()
+				}
+			}
+			return m, nil
 		}
 
 	case tickMsg:
@@ -301,27 +346,39 @@ func (m Model) View() string {
 
 // renderLayout creates the full layout with activity panel and footer
 func (m Model) renderLayout() string {
+	// Check if loop is paused
+	isPaused := m.loop != nil && m.loop.IsPaused()
+
+	// Choose colors based on paused state
+	borderColor := colorBlue
+	statusText := "RUNNING"
+	if isPaused {
+		borderColor = colorRed
+		statusText = "STOPPED"
+	}
+
 	// Activity panel style
 	activityStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorBlue).
+		BorderForeground(borderColor).
 		Padding(1, 2).
 		Width(m.width - 2).
-		Height(m.activityHeight).
-		Background(colorBg)
+		Height(m.activityHeight)
 
-	// Render activity panel with title
-	activityTitle := lipgloss.NewStyle().
+	// Centered status title at top
+	statusTitle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(colorBlue).
-		Render("Activity")
+		Foreground(borderColor).
+		Width(m.width - 2).
+		Align(lipgloss.Center).
+		Render(statusText)
 
 	activityContent := activityStyle.Render(m.viewport.View())
 
-	// Add title to activity panel
+	// Add centered status title above activity panel
 	activityPanel := lipgloss.JoinVertical(
 		lipgloss.Left,
-		activityTitle,
+		statusTitle,
 		activityContent,
 	)
 
@@ -347,8 +404,7 @@ func (m Model) renderFooter() string {
 		BorderForeground(colorPurple).
 		Padding(0, 1).
 		Width(panelWidth).
-		Height(m.footerHeight - 2).
-		Background(colorBg)
+		Height(m.footerHeight - 2)
 
 	labelStyle := lipgloss.NewStyle().
 		Foreground(colorBlue).
@@ -389,28 +445,52 @@ func (m Model) renderFooter() string {
 	seconds := int(elapsed.Seconds()) % 60
 	timeDisplay := fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 
+	// Status display
+	isPaused := m.loop != nil && m.loop.IsPaused()
+	statusText := "Running"
+	statusStyle := valueStyle.Foreground(colorGreen)
+	if isPaused {
+		statusText = "Stopped"
+		statusStyle = valueStyle.Foreground(colorRed)
+	}
+
 	loopDetailsContent := lipgloss.JoinVertical(
 		lipgloss.Left,
 		titleStyle.Render("Loop Details"),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Loop:"), valueStyle.Render(fmt.Sprintf(" %s", loopDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Elapsed:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
 
-	// Placeholder panel
-	placeholderContent := lipgloss.JoinVertical(
+	// Control Panel
+	stopLoopLine := "  Stop Loop"
+	startLoopLine := "  Start Loop"
+	quitLine := "  Quit"
+	switch m.controlPanelSelection {
+	case 0:
+		stopLoopLine = "> Stop Loop"
+	case 1:
+		startLoopLine = "> Start Loop"
+	case 2:
+		quitLine = "> Quit"
+	}
+
+	controlPanelContent := lipgloss.JoinVertical(
 		lipgloss.Left,
-		titleStyle.Render("Placeholder 2"),
-		lipgloss.NewStyle().Foreground(colorDimGray).Render("Coming soon..."),
+		titleStyle.Render("Control Panel"),
+		valueStyle.Render(stopLoopLine),
+		valueStyle.Render(startLoopLine),
+		valueStyle.Render(quitLine),
 	)
-	placeholderPanel := panelStyle.Render(placeholderContent)
+	controlPanel := panelStyle.Render(controlPanelContent)
 
 	// Join all panels horizontally
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		usageCostPanel,
 		loopDetailsPanel,
-		placeholderPanel,
+		controlPanel,
 	)
 }
 
