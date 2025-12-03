@@ -124,7 +124,7 @@ Implement the core loop that runs Claude CLI iterations.
 ---
 
 ### TASK 5: Token Stats Tracking [MEDIUM PRIORITY]
-**Status**: NOT STARTED
+**Status**: COMPLETED
 
 Track token usage and costs, persisting to file.
 
@@ -139,10 +139,10 @@ Track token usage and costs, persisting to file.
 5. Write unit tests
 
 **Validation**:
-- [ ] Stats accumulate correctly
-- [ ] Stats persist and reload
-- [ ] Cost calculation matches Python version
-- [ ] Unit tests pass
+- [x] Stats accumulate correctly
+- [x] Stats persist and reload
+- [x] Cost calculation matches Python version
+- [x] Unit tests pass (19 tests in tests/stats_test.go)
 
 ---
 
@@ -299,6 +299,7 @@ Final polish and documentation.
 | 2025-12-03 | TASK 2: Configuration and CLI Flags | COMPLETED | Full validation, defaults, path handling. 18 tests passing |
 | 2025-12-03 | TASK 3: Embed and Load prompt.md | COMPLETED | Go embed with Loader struct, 9 tests passing |
 | 2025-12-03 | TASK 4: Loop Execution Engine | COMPLETED | Full loop implementation with CommandBuilder for DI, context cancellation, channel-based output. 22 tests passing with mock command builder |
+| 2025-12-03 | TASK 5: Token Stats Tracking | COMPLETED | TokenStats with AddUsage, AddCost, TotalTokens, Save/Load methods. 19 tests passing for accumulation, persistence, and Python behavior matching |
 
 ---
 
