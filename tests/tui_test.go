@@ -530,3 +530,24 @@ func TestWindowResizePreservesMessages(t *testing.T) {
 		t.Error("Model should preserve messages after resize")
 	}
 }
+
+// TestQuitPersistsElapsedTime tests that quitting updates stats with elapsed time
+func TestQuitPersistsElapsedTime(t *testing.T) {
+	model := tui.NewModel()
+
+	tokenStats := stats.NewTokenStats()
+	model.SetStats(tokenStats)
+
+	baseElapsed := 1 * time.Hour
+	model.SetBaseElapsed(baseElapsed)
+
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}
+	model, _ = updateModel(model, keyMsg)
+
+	if tokenStats.TotalElapsedNs < baseElapsed.Nanoseconds() {
+		t.Errorf("TotalElapsedNs should be at least %d, got %d",
+			baseElapsed.Nanoseconds(), tokenStats.TotalElapsedNs)
+	}
+}
