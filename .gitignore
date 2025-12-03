@@ -1,0 +1,17 @@
+# Binaries (root level only)
+/ralph
+*.exe
+
+# IDE
+.idea/
+.vscode/
+
+# Test outputs
+*.test
+coverage.out
+
+# Stats file (persisted state)
+.claude_stats
+
+# OS files
+.DS_Store
