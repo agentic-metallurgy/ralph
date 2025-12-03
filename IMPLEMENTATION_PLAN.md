@@ -147,26 +147,27 @@ Track token usage and costs, persisting to file.
 ---
 
 ### TASK 6: JSON Stream Parser [MEDIUM PRIORITY]
-**Status**: NOT STARTED
+**Status**: COMPLETED
 
 Parse Claude's stream-json output format.
 
 **Steps**:
-1. Create parser in `internal/tui/` or dedicated package
+1. Create parser in `internal/parser/parser.go` package
 2. Handle message types: system, assistant, user, result
 3. Extract:
-   - Token usage
-   - Cost from result messages
+   - Token usage (input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens)
+   - Cost from result messages (total_cost_usd)
    - Text content (strip system-reminders)
-   - Tool usage
-4. Parse loop markers
+   - Tool usage (name and truncated input JSON)
+   - Tool results (truncated content)
+4. Parse loop markers (======= LOOP X/Y =======)
 5. Write unit tests with sample JSON
 
 **Validation**:
-- [ ] All message types parsed correctly
-- [ ] System reminders stripped
-- [ ] Loop markers detected
-- [ ] Unit tests pass
+- [x] All message types parsed correctly
+- [x] System reminders stripped
+- [x] Loop markers detected
+- [x] Unit tests pass (33 tests in tests/parser_test.go)
 
 ---
 
@@ -300,6 +301,7 @@ Final polish and documentation.
 | 2025-12-03 | TASK 3: Embed and Load prompt.md | COMPLETED | Go embed with Loader struct, 9 tests passing |
 | 2025-12-03 | TASK 4: Loop Execution Engine | COMPLETED | Full loop implementation with CommandBuilder for DI, context cancellation, channel-based output. 22 tests passing with mock command builder |
 | 2025-12-03 | TASK 5: Token Stats Tracking | COMPLETED | TokenStats with AddUsage, AddCost, TotalTokens, Save/Load methods. 19 tests passing for accumulation, persistence, and Python behavior matching |
+| 2025-12-03 | TASK 6: JSON Stream Parser | COMPLETED | Created internal/parser package with full Claude stream-json parsing. Handles system/assistant/user/result messages, extracts token usage and costs, strips system-reminders, parses loop markers, extracts tool uses and results. 33 tests passing |
 
 ---
 
