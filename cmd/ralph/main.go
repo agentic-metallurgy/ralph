@@ -24,6 +24,17 @@ func main() {
 	// Parse command-line flags and get configuration
 	cfg := config.ParseFlags()
 
+	// Handle --show-prompt: print embedded prompt and exit
+	if cfg.ShowPrompt {
+		content, err := prompt.GetEmbeddedPrompt()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(content)
+		return
+	}
+
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
