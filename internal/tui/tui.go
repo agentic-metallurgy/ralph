@@ -94,6 +94,8 @@ type Model struct {
 	totalLoops            int
 	startTime             time.Time
 	baseElapsed           time.Duration // elapsed time from previous sessions
+	timerPaused           bool          // whether elapsed time tracking is paused
+	pausedElapsed         time.Duration // elapsed time when paused (for display)
 	viewport              viewport.Model
 	activityHeight        int
 	footerHeight          int
@@ -246,7 +248,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			// Persist total elapsed time to stats before quitting
 			if m.stats != nil {
-				totalElapsed := m.baseElapsed + time.Since(m.startTime)
+				var totalElapsed time.Duration
+				if m.timerPaused {
+					totalElapsed = m.pausedElapsed
+				} else {
+					totalElapsed = m.baseElapsed + time.Since(m.startTime)
+				}
 				m.stats.TotalElapsedNs = totalElapsed.Nanoseconds()
 			}
 			m.quitting = true
@@ -265,7 +272,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.controlPanelSelection == 2 {
 				// Quit selected - persist elapsed time
 				if m.stats != nil {
-					totalElapsed := m.baseElapsed + time.Since(m.startTime)
+					var totalElapsed time.Duration
+					if m.timerPaused {
+						totalElapsed = m.pausedElapsed
+					} else {
+						totalElapsed = m.baseElapsed + time.Since(m.startTime)
+					}
 					m.stats.TotalElapsedNs = totalElapsed.Nanoseconds()
 				}
 				m.quitting = true
@@ -273,10 +285,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.loop != nil {
 				if m.controlPanelSelection == 0 {
-					// Stop Loop selected
+					// Stop Loop selected - freeze elapsed time
+					if !m.timerPaused {
+						m.pausedElapsed = m.baseElapsed + time.Since(m.startTime)
+						m.timerPaused = true
+					}
 					m.loop.Pause()
 				} else if m.controlPanelSelection == 1 {
-					// Start Loop selected
+					// Start Loop selected - resume elapsed time from where we paused
+					if m.timerPaused {
+						m.baseElapsed = m.pausedElapsed
+						m.startTime = time.Now()
+						m.timerPaused = false
+					}
 					m.loop.Resume()
 				}
 			}
@@ -454,7 +475,12 @@ func (m Model) renderFooter() string {
 		loopDisplay = fmt.Sprintf("%d/%d", m.currentLoop, m.totalLoops)
 	}
 
-	elapsed := m.baseElapsed + time.Since(m.startTime)
+	var elapsed time.Duration
+	if m.timerPaused {
+		elapsed = m.pausedElapsed
+	} else {
+		elapsed = m.baseElapsed + time.Since(m.startTime)
+	}
 	hours := int(elapsed.Hours())
 	minutes := int(elapsed.Minutes()) % 60
 	seconds := int(elapsed.Seconds()) % 60

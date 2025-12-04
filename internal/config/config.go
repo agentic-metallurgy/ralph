@@ -9,7 +9,7 @@ import (
 
 // Default values for configuration
 const (
-	DefaultIterations = 20
+	DefaultIterations = 5
 	DefaultSpecFolder = "specs/"
 )
 
