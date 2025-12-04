@@ -19,6 +19,7 @@ type Config struct {
 	SpecFile   string
 	SpecFolder string
 	LoopPrompt string
+	ShowPrompt bool
 }
 
 // NewConfig returns a new Config with default values
@@ -40,6 +41,7 @@ func ParseFlags() *Config {
 	flag.StringVar(&cfg.SpecFile, "spec-file", "", "Specific spec file to use (overrides spec-folder)")
 	flag.StringVar(&cfg.SpecFolder, "spec-folder", DefaultSpecFolder, "Folder containing spec files")
 	flag.StringVar(&cfg.LoopPrompt, "loop-prompt", "", "Path to loop prompt override (defaults to embedded prompt.md)")
+	flag.BoolVar(&cfg.ShowPrompt, "show-prompt", false, "Print the embedded loop prompt and exit")
 
 	// Custom usage function to display flags with -- prefix
 	flag.Usage = func() {
@@ -55,7 +57,8 @@ func ParseFlags() *Config {
 			}
 			fmt.Fprintf(os.Stderr, "\n")
 			fmt.Fprintf(os.Stderr, "    \t%s", usage)
-			if f.DefValue != "" {
+			// Show default for non-empty, non-false values
+			if f.DefValue != "" && f.DefValue != "false" {
 				fmt.Fprintf(os.Stderr, " (default: %s)", f.DefValue)
 			}
 			fmt.Fprintf(os.Stderr, "\n")
