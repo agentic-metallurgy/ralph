@@ -41,6 +41,27 @@ func ParseFlags() *Config {
 	flag.StringVar(&cfg.SpecFolder, "spec-folder", DefaultSpecFolder, "Folder containing spec files")
 	flag.StringVar(&cfg.LoopPrompt, "loop-prompt", "", "Path to loop prompt override (defaults to embedded prompt.md)")
 
+	// Custom usage function to display flags with -- prefix
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		flag.VisitAll(func(f *flag.Flag) {
+			// Format: --flag-name type
+			//     description (default: value)
+			fmt.Fprintf(os.Stderr, "  --%s", f.Name)
+			// Get the type name from the default value
+			typeName, usage := flag.UnquoteUsage(f)
+			if len(typeName) > 0 {
+				fmt.Fprintf(os.Stderr, " %s", typeName)
+			}
+			fmt.Fprintf(os.Stderr, "\n")
+			fmt.Fprintf(os.Stderr, "    \t%s", usage)
+			if f.DefValue != "" {
+				fmt.Fprintf(os.Stderr, " (default: %s)", f.DefValue)
+			}
+			fmt.Fprintf(os.Stderr, "\n")
+		})
+	}
+
 	flag.Parse()
 
 	return cfg
