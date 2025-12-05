@@ -74,7 +74,7 @@ func ParseFlags() *Config {
 // It validates:
 // - Iterations must be greater than 0
 // - If spec-file is provided, it must exist
-// - If spec-folder is provided (and spec-file is not), it must exist
+// - If spec-folder is provided (and spec-file is not), it must exist (unless using custom loop-prompt)
 // - If loop-prompt is provided, it must exist
 func (c *Config) Validate() error {
 	if c.Iterations <= 0 {
@@ -85,7 +85,9 @@ func (c *Config) Validate() error {
 		if err := c.validateFileExists(c.SpecFile, "--spec-file"); err != nil {
 			return err
 		}
-	} else if c.SpecFolder != "" {
+	} else if c.SpecFolder != "" && c.LoopPrompt == "" {
+		// Only validate spec-folder when using the default embedded prompt.
+		// Custom prompts may not need specs at all.
 		if err := c.validateDirExists(c.SpecFolder, "--spec-folder"); err != nil {
 			return err
 		}
