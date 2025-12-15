@@ -24,6 +24,17 @@ func DefaultCommandBuilder(ctx context.Context, prompt string) *exec.Cmd {
 	)
 }
 
+// CursorAgentCommandBuilder creates a cursor-agent CLI command.
+// Uses cursor-agent's headless mode with stream-json output.
+// See: https://cursor.com/docs/cli/headless
+func CursorAgentCommandBuilder(ctx context.Context, prompt string) *exec.Cmd {
+	return exec.CommandContext(ctx, "cursor-agent",
+		"-p",                        // print mode (non-interactive)
+		"--force",                   // allow file modifications
+		"--output-format", "stream-json",
+	)
+}
+
 // Config holds the loop execution configuration.
 type Config struct {
 	Iterations     int
