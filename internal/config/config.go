@@ -11,6 +11,13 @@ import (
 const (
 	DefaultIterations = 5
 	DefaultSpecFolder = "specs/"
+	DefaultBackend    = "claude"
+)
+
+// Valid backend values
+const (
+	BackendClaude      = "claude"
+	BackendCursorAgent = "cursor-agent"
 )
 
 // Config holds the configuration for the ralph-go application
@@ -20,6 +27,7 @@ type Config struct {
 	SpecFolder string
 	LoopPrompt string
 	ShowPrompt bool
+	Backend    string
 }
 
 // NewConfig returns a new Config with default values
@@ -29,6 +37,7 @@ func NewConfig() *Config {
 		SpecFile:   "",
 		SpecFolder: DefaultSpecFolder,
 		LoopPrompt: "",
+		Backend:    DefaultBackend,
 	}
 }
 
@@ -42,6 +51,7 @@ func ParseFlags() *Config {
 	flag.StringVar(&cfg.SpecFolder, "spec-folder", DefaultSpecFolder, "Folder containing spec files")
 	flag.StringVar(&cfg.LoopPrompt, "loop-prompt", "", "Path to loop prompt override (defaults to embedded prompt.md)")
 	flag.BoolVar(&cfg.ShowPrompt, "show-prompt", false, "Print the embedded loop prompt and exit")
+	flag.StringVar(&cfg.Backend, "backend", DefaultBackend, "AI backend to use: claude or cursor-agent")
 
 	// Custom usage function to display flags with -- prefix
 	flag.Usage = func() {
@@ -73,12 +83,17 @@ func ParseFlags() *Config {
 // Validate checks if the configuration is valid.
 // It validates:
 // - Iterations must be greater than 0
+// - Backend must be "claude" or "cursor-agent"
 // - If spec-file is provided, it must exist
 // - If spec-folder is provided (and spec-file is not), it must exist (unless using custom loop-prompt)
 // - If loop-prompt is provided, it must exist
 func (c *Config) Validate() error {
 	if c.Iterations <= 0 {
 		return fmt.Errorf("--iterations must be greater than 0, got %d", c.Iterations)
+	}
+
+	if c.Backend != BackendClaude && c.Backend != BackendCursorAgent {
+		return fmt.Errorf("--backend must be %q or %q, got %q", BackendClaude, BackendCursorAgent, c.Backend)
 	}
 
 	if c.SpecFile != "" {
@@ -146,8 +161,8 @@ func (c *Config) validateDirExists(path, flagName string) error {
 
 // String returns a string representation of the Config for debug printing
 func (c *Config) String() string {
-	return fmt.Sprintf("Config{Iterations: %d, SpecFile: %q, SpecFolder: %q, LoopPrompt: %q}",
-		c.Iterations, c.SpecFile, c.SpecFolder, c.LoopPrompt)
+	return fmt.Sprintf("Config{Iterations: %d, SpecFile: %q, SpecFolder: %q, LoopPrompt: %q, Backend: %q}",
+		c.Iterations, c.SpecFile, c.SpecFolder, c.LoopPrompt, c.Backend)
 }
 
 // GetSpecPath returns the effective spec path to use.
@@ -167,4 +182,9 @@ func (c *Config) IsUsingSpecFile() bool {
 // IsUsingCustomPrompt returns true if a custom loop prompt is configured
 func (c *Config) IsUsingCustomPrompt() bool {
 	return c.LoopPrompt != ""
+}
+
+// IsUsingCursorAgent returns true if cursor-agent backend is configured
+func (c *Config) IsUsingCursorAgent() bool {
+	return c.Backend == BackendCursorAgent
 }

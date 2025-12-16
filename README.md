@@ -4,7 +4,7 @@ Ralph is a method. Ralph is not a specific model, assistant, prompt, nor is it a
 
 Ralph is continuously looping on a given prompt with the ability to pause/edit/resume, to iteratively build the application and the spec together.
 
-- You evolve a spec by sending it through Claude 10, 50, or `n` times
+- You evolve a spec by sending it through Claude, Cursor, or other AI agents 10, 50, or `n` times
 - Each iteration informs the next
 - You can watch the evolution and catch regressions in real-time
 - You can tune specs by observing behavior, cancelling the loop, editing the spec, and resuming
@@ -12,7 +12,12 @@ Ralph is continuously looping on a given prompt with the ability to pause/edit/r
 
 ## Prerequisites
 
-- **Claude CLI** installed and accessible in your PATH
+Choose one of the following AI backends:
+
+- **Claude CLI** - Install and authenticate the [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli)
+- **Cursor Agent** - Install the [Cursor CLI](https://cursor.com/docs/cli/installation) and set `CURSOR_API_KEY`
+
+Additionally:
 - Terminal with 256-color support (recommended)
 
 ## Quickstart
@@ -35,8 +40,11 @@ Ralph is continuously looping on a given prompt with the ability to pause/edit/r
 ### CLI Options
 
 ```bash
-# Run with defaults (20 iterations, specs/ folder)
+# Run with defaults (Claude backend, 5 iterations, specs/ folder)
 ralph
+
+# Use cursor-agent instead of Claude
+ralph --backend cursor-agent
 
 # Custom number of iterations
 ralph --iterations 10
@@ -49,14 +57,45 @@ ralph --spec-folder /path/to/specs/
 
 # Use a custom loop prompt instead of the embedded default
 ralph --loop-prompt /path/to/custom_prompt.md
+
+# Combine options
+ralph --backend cursor-agent --iterations 20 --spec-folder ./my-specs/
 ```
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--iterations` | int | 20 | Number of loop iterations to run |
+| `--backend` | string | `claude` | AI backend to use: `claude` or `cursor-agent` |
+| `--iterations` | int | 5 | Number of loop iterations to run |
 | `--spec-file` | string | - | Override with a specific spec file |
 | `--spec-folder` | string | `specs/` | Directory containing spec files |
 | `--loop-prompt` | string | - | Override the embedded prompt with a custom file |
+
+### Backends
+
+#### Claude (default)
+
+Uses the [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli) with agentic capabilities and subagent support.
+
+```bash
+ralph --backend claude
+```
+
+#### Cursor Agent
+
+Uses [Cursor's headless CLI](https://cursor.com/docs/cli/headless) for non-interactive automation.
+
+```bash
+# Install Cursor CLI
+curl https://cursor.com/install -fsS | bash
+
+# Set your API key
+export CURSOR_API_KEY=your_api_key_here
+
+# Run ralph with cursor-agent
+ralph --backend cursor-agent
+```
+
+> **Note:** Cursor's subagent feature is still in development. The embedded prompt references "up to 5 subagents" which works with Claude but will be ignored by cursor-agent.
 
 ## Credits & Inspiration
 

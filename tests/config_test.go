@@ -23,6 +23,9 @@ func TestNewConfig(t *testing.T) {
 	if cfg.LoopPrompt != "" {
 		t.Errorf("Expected empty loop prompt, got %q", cfg.LoopPrompt)
 	}
+	if cfg.Backend != config.DefaultBackend {
+		t.Errorf("Expected default backend %q, got %q", config.DefaultBackend, cfg.Backend)
+	}
 }
 
 func TestValidate_ValidConfig(t *testing.T) {
@@ -38,6 +41,7 @@ func TestValidate_ValidConfig(t *testing.T) {
 		SpecFile:   "",
 		SpecFolder: tmpDir,
 		LoopPrompt: "",
+		Backend:    config.BackendClaude,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -82,6 +86,7 @@ func TestValidate_SpecFileExists(t *testing.T) {
 		Iterations: 1,
 		SpecFile:   tmpFile.Name(),
 		SpecFolder: "",
+		Backend:    config.BackendClaude,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -134,6 +139,7 @@ func TestValidate_SpecFolderExists(t *testing.T) {
 		Iterations: 1,
 		SpecFile:   "",
 		SpecFolder: tmpDir,
+		Backend:    config.BackendClaude,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -195,6 +201,7 @@ func TestValidate_LoopPromptExists(t *testing.T) {
 		SpecFile:   "",
 		SpecFolder: tmpDir,
 		LoopPrompt: tmpFile.Name(),
+		Backend:    config.BackendClaude,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -237,6 +244,7 @@ func TestValidate_SpecFileOverridesSpecFolder(t *testing.T) {
 		Iterations: 1,
 		SpecFile:   tmpFile.Name(),
 		SpecFolder: "/nonexistent/path/to/specs/", // Non-existent but should be ignored
+		Backend:    config.BackendClaude,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -345,6 +353,65 @@ func TestIsUsingCustomPrompt(t *testing.T) {
 	}
 }
 
+func TestValidate_InvalidBackend(t *testing.T) {
+	cfg := &config.Config{
+		Iterations: 1,
+		SpecFolder: "",
+		Backend:    "invalid-backend",
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("Expected error for invalid backend, got nil")
+	}
+}
+
+func TestValidate_ValidBackends(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend string
+	}{
+		{"claude backend", config.BackendClaude},
+		{"cursor-agent backend", config.BackendCursorAgent},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Iterations: 1,
+				SpecFolder: "",
+				Backend:    tt.backend,
+			}
+			err := cfg.Validate()
+			if err != nil {
+				t.Errorf("Expected valid config with backend %q, got error: %v", tt.backend, err)
+			}
+		})
+	}
+}
+
+func TestIsUsingCursorAgent(t *testing.T) {
+	tests := []struct {
+		name     string
+		backend  string
+		expected bool
+	}{
+		{"claude backend", config.BackendClaude, false},
+		{"cursor-agent backend", config.BackendCursorAgent, true},
+		{"empty backend", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Backend: tt.backend}
+			result := cfg.IsUsingCursorAgent()
+			if result != tt.expected {
+				t.Errorf("IsUsingCursorAgent() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestValidate_EmptySpecFolder(t *testing.T) {
 	// When both spec-file and spec-folder are empty, validation should pass
 	// (no path validation needed for empty strings)
@@ -352,6 +419,7 @@ func TestValidate_EmptySpecFolder(t *testing.T) {
 		Iterations: 1,
 		SpecFile:   "",
 		SpecFolder: "",
+		Backend:    config.BackendClaude,
 	}
 
 	// This should pass because no spec folder validation is attempted when empty
@@ -379,6 +447,7 @@ func TestValidate_RelativePaths(t *testing.T) {
 		Iterations: 1,
 		SpecFile:   tmpFile, // Relative path
 		SpecFolder: "",
+		Backend:    config.BackendClaude,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -390,6 +459,7 @@ func TestValidate_RelativePaths(t *testing.T) {
 		Iterations: 1,
 		SpecFile:   "",
 		SpecFolder: tmpDir, // Relative path
+		Backend:    config.BackendClaude,
 	}
 
 	if err := cfg.Validate(); err != nil {

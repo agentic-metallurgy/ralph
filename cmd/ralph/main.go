@@ -60,10 +60,19 @@ func main() {
 	msgChan := make(chan tui.Message, 100)
 	doneChan := make(chan struct{})
 
+	// Select command builder based on backend
+	var commandBuilder loop.CommandBuilder
+	if cfg.Backend == config.BackendCursorAgent {
+		commandBuilder = loop.CursorAgentCommandBuilder
+	} else {
+		commandBuilder = loop.DefaultCommandBuilder
+	}
+
 	// Create the loop configuration
 	loopConfig := loop.Config{
-		Iterations: cfg.Iterations,
-		Prompt:     promptContent,
+		Iterations:     cfg.Iterations,
+		Prompt:         promptContent,
+		CommandBuilder: commandBuilder,
 	}
 
 	// Create the loop

@@ -14,6 +14,7 @@ const (
 	MessageTypeAssistant MessageType = "assistant"
 	MessageTypeUser      MessageType = "user"
 	MessageTypeResult    MessageType = "result"
+	MessageTypeToolCall  MessageType = "tool_call" // cursor-agent uses this for tool calls
 	MessageTypeUnknown   MessageType = "unknown"
 )
 
@@ -49,12 +50,34 @@ type InnerMessage struct {
 	Usage   *Usage        `json:"usage,omitempty"`
 }
 
-// ParsedMessage represents a parsed Claude message
+// CursorToolCall represents a cursor-agent tool call structure
+type CursorToolCall struct {
+	WriteToolCall *CursorWriteToolCall `json:"writeToolCall,omitempty"`
+	ReadToolCall  *CursorReadToolCall  `json:"readToolCall,omitempty"`
+}
+
+// CursorWriteToolCall represents a write tool call from cursor-agent
+type CursorWriteToolCall struct {
+	Args   map[string]interface{} `json:"args,omitempty"`
+	Result map[string]interface{} `json:"result,omitempty"`
+}
+
+// CursorReadToolCall represents a read tool call from cursor-agent
+type CursorReadToolCall struct {
+	Args   map[string]interface{} `json:"args,omitempty"`
+	Result map[string]interface{} `json:"result,omitempty"`
+}
+
+// ParsedMessage represents a parsed Claude/cursor-agent message
 type ParsedMessage struct {
-	Type         MessageType    `json:"type"`
-	Message      *InnerMessage  `json:"message,omitempty"`
-	TotalCostUSD float64        `json:"total_cost_usd,omitempty"`
-	RawJSON      string         `json:"-"` // Original JSON for debugging
+	Type         MessageType     `json:"type"`
+	Subtype      string          `json:"subtype,omitempty"`      // cursor-agent uses this (init, started, completed)
+	Message      *InnerMessage   `json:"message,omitempty"`
+	ToolCall     *CursorToolCall `json:"tool_call,omitempty"`    // cursor-agent tool calls
+	Model        string          `json:"model,omitempty"`        // cursor-agent includes model in system/init
+	DurationMs   int64           `json:"duration_ms,omitempty"`  // cursor-agent result duration
+	TotalCostUSD float64         `json:"total_cost_usd,omitempty"`
+	RawJSON      string          `json:"-"` // Original JSON for debugging
 }
 
 // LoopMarker represents a loop marker extracted from output
@@ -178,7 +201,7 @@ func (p *Parser) ExtractThinking(text string) string {
 
 // ExtractContent processes a ParsedMessage and extracts its content
 func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
-	if msg == nil || msg.Message == nil {
+	if msg == nil {
 		return &ParsedContent{}
 	}
 
@@ -186,6 +209,20 @@ func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
 		TextContent:  []string{},
 		ToolUses:     []ToolUse{},
 		ToolResults:  []ToolResult{},
+	}
+
+	// Handle cursor-agent tool_call messages
+	if msg.Type == MessageTypeToolCall && msg.ToolCall != nil {
+		toolUse := p.extractCursorToolCall(msg)
+		if toolUse != nil {
+			content.ToolUses = append(content.ToolUses, *toolUse)
+		}
+		return content
+	}
+
+	// Handle standard Claude messages with content array
+	if msg.Message == nil {
+		return content
 	}
 
 	for _, item := range msg.Message.Content {
@@ -242,6 +279,53 @@ func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
 	}
 
 	return content
+}
+
+// extractCursorToolCall extracts tool information from a cursor-agent tool_call message
+func (p *Parser) extractCursorToolCall(msg *ParsedMessage) *ToolUse {
+	if msg.ToolCall == nil {
+		return nil
+	}
+
+	// Only report on "started" subtype to avoid duplicates
+	if msg.Subtype != "started" {
+		return nil
+	}
+
+	var toolName string
+	var inputJSON string
+
+	if msg.ToolCall.WriteToolCall != nil {
+		toolName = "write"
+		if path, ok := msg.ToolCall.WriteToolCall.Args["path"].(string); ok {
+			toolName = "write: " + path
+		}
+		if jsonBytes, err := json.MarshalIndent(msg.ToolCall.WriteToolCall.Args, "", "  "); err == nil {
+			inputJSON = string(jsonBytes)
+		}
+	} else if msg.ToolCall.ReadToolCall != nil {
+		toolName = "read"
+		if path, ok := msg.ToolCall.ReadToolCall.Args["path"].(string); ok {
+			toolName = "read: " + path
+		}
+		if jsonBytes, err := json.MarshalIndent(msg.ToolCall.ReadToolCall.Args, "", "  "); err == nil {
+			inputJSON = string(jsonBytes)
+		}
+	}
+
+	if toolName == "" {
+		return nil
+	}
+
+	// Truncate to 150 characters
+	if len(inputJSON) > 150 {
+		inputJSON = inputJSON[:150]
+	}
+
+	return &ToolUse{
+		Name:      toolName,
+		InputJSON: inputJSON,
+	}
 }
 
 // GetMessageType returns the type of a parsed message
