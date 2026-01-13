@@ -65,26 +65,6 @@ ralph --loop-prompt /path/to/custom_prompt.md
 - **Go 1.25.3** or compatible version
 - **Claude CLI** installed and accessible in your PATH
 
-### Project Structure
-
-```
-ralph-go/
-├── cmd/ralph/
-│   └── main.go              # Application entry point
-├── internal/
-│   ├── config/              # CLI flag parsing
-│   ├── loop/                # Claude CLI execution loop
-│   ├── parser/              # JSON stream parser
-│   ├── prompt/              # Prompt loading with embed
-│   │   └── assets/prompt.md # Embedded default prompt
-│   ├── stats/               # Token usage tracking
-│   └── tui/                 # Bubble Tea terminal UI
-├── tests/                   # Unit tests
-├── specs/                   # Spec files directory
-├── go.mod
-└── README.md
-```
-
 ### Building
 
 ```bash
@@ -99,15 +79,6 @@ go build -o ralph ./cmd/ralph
 go test ./tests/...
 ```
 
-### Dependencies
-
-- [Bubble Tea](https://github.com/charmbracelet/bubbletea) - TUI framework
-- [Lip Gloss](https://github.com/charmbracelet/lipgloss) - Terminal styling
-- [Bubbles](https://github.com/charmbracelet/bubbles) - TUI components
-
 ## Credits & Inspiration
 
-Ralph was inspired by:
-
-- [@ghuntley](https://github.com/ghuntley)'s article [Ralph Wiggum as a Software Engineer](https://ghuntley.com/ralph/) - the original vision for iterative spec-driven development with AI
-- [@dexhorthy](https://github.com/dexhorthy)'s [Advanced Context Engineering for Coding Agents](https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md) - techniques for building effective AI-assisted development workflows
+[@ghuntley](https://github.com/ghuntley) coined it in [Ralph Wiggum as a Software Engineer](https://ghuntley.com/ralph/), [@dexhorthy](https://github.com/dexhorthy) popularized it with [Advanced Context Engineering for Coding Agents](https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md).
