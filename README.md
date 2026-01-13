@@ -58,9 +58,56 @@ ralph --loop-prompt /path/to/custom_prompt.md
 | `--spec-folder` | string | `specs/` | Directory containing spec files |
 | `--loop-prompt` | string | - | Override the embedded prompt with a custom file |
 
+## Development
+
+### Requirements
+
+- **Go 1.25.3** or compatible version
+- **Claude CLI** installed and accessible in your PATH
+
+### Project Structure
+
+```
+ralph-go/
+├── cmd/ralph/
+│   └── main.go              # Application entry point
+├── internal/
+│   ├── config/              # CLI flag parsing
+│   ├── loop/                # Claude CLI execution loop
+│   ├── parser/              # JSON stream parser
+│   ├── prompt/              # Prompt loading with embed
+│   │   └── assets/prompt.md # Embedded default prompt
+│   ├── stats/               # Token usage tracking
+│   └── tui/                 # Bubble Tea terminal UI
+├── tests/                   # Unit tests
+├── specs/                   # Spec files directory
+├── go.mod
+└── README.md
+```
+
+### Building
+
+```bash
+git clone https://github.com/cloudosai/ralph-go.git
+cd ralph-go
+go build -o ralph ./cmd/ralph
+```
+
+### Running Tests
+
+```bash
+go test ./tests/...
+```
+
+### Dependencies
+
+- [Bubble Tea](https://github.com/charmbracelet/bubbletea) - TUI framework
+- [Lip Gloss](https://github.com/charmbracelet/lipgloss) - Terminal styling
+- [Bubbles](https://github.com/charmbracelet/bubbles) - TUI components
+
 ## Credits & Inspiration
 
 Ralph was inspired by:
 
-- **Geoffrey Huntley's** article [Ralph Wiggum as a Software Engineer](https://ghuntley.com/ralph/) - the original vision for iterative spec-driven development with AI
-- **HumanLayer's** [Advanced Context Engineering for Coding Agents](https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md) - techniques for building effective AI-assisted development workflows
+- [@ghuntley](https://github.com/ghuntley)'s article [Ralph Wiggum as a Software Engineer](https://ghuntley.com/ralph/) - the original vision for iterative spec-driven development with AI
+- [@dexhorthy](https://github.com/dexhorthy)'s [Advanced Context Engineering for Coding Agents](https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md) - techniques for building effective AI-assisted development workflows
