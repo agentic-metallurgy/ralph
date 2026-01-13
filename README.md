@@ -81,4 +81,4 @@ go test ./tests/...
 
 ## Credits & Inspiration
 
-[@ghuntley](https://github.com/ghuntley) coined it in [Ralph Wiggum as a Software Engineer](https://ghuntley.com/ralph/).
+Thanks to [@ghuntley](https://github.com/ghuntley) for coining it, sharing it: [Ralph Wiggum as a Software Engineer](https://ghuntley.com/ralph/).
