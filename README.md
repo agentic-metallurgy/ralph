@@ -58,9 +58,27 @@ ralph --loop-prompt /path/to/custom_prompt.md
 | `--spec-folder` | string | `specs/` | Directory containing spec files |
 | `--loop-prompt` | string | - | Override the embedded prompt with a custom file |
 
+## Development
+
+### Requirements
+
+- **Go 1.25.3** or compatible version
+- **Claude CLI** installed and accessible in your PATH
+
+### Building
+
+```bash
+git clone https://github.com/cloudosai/ralph-go.git
+cd ralph-go
+go build -o ralph ./cmd/ralph
+```
+
+### Running Tests
+
+```bash
+go test ./tests/...
+```
+
 ## Credits & Inspiration
 
-Ralph was inspired by:
-
-- **Geoffrey Huntley's** article [Ralph Wiggum as a Software Engineer](https://ghuntley.com/ralph/) - the original vision for iterative spec-driven development with AI
-- **HumanLayer's** [Advanced Context Engineering for Coding Agents](https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md) - techniques for building effective AI-assisted development workflows
+Thanks to [@ghuntley](https://github.com/ghuntley) for coining it, sharing it: [Ralph Wiggum as a Software Engineer](https://ghuntley.com/ralph/).
