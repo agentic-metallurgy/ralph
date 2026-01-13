@@ -81,4 +81,4 @@ go test ./tests/...
 
 ## Credits & Inspiration
 
-[@ghuntley](https://github.com/ghuntley) coined it in [Ralph Wiggum as a Software Engineer](https://ghuntley.com/ralph/), [@dexhorthy](https://github.com/dexhorthy) popularized it with [Advanced Context Engineering for Coding Agents](https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md).
+[@ghuntley](https://github.com/ghuntley) coined it in [Ralph Wiggum as a Software Engineer](https://ghuntley.com/ralph/).
