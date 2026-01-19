@@ -19,7 +19,7 @@ Ralph is continuously looping on a given prompt with the ability to pause/edit/r
 
 1. Install ralph:
    ```bash
-   brew tap agentic-metallurgy/ralph
+   brew tap agentic-metallurgy/tap
    brew install ralph
    ```
 
