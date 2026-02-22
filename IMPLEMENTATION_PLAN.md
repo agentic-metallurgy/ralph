@@ -28,16 +28,17 @@ Changed panel title from "Loop Details" to "Ralph Details" in `internal/tui/tui.
 Changed hotkey bar from `Align(lipgloss.Center)` to `Align(lipgloss.Left)` with `PaddingLeft(1)`.
 
 ## TASK 6: Add Bottom Status Bar [MEDIUM PRIORITY]
-**Status: TODO**
-Add a colored status bar below the footer panels showing:
+**Status: DONE**
+Added a centered status bar between the footer panels and the hotkey bar showing:
 ```
-[current loop: #3/5      tokens: xxxxxx      elapsed: 33:99:00]
+[current loop: #3/5      tokens: 36.87m      elapsed: 01:23:45]
 ```
-This is a new UI element distinct from the existing footer panels. Needs:
-- A new render function for the status bar
-- Integration into the footer layout
-- Human-readable token count using `FormatTokens()`
-- Elapsed time formatting matching the existing format
+- Added `getElapsed()` helper to avoid duplicating elapsed time calculation
+- Added `renderStatusBar()` method with purple labels and light gray values
+- Integrated into `renderFooter()` between panels and hotkey bar
+- Increased `footerHeight` from 11 to 12; panel height adjusted to `footerHeight - 4`
+- Uses `FormatTokens()` for human-readable token count
+- Added 4 tests: `TestStatusBarDisplayed`, `TestStatusBarShowsLoopProgress`, `TestStatusBarShowsTokenCount`, `TestStatusBarDefaultLoopProgress`
 
 ## TASK 7: Add `ralph plan` Subcommand [LOW PRIORITY]
 **Status: TODO**
@@ -47,8 +48,18 @@ Add a `plan` subcommand/mode that uses `specs/PROMPT_plan.md` as the loop prompt
 - When `ralph plan` is run, use the plan prompt instead of the build prompt
 - May need to restructure CLI argument parsing to support subcommands
 
+## TASK 8: Highlight Quit Hotkey [LOW PRIORITY]
+**Status: TODO**
+Spec says: "light up the 'quit' option, just like we light up start, when we stop (even though it's available during running, too)". This means the `(q)uit` hotkey should always be highlighted (bold, light gray) regardless of running/paused state, matching how `st(a)rt` is highlighted when paused. Currently `(q)uit` is always dim gray.
+- Single change in `renderFooter()`: set `quitKey` and `quitLabel` to use `highlightStyle` instead of `dimStyle`
+
+## TASK 9: Remove Duplicate "Task" in Task Display [LOW PRIORITY]
+**Status: TODO**
+Spec says: "Task: should remove 'Task' from the title of the task it's showing so it doesn't look like `Task: Task: 6`". When `currentTask` starts with "Task", the label already says "Task:" so it would display as `Task: Task 6: ...`. Should strip leading "Task" from the value.
+- Single change in `renderFooter()` task display section
+
 ## Notes
-- All 112 tests pass (verified 2026-02-22)
+- All 116 tests pass (verified 2026-02-22)
 - Go 1.25.3, BubbleTea TUI framework
 - Build: `go build -o ralph ./cmd/ralph`
 - Test: `go test -v ./tests/`

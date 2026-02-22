@@ -127,7 +127,7 @@ func NewModel() Model {
 		totalLoops:     0,
 		startTime:      time.Now(),
 		activityHeight: 0,
-		footerHeight:   11,
+		footerHeight:   12,
 	}
 }
 
@@ -158,6 +158,14 @@ func (m *Model) SetLoop(l *loop.Loop) {
 // SetBaseElapsed sets the elapsed time from previous sessions
 func (m *Model) SetBaseElapsed(d time.Duration) {
 	m.baseElapsed = d
+}
+
+// getElapsed returns the current total elapsed time
+func (m Model) getElapsed() time.Duration {
+	if m.timerPaused {
+		return m.pausedElapsed
+	}
+	return m.baseElapsed + time.Since(m.startTime)
 }
 
 // AddMessage adds a message to the activity feed
@@ -462,7 +470,7 @@ func (m Model) renderFooter() string {
 		BorderForeground(colorPurple).
 		Padding(0, 1).
 		Width(panelWidth).
-		Height(m.footerHeight - 3) // Leave room for hotkey bar
+		Height(m.footerHeight - 4) // Leave room for status bar and hotkey bar
 
 	labelStyle := lipgloss.NewStyle().
 		Foreground(colorBlue).
@@ -499,12 +507,7 @@ func (m Model) renderFooter() string {
 		loopDisplay = fmt.Sprintf("%d/%d", m.currentLoop, m.totalLoops)
 	}
 
-	var elapsed time.Duration
-	if m.timerPaused {
-		elapsed = m.pausedElapsed
-	} else {
-		elapsed = m.baseElapsed + time.Since(m.startTime)
-	}
+	elapsed := m.getElapsed()
 	hours := int(elapsed.Hours())
 	minutes := int(elapsed.Minutes()) % 60
 	seconds := int(elapsed.Seconds()) % 60
@@ -571,11 +574,52 @@ func (m Model) renderFooter() string {
 		PaddingLeft(1).
 		Render(fmt.Sprintf("%s%s   %s   %s", quitKey, quitLabel, stopKey, startKey))
 
+	// Status bar
+	statusBar := m.renderStatusBar()
+
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		panels,
+		statusBar,
 		hotkeyBar,
 	)
+}
+
+// renderStatusBar renders the bottom status bar with loop, tokens, and elapsed time
+func (m Model) renderStatusBar() string {
+	// Loop display
+	loopDisplay := "#0/0"
+	if m.totalLoops > 0 {
+		loopDisplay = fmt.Sprintf("#%d/%d", m.currentLoop, m.totalLoops)
+	}
+
+	// Token display (human-readable)
+	tokenDisplay := stats.FormatTokens(m.stats.TotalTokens())
+
+	// Elapsed time display
+	elapsed := m.getElapsed()
+	hours := int(elapsed.Hours())
+	minutes := int(elapsed.Minutes()) % 60
+	seconds := int(elapsed.Seconds()) % 60
+	timeDisplay := fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
+
+	// Build styled status bar content
+	labelStyle := lipgloss.NewStyle().Foreground(colorPurple)
+	valueStyle := lipgloss.NewStyle().Foreground(colorLightGray)
+	bracketStyle := lipgloss.NewStyle().Foreground(colorPurple).Bold(true)
+
+	inner := fmt.Sprintf("%s %s      %s %s      %s %s",
+		labelStyle.Render("current loop:"), valueStyle.Render(loopDisplay),
+		labelStyle.Render("tokens:"), valueStyle.Render(tokenDisplay),
+		labelStyle.Render("elapsed:"), valueStyle.Render(timeDisplay),
+	)
+
+	bar := fmt.Sprintf("%s%s%s", bracketStyle.Render("["), inner, bracketStyle.Render("]"))
+
+	return lipgloss.NewStyle().
+		Width(m.width - 2).
+		Align(lipgloss.Center).
+		Render(bar)
 }
 
 // SendMessage is a helper command to send a message to the TUI

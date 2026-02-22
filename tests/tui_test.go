@@ -882,6 +882,61 @@ func TestSendTaskUpdateCmd(t *testing.T) {
 	}
 }
 
+// TestStatusBarDisplayed tests that the status bar labels appear in the view
+func TestStatusBarDisplayed(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "current loop:") {
+		t.Error("View should contain 'current loop:' label in status bar")
+	}
+	if !strings.Contains(view, "tokens:") {
+		t.Error("View should contain 'tokens:' label in status bar")
+	}
+	if !strings.Contains(view, "elapsed:") {
+		t.Error("View should contain 'elapsed:' label in status bar")
+	}
+}
+
+// TestStatusBarShowsLoopProgress tests that the status bar shows current loop progress
+func TestStatusBarShowsLoopProgress(t *testing.T) {
+	model := tui.NewModel()
+	model.SetLoopProgress(3, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "#3/5") {
+		t.Error("Status bar should display loop progress as '#3/5'")
+	}
+}
+
+// TestStatusBarShowsTokenCount tests that the status bar shows human-readable token count
+func TestStatusBarShowsTokenCount(t *testing.T) {
+	model := tui.NewModel()
+	s := stats.NewTokenStats()
+	s.AddUsage(500000, 250000, 100000, 50000)
+	model.SetStats(s)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	// 900k total tokens should appear somewhere in the view
+	if !strings.Contains(view, "900k") {
+		t.Error("Status bar should display human-readable token count (expected '900k')")
+	}
+}
+
+// TestStatusBarDefaultLoopProgress tests status bar with no loop progress set
+func TestStatusBarDefaultLoopProgress(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "#0/0") {
+		t.Error("Status bar should display '#0/0' when no loop progress is set")
+	}
+}
+
 // TestResizeFromTinyToNormal tests transitioning from too-small to normal size
 func TestResizeFromTinyToNormal(t *testing.T) {
 	model := tui.NewModel()
