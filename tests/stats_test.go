@@ -564,3 +564,33 @@ func TestElapsedTime_SaveAndLoad(t *testing.T) {
 		t.Errorf("TotalElapsedNs mismatch: expected %d, got %d", s.TotalElapsedNs, loaded.TotalElapsedNs)
 	}
 }
+
+func TestFormatTokens(t *testing.T) {
+	tests := []struct {
+		name     string
+		count    int64
+		expected string
+	}{
+		{"zero", 0, "0"},
+		{"small number", 42, "42"},
+		{"under 1k", 999, "999"},
+		{"exactly 1k", 1000, "1k"},
+		{"1.5k", 1500, "1.5k"},
+		{"10k", 10000, "10k"},
+		{"300k", 300000, "300k"},
+		{"999k", 999000, "999k"},
+		{"1 million", 1000000, "1.00m"},
+		{"36.87m", 36870000, "36.87m"},
+		{"100m", 100000000, "100.00m"},
+		{"1.23m", 1234567, "1.23m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stats.FormatTokens(tt.count)
+			if result != tt.expected {
+				t.Errorf("FormatTokens(%d) = %q, expected %q", tt.count, result, tt.expected)
+			}
+		})
+	}
+}

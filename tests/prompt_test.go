@@ -170,6 +170,127 @@ func TestEmbeddedPromptSize(t *testing.T) {
 	}
 }
 
+func TestLoadEmbeddedPlanPrompt(t *testing.T) {
+	loader := prompt.NewPlanLoader("")
+	content, err := loader.Load()
+
+	if err != nil {
+		t.Fatalf("Expected no error loading embedded plan prompt, got: %v", err)
+	}
+
+	if content == "" {
+		t.Error("Expected non-empty content from embedded plan prompt")
+	}
+
+	// Verify the content looks like the expected plan prompt
+	expectedPhrases := []string{
+		"Study",
+		"IMPLEMENTATION_PLAN.md",
+		"Plan only",
+		"Do NOT implement",
+	}
+
+	for _, phrase := range expectedPhrases {
+		if !strings.Contains(content, phrase) {
+			t.Errorf("Expected embedded plan prompt to contain %q", phrase)
+		}
+	}
+}
+
+func TestGetEmbeddedPlanPrompt(t *testing.T) {
+	content, err := prompt.GetEmbeddedPlanPrompt()
+
+	if err != nil {
+		t.Fatalf("Expected no error from GetEmbeddedPlanPrompt, got: %v", err)
+	}
+
+	if content == "" {
+		t.Error("Expected non-empty content from GetEmbeddedPlanPrompt")
+	}
+
+	// Should be same as loading via PlanLoader
+	loader := prompt.NewPlanLoader("")
+	loaderContent, _ := loader.Load()
+
+	if content != loaderContent {
+		t.Error("GetEmbeddedPlanPrompt and PlanLoader.Load() returned different content")
+	}
+}
+
+func TestNewPlanLoader(t *testing.T) {
+	// Test creating plan loader without override
+	loader := prompt.NewPlanLoader("")
+	if loader.IsUsingOverride() {
+		t.Error("Expected IsUsingOverride() to be false for empty path")
+	}
+	if !loader.IsPlanMode() {
+		t.Error("Expected IsPlanMode() to be true for plan loader")
+	}
+
+	// Test creating plan loader with override
+	loaderWithOverride := prompt.NewPlanLoader("/some/path.md")
+	if !loaderWithOverride.IsUsingOverride() {
+		t.Error("Expected IsUsingOverride() to be true for non-empty path")
+	}
+	if !loaderWithOverride.IsPlanMode() {
+		t.Error("Expected IsPlanMode() to be true for plan loader with override")
+	}
+}
+
+func TestPlanLoaderWithOverride(t *testing.T) {
+	// Plan mode with override should load from file, not embedded plan prompt
+	tmpFile, err := os.CreateTemp("", "ralph-plan-override-*.md")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	customContent := "# Custom Plan Prompt\n\nCustom planning instructions.\n"
+	if _, err := tmpFile.WriteString(customContent); err != nil {
+		t.Fatalf("Failed to write to temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	loader := prompt.NewPlanLoader(tmpFile.Name())
+	content, err := loader.Load()
+
+	if err != nil {
+		t.Fatalf("Expected no error loading plan override, got: %v", err)
+	}
+
+	if content != customContent {
+		t.Errorf("Expected content %q, got %q", customContent, content)
+	}
+}
+
+func TestBuildAndPlanPromptsAreDifferent(t *testing.T) {
+	buildContent, err := prompt.GetEmbeddedPrompt()
+	if err != nil {
+		t.Fatalf("Failed to get build prompt: %v", err)
+	}
+
+	planContent, err := prompt.GetEmbeddedPlanPrompt()
+	if err != nil {
+		t.Fatalf("Failed to get plan prompt: %v", err)
+	}
+
+	if buildContent == planContent {
+		t.Error("Build and plan prompts should be different")
+	}
+}
+
+func TestPromptIsPlanMode(t *testing.T) {
+	buildLoader := prompt.NewLoader("")
+	if buildLoader.IsPlanMode() {
+		t.Error("Build loader should not be in plan mode")
+	}
+
+	planLoader := prompt.NewPlanLoader("")
+	if !planLoader.IsPlanMode() {
+		t.Error("Plan loader should be in plan mode")
+	}
+}
+
 func TestLoadEmptyFile(t *testing.T) {
 	// Create an empty temporary file
 	tmpFile, err := os.CreateTemp("", "ralph-empty-*.md")

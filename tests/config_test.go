@@ -397,6 +397,48 @@ func TestValidate_RelativePaths(t *testing.T) {
 	}
 }
 
+func TestVersionVariable(t *testing.T) {
+	// Version should have a default value when not set via ldflags
+	if config.Version == "" {
+		t.Error("Expected Version to have a default value, got empty string")
+	}
+	if config.Version != "dev" {
+		t.Logf("Version is set to %q (expected 'dev' in test)", config.Version)
+	}
+}
+
+func TestIsPlanMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		subcommand string
+		expected   bool
+	}{
+		{"empty subcommand", "", false},
+		{"plan subcommand", "plan", true},
+		{"other subcommand", "build", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Subcommand: tt.subcommand}
+			result := cfg.IsPlanMode()
+			if result != tt.expected {
+				t.Errorf("IsPlanMode() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSubcommandFieldDefault(t *testing.T) {
+	cfg := config.NewConfig()
+	if cfg.Subcommand != "" {
+		t.Errorf("Expected empty Subcommand by default, got %q", cfg.Subcommand)
+	}
+	if cfg.IsPlanMode() {
+		t.Error("Expected IsPlanMode() to be false by default")
+	}
+}
+
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))

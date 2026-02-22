@@ -2,6 +2,7 @@ package stats
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 )
 
@@ -46,6 +47,23 @@ func (t *TokenStats) AddCost(costUSD float64) {
 // TotalTokens returns the sum of all token counts
 func (t *TokenStats) TotalTokens() int64 {
 	return t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens
+}
+
+// FormatTokens formats a token count into a human-readable string
+// e.g., 36870000 → "36.87m", 300000 → "300k", 1500 → "1.5k", 42 → "42"
+func FormatTokens(count int64) string {
+	switch {
+	case count >= 1_000_000:
+		return fmt.Sprintf("%.2fm", float64(count)/1_000_000)
+	case count >= 1_000:
+		val := float64(count) / 1_000
+		if val == float64(int64(val)) {
+			return fmt.Sprintf("%dk", int64(val))
+		}
+		return fmt.Sprintf("%.1fk", val)
+	default:
+		return fmt.Sprintf("%d", count)
+	}
 }
 
 // Save persists the stats to a JSON file at the given path
