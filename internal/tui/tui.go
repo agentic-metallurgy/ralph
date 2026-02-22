@@ -484,7 +484,7 @@ func (m Model) renderFooter() string {
 	usageCostContent := lipgloss.JoinVertical(
 		lipgloss.Left,
 		titleStyle.Render("Usage & Cost"),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Tokens:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.TotalTokens()))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Tokens:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.TotalTokens())))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Input:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.InputTokens))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Output:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.OutputTokens))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Write:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.CacheCreationTokens))),
@@ -534,7 +534,7 @@ func (m Model) renderFooter() string {
 
 	loopDetailsContent := lipgloss.JoinVertical(
 		lipgloss.Left,
-		titleStyle.Render("Loop Details"),
+		titleStyle.Render("Ralph Details"),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Loop:"), valueStyle.Render(fmt.Sprintf(" %s", loopDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Elapsed:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
@@ -567,7 +567,8 @@ func (m Model) renderFooter() string {
 
 	hotkeyBar := lipgloss.NewStyle().
 		Width(m.width - 2).
-		Align(lipgloss.Center).
+		Align(lipgloss.Left).
+		PaddingLeft(1).
 		Render(fmt.Sprintf("%s%s   %s   %s", quitKey, quitLabel, stopKey, startKey))
 
 	return lipgloss.JoinVertical(

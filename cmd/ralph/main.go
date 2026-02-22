@@ -25,6 +25,12 @@ func main() {
 	// Parse command-line flags and get configuration
 	cfg := config.ParseFlags()
 
+	// Handle --version: print version and exit
+	if cfg.ShowVersion {
+		fmt.Printf("ralph %s\n", config.Version)
+		return
+	}
+
 	// Handle --show-prompt: print embedded prompt and exit
 	if cfg.ShowPrompt {
 		content, err := prompt.GetEmbeddedPrompt()

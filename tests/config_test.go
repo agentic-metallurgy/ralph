@@ -397,6 +397,16 @@ func TestValidate_RelativePaths(t *testing.T) {
 	}
 }
 
+func TestVersionVariable(t *testing.T) {
+	// Version should have a default value when not set via ldflags
+	if config.Version == "" {
+		t.Error("Expected Version to have a default value, got empty string")
+	}
+	if config.Version != "dev" {
+		t.Logf("Version is set to %q (expected 'dev' in test)", config.Version)
+	}
+}
+
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))

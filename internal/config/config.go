@@ -13,14 +13,18 @@ const (
 	DefaultSpecFolder = "specs/"
 )
 
+// Version is set at build time via -ldflags
+var Version = "dev"
+
 // Config holds the configuration for the ralph-go application
 type Config struct {
-	Iterations int
-	SpecFile   string
-	SpecFolder string
-	LoopPrompt string
-	ShowPrompt bool
-	NoTmux     bool
+	Iterations  int
+	SpecFile    string
+	SpecFolder  string
+	LoopPrompt  string
+	ShowPrompt  bool
+	ShowVersion bool
+	NoTmux      bool
 }
 
 // NewConfig returns a new Config with default values
@@ -43,6 +47,7 @@ func ParseFlags() *Config {
 	flag.StringVar(&cfg.SpecFolder, "spec-folder", DefaultSpecFolder, "Folder containing spec files")
 	flag.StringVar(&cfg.LoopPrompt, "loop-prompt", "", "Path to loop prompt override (defaults to embedded prompt.md)")
 	flag.BoolVar(&cfg.ShowPrompt, "show-prompt", false, "Print the embedded loop prompt and exit")
+	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
 	flag.BoolVar(&cfg.NoTmux, "no-tmux", false, "Run without tmux wrapper")
 
 	// Custom usage function to display flags with -- prefix
