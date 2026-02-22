@@ -1307,6 +1307,99 @@ func TestHotkeyBarShowsLoopControls(t *testing.T) {
 	}
 }
 
+// TestHotkeyBarShowsStartWhenCompletedWithPendingLoops tests that after completion
+// with pending loops added via '+', the hotkey bar shows '(s)tart' instead of '(r)esume'
+func TestHotkeyBarShowsStartWhenCompletedWithPendingLoops(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(5, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate completion
+	cmd := tui.SendDone()
+	doneMsg := cmd()
+	model, _ = updateModel(model, doneMsg)
+
+	// Press '+' to add a loop
+	keyPlus := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
+	model, _ = updateModel(model, keyPlus)
+
+	view := model.View()
+	if !strings.Contains(view, "(s)tart") {
+		t.Error("Hotkey bar should show '(s)tart' when completed with pending loops")
+	}
+}
+
+// TestHotkeyBarShowsResumeWhenPaused tests that when paused, the hotkey bar shows '(r)esume'
+func TestHotkeyBarShowsResumeWhenPaused(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(2, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press 'p' to pause
+	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+	model, _ = updateModel(model, keyP)
+
+	view := model.View()
+	if !strings.Contains(view, "(r)esume") {
+		t.Error("Hotkey bar should show '(r)esume' when paused")
+	}
+}
+
+// TestStartKeyResumesAfterCompletion tests that pressing 's' starts new loops after completion
+func TestStartKeyResumesAfterCompletion(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(5, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate completion
+	cmd := tui.SendDone()
+	doneMsg := cmd()
+	model, _ = updateModel(model, doneMsg)
+
+	// Press '+' to add a loop
+	keyPlus := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
+	model, _ = updateModel(model, keyPlus)
+
+	// Press 's' to start — should clear completed state
+	keyS := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}
+	model, _ = updateModel(model, keyS)
+
+	view := model.View()
+	// After pressing 's', completed state should be cleared — view should show RUNNING not COMPLETED
+	if strings.Contains(view, "COMPLETED") {
+		t.Error("After pressing 's' with pending loops, should no longer show COMPLETED")
+	}
+}
+
+// TestStartKeyNoopWithoutPendingLoops tests that 's' does nothing when completed without pending loops
+func TestStartKeyNoopWithoutPendingLoops(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(5, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate completion
+	cmd := tui.SendDone()
+	doneMsg := cmd()
+	model, _ = updateModel(model, doneMsg)
+
+	// Press 's' without adding loops — should be a no-op, still completed
+	keyS := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}
+	model, _ = updateModel(model, keyS)
+
+	view := model.View()
+	if !strings.Contains(view, "COMPLETED") {
+		t.Error("Pressing 's' without pending loops should keep COMPLETED state")
+	}
+}
+
 // TestScrollbackRetainsMessages tests that the TUI retains a large number of messages
 // (spec: scrollback should be 100000 lines)
 func TestScrollbackRetainsMessages(t *testing.T) {

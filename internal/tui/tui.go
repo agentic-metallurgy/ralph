@@ -370,9 +370,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loop.Pause()
 			}
 			return m, nil
-		case "r":
+		case "r", "s":
 			// Resume the loop - resume elapsed time from where we paused (both total and per-loop)
 			// Also handles resuming after completion when new loops were added via '+'
+			// 's' key is the "start" shortcut shown when completed with pending loops
 			if m.loop != nil {
 				if m.timerPaused {
 					m.baseElapsed = m.pausedElapsed
@@ -695,9 +696,11 @@ func (m Model) renderFooter() string {
 	loopsKey := highlightStyle.Render("(+)/(-)")
 	loopsLabel := highlightStyle.Render(" # of loops")
 
-	// Illuminate resume when paused or when completed with pending loops
+	// Illuminate resume/start depending on state
 	hasPendingLoops := m.completed && m.totalLoops > m.currentLoop
-	if isPaused || hasPendingLoops {
+	if hasPendingLoops {
+		resumeKey = highlightStyle.Render("(s)tart")
+	} else if isPaused {
 		resumeKey = highlightStyle.Render("(r)esume")
 	} else if !m.completed {
 		pauseKey = highlightStyle.Render("(p)ause")
