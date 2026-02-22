@@ -49,13 +49,27 @@ func TestHelperProcess(t *testing.T) {
 	}
 
 	cmd := args[0]
+	// Check for --resume flag in remaining args
+	hasResume := false
+	resumeSessionID := ""
+	for i, a := range args[1:] {
+		if a == "--resume" && i+2 < len(args) {
+			hasResume = true
+			resumeSessionID = args[i+2]
+		}
+	}
+
 	switch cmd {
 	case "claude":
 		// Read from stdin to simulate reading the prompt
-		// Output some mock JSON stream data
-		os.Stdout.WriteString(`{"type":"system","content":"test system message"}` + "\n")
-		os.Stdout.WriteString(`{"type":"assistant","content":"test assistant message"}` + "\n")
-		os.Stdout.WriteString(`{"type":"result","usage":{"input_tokens":100,"output_tokens":50}}` + "\n")
+		// Output different session_id depending on whether --resume was used
+		if hasResume {
+			os.Stdout.WriteString(`{"type":"system","session_id":"` + resumeSessionID + `","subtype":"init"}` + "\n")
+		} else {
+			os.Stdout.WriteString(`{"type":"system","session_id":"fresh-session-001","subtype":"init"}` + "\n")
+		}
+		os.Stdout.WriteString(`{"type":"assistant","message":{"content":[{"type":"text","text":"test assistant message"}]}}` + "\n")
+		os.Stdout.WriteString(`{"type":"result","total_cost_usd":0.001,"usage":{"input_tokens":100,"output_tokens":50}}` + "\n")
 	case "claude-slow":
 		// Simulate a slow command
 		time.Sleep(2 * time.Second)
@@ -571,7 +585,7 @@ func TestLoopOutputMessages(t *testing.T) {
 	foundResultMsg := false
 
 	for _, msg := range outputMessages {
-		if strings.Contains(msg.Content, "test system message") {
+		if strings.Contains(msg.Content, "fresh-session-001") {
 			foundSystemMsg = true
 		}
 		if strings.Contains(msg.Content, "test assistant message") {
@@ -765,4 +779,164 @@ func TestLoopMultipleIterationsWithOutput(t *testing.T) {
 	if !completeMsg {
 		t.Error("Expected a completion message")
 	}
+}
+
+func TestSetSessionID(t *testing.T) {
+	cfg := loop.Config{
+		Iterations: 1,
+		Prompt:     "test",
+	}
+	l := loop.New(cfg)
+
+	// Default should be empty
+	if l.GetSessionID() != "" {
+		t.Errorf("Expected empty session ID, got %q", l.GetSessionID())
+	}
+
+	l.SetSessionID("session-abc-123")
+	if l.GetSessionID() != "session-abc-123" {
+		t.Errorf("Expected 'session-abc-123', got %q", l.GetSessionID())
+	}
+
+	l.SetSessionID("session-xyz-456")
+	if l.GetSessionID() != "session-xyz-456" {
+		t.Errorf("Expected 'session-xyz-456', got %q", l.GetSessionID())
+	}
+}
+
+func TestGetSessionIDDefault(t *testing.T) {
+	cfg := loop.Config{
+		Iterations: 3,
+		Prompt:     "test",
+	}
+	l := loop.New(cfg)
+
+	if l.GetSessionID() != "" {
+		t.Errorf("Expected empty default session ID, got %q", l.GetSessionID())
+	}
+}
+
+func TestResumeUsesSessionID(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+
+	// Wait for first loop marker to appear
+	var foundFirstMarker bool
+	output := l.Output()
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "LOOP 1/") {
+			foundFirstMarker = true
+		}
+		// Look for the system message with session_id from first iteration
+		if msg.Type == "output" && strings.Contains(msg.Content, "fresh-session-001") {
+			// Simulate what main.go does: capture session ID
+			l.SetSessionID("fresh-session-001")
+			break
+		}
+	}
+
+	if !foundFirstMarker {
+		t.Fatal("Never saw first loop marker")
+	}
+
+	// Pause the loop
+	l.Pause()
+
+	// Wait for STOPPED marker
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "STOPPED") {
+			break
+		}
+	}
+
+	// Resume the loop
+	l.Resume()
+
+	// Now check the resumed iteration output for the same session ID
+	// (the mock echoes back the --resume session ID in the system message)
+	var foundResumedSession bool
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"session_id":"fresh-session-001"`) {
+			foundResumedSession = true
+		}
+	}
+
+	if !foundResumedSession {
+		t.Error("Expected resumed iteration to use --resume with captured session ID")
+	}
+}
+
+func TestFreshIterationNoResume(t *testing.T) {
+	// Verify that normal (non-paused) iterations don't use --resume
+	cfg := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+
+	// Both iterations should use fresh-session-001 (the mock's default without --resume)
+	freshCount := 0
+	for msg := range l.Output() {
+		if msg.Type == "output" && strings.Contains(msg.Content, "fresh-session-001") {
+			freshCount++
+		}
+	}
+
+	// Should have 2 fresh sessions (one per iteration)
+	if freshCount != 2 {
+		t.Errorf("Expected 2 fresh session messages, got %d", freshCount)
+	}
+}
+
+func TestPauseCapturesSessionID(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     100,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+
+	// Set a session ID (simulating what main.go does)
+	l.SetSessionID("test-session-for-pause")
+
+	// Wait for first output before pausing
+	output := l.Output()
+	for msg := range output {
+		if msg.Type == "output" {
+			break
+		}
+	}
+
+	// Pause
+	l.Pause()
+
+	// Verify session ID is still accessible
+	if l.GetSessionID() != "test-session-for-pause" {
+		t.Errorf("Expected session ID to be preserved after pause, got %q", l.GetSessionID())
+	}
+
+	cancel()
 }

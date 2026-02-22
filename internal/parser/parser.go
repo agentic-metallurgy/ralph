@@ -54,6 +54,7 @@ type InnerMessage struct {
 // ParsedMessage represents a parsed Claude message
 type ParsedMessage struct {
 	Type            MessageType   `json:"type"`
+	SessionID       string        `json:"session_id,omitempty"`
 	Message         *InnerMessage `json:"message,omitempty"`
 	TotalCostUSD    float64       `json:"total_cost_usd,omitempty"`
 	ParentToolUseID *string       `json:"parent_tool_use_id,omitempty"`
@@ -277,6 +278,14 @@ func (p *Parser) GetCost(msg *ParsedMessage) float64 {
 		return 0
 	}
 	return msg.TotalCostUSD
+}
+
+// GetSessionID returns the session ID from a system message, or empty string if not present
+func (p *Parser) GetSessionID(msg *ParsedMessage) string {
+	if msg == nil || msg.Type != MessageTypeSystem {
+		return ""
+	}
+	return msg.SessionID
 }
 
 // IsSubagentMessage returns true if the message originates from a subagent

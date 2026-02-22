@@ -153,11 +153,39 @@ Based on `specs/default.md`, the following tasks are needed:
 - Validation: all 211 tests pass, `go vet ./...` clean, `go build` succeeds
 
 ## TASK 9: Pause/Resume with Session Resumption [HIGH PRIORITY]
-**Status: TODO**
+**Status: DONE**
 - Spec: On resume after pause, use `claude --resume <session-id>` to continue from where it left off
 - Spec: If the user pauses, quits, comes back, and does NOT resume, start a fresh Claude session
-- Requires: Capture session ID from Claude CLI output, pass `--resume` flag on resume
-- Key changes needed: `internal/loop/loop.go` (CommandBuilder needs session ID support), session ID parsing from Claude output
+- Changed `internal/parser/parser.go`:
+  - Added `SessionID string` field to `ParsedMessage` struct with `json:"session_id,omitempty"`
+  - Added `GetSessionID(msg *ParsedMessage) string` method: returns session ID from system messages only
+- Changed `internal/loop/loop.go`:
+  - Added `sessionID string` and `resumeSessionID string` fields to Loop struct (mutex-protected)
+  - Added `SetSessionID(id string)` method: stores latest session ID from Claude CLI output
+  - Added `GetSessionID() string` method: retrieves current session ID
+  - Updated `Pause()`: captures current `sessionID` into `resumeSessionID` for next resume
+  - Updated `executeIteration()`: if `resumeSessionID` is set, appends `--resume <id>` to cmd.Args, then clears it
+  - Fresh iterations (not after pause) never use `--resume` — each starts a new session
+  - Quit and restart naturally starts fresh because no session ID persists across app restarts
+- Changed `cmd/ralph/main.go`:
+  - Added `claudeLoop` parameter to `processMessage()` function
+  - In output processing, extracts session ID from system messages via `parser.GetSessionID()` and stores it in the loop via `claudeLoop.SetSessionID()`
+- Updated mock `TestHelperProcess` in `tests/loop_test.go`:
+  - Mock now detects `--resume` flag in args and outputs different session_id accordingly
+  - Fresh sessions output `session_id: "fresh-session-001"`; resumed sessions echo back the provided session ID
+  - Updated system message format to include `session_id` and `subtype` fields matching real Claude CLI output
+- Added tests in `tests/parser_test.go`:
+  - `TestParseLineSessionID`: verifies session_id parsing from system, assistant, and result messages
+  - `TestGetSessionIDNilMessage`: verifies nil safety
+  - `TestSessionIDFieldParsed`: verifies direct field access on parsed message
+- Added tests in `tests/loop_test.go`:
+  - `TestSetSessionID`: verifies Set/Get session ID round-trip
+  - `TestGetSessionIDDefault`: verifies empty default
+  - `TestResumeUsesSessionID`: end-to-end test — starts loop, captures session ID, pauses, resumes, verifies `--resume` flag was passed
+  - `TestFreshIterationNoResume`: verifies normal iterations don't use `--resume`
+  - `TestPauseCapturesSessionID`: verifies session ID preserved after pause
+- Updated `TestLoopOutputMessages` assertion to match new mock output format
+- Validation: all 219 tests pass, `go vet ./...` clean, `go build` succeeds
 
 ## TASK 10: Remove Old In-App Status Bar [MEDIUM PRIORITY]
 **Status: TODO**

@@ -44,13 +44,15 @@ type Message struct {
 // Loop manages the Claude CLI execution loop.
 type Loop struct {
 	config          Config
-	mu              sync.Mutex // protects config.Iterations for dynamic adjustment
+	mu              sync.Mutex // protects config.Iterations, sessionID, resumeSessionID
 	output          chan Message
 	cancel          context.CancelFunc
 	running         bool
 	paused          bool
 	resumeCh        chan struct{}
 	iterationCancel context.CancelFunc // cancels current iteration only
+	sessionID       string             // latest session ID from Claude CLI output
+	resumeSessionID string             // session ID to use with --resume on next iteration
 }
 
 // New creates a new Loop with the given configuration.
@@ -101,9 +103,14 @@ func (l *Loop) IsPaused() bool {
 }
 
 // Pause immediately interrupts the current iteration and pauses the loop.
+// Captures the current session ID so the next resume can use --resume.
 func (l *Loop) Pause() {
 	if !l.paused && l.running {
 		l.paused = true
+		// Capture session ID for resume
+		l.mu.Lock()
+		l.resumeSessionID = l.sessionID
+		l.mu.Unlock()
 		// Cancel the current iteration to interrupt it immediately
 		if l.iterationCancel != nil {
 			l.iterationCancel()
@@ -133,6 +140,22 @@ func (l *Loop) GetIterations() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.config.Iterations
+}
+
+// SetSessionID stores the latest session ID from Claude CLI output.
+// Thread-safe: can be called from any goroutine (typically the output processing goroutine).
+func (l *Loop) SetSessionID(id string) {
+	l.mu.Lock()
+	l.sessionID = id
+	l.mu.Unlock()
+}
+
+// GetSessionID returns the current session ID.
+// Thread-safe: can be called from any goroutine.
+func (l *Loop) GetSessionID() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sessionID
 }
 
 // run executes the main loop logic.
@@ -247,6 +270,15 @@ func (l *Loop) run(ctx context.Context) {
 func (l *Loop) executeIteration(ctx context.Context, iteration int) error {
 	// Build the command using the configured builder
 	cmd := l.config.CommandBuilder(ctx, l.config.Prompt)
+
+	// If resuming after pause, add --resume flag with the captured session ID
+	l.mu.Lock()
+	resumeID := l.resumeSessionID
+	l.resumeSessionID = "" // consume it
+	l.mu.Unlock()
+	if resumeID != "" {
+		cmd.Args = append(cmd.Args, "--resume", resumeID)
+	}
 
 	// Set up stdin with the prompt
 	stdin, err := cmd.StdinPipe()

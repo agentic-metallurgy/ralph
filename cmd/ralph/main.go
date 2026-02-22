@@ -178,7 +178,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, jsonParser, tokenStats, msgChan, program, activeAgentIDs)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs)
 		}
 	}
 }
@@ -186,6 +186,7 @@ func processLoopOutput(
 // processMessage handles a single message from the loop
 func processMessage(
 	msg loop.Message,
+	claudeLoop *loop.Loop,
 	jsonParser *parser.Parser,
 	tokenStats *stats.TokenStats,
 	msgChan chan<- tui.Message,
@@ -210,6 +211,10 @@ func processMessage(
 		// Try to parse as JSON first
 		parsed := jsonParser.ParseLine(msg.Content)
 		if parsed != nil {
+			// Capture session ID from system messages for --resume support
+			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
+				claudeLoop.SetSessionID(sessionID)
+			}
 			handleParsedMessage(parsed, jsonParser, tokenStats, msgChan, program, activeAgentIDs)
 		} else {
 			// Check if it's a loop marker in the output stream
