@@ -562,6 +562,27 @@ func TestGoalFieldSet(t *testing.T) {
 	}
 }
 
+func TestBuildSubcommandDetected(t *testing.T) {
+	cfg := &config.Config{Subcommand: "build"}
+	if cfg.IsPlanMode() {
+		t.Error("Expected IsPlanMode() to be false for build subcommand")
+	}
+	if cfg.Subcommand != "build" {
+		t.Errorf("Expected Subcommand to be 'build', got %q", cfg.Subcommand)
+	}
+}
+
+func TestBuildSubcommandBehavesLikeDefault(t *testing.T) {
+	// Build subcommand should behave identically to default (no subcommand) mode
+	defaultCfg := &config.Config{Subcommand: ""}
+	buildCfg := &config.Config{Subcommand: "build"}
+
+	// Both should return false for IsPlanMode
+	if defaultCfg.IsPlanMode() != buildCfg.IsPlanMode() {
+		t.Error("Expected build subcommand IsPlanMode() to match default mode")
+	}
+}
+
 func TestDaemonFieldDefault(t *testing.T) {
 	cfg := config.NewConfig()
 	if cfg.Daemon {

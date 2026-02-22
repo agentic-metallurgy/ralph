@@ -19,6 +19,7 @@
 
 ## Subcommands
 - `ralph` — default build mode (uses embedded build prompt)
+- `ralph build` — explicit build mode (identical to default)
 - `ralph plan` — planning mode (uses embedded plan prompt)
 
 ## Key Flags
