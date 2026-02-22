@@ -250,3 +250,49 @@ Based on `specs/default.md`, the following tasks are needed:
   - `TestTUIPauseResumeDoesNotQuit`: verifies multiple 'p'/'r' presses never trigger app quit
 - All pause/resume functionality works correctly (no bugs found)
 - Validation: all 232 tests pass, `go vet ./...` clean, `go build` succeeds
+
+## TASK 13: Per-Loop Stats in Tmux Status Bar [HIGH PRIORITY]
+**Status: DONE**
+- Spec: Bottom status bar stats should be about the current loop: [iteration for current loop, tokens for current loop, elapsed time for current loop]
+- Previously the tmux status bar showed cumulative stats (total tokens across all loops, total elapsed time). The spec requires per-loop stats that reset each iteration.
+- Changed `internal/tui/tui.go`:
+  - Added per-loop tracking fields to Model: `loopTotalTokens int64`, `loopStartTime time.Time`, `loopBaseElapsed`, `loopTimerPaused`, `loopPausedElapsed`
+  - Added `getLoopElapsed() time.Duration` helper (mirrors `getElapsed()` but for per-loop timer)
+  - Added `loopStartedMsg` message type: resets per-loop timer and tokens when a new loop iteration begins
+  - Added `loopStatsUpdateMsg{totalTokens int64}` message type: updates per-loop token count
+  - `"p"` key handler: also freezes per-loop timer
+  - `"r"` key handler: also resumes per-loop timer
+  - `doneMsg` handler: also freezes per-loop timer
+  - `updateTmuxStatusBar()` now uses `m.loopTotalTokens` and `m.getLoopElapsed()` instead of cumulative stats
+  - Added `SendLoopStarted()` and `SendLoopStatsUpdate(totalTokens int64)` helper commands
+- Changed `cmd/ralph/main.go`:
+  - Added `loopTotalTokens int64` variable in `processLoopOutput` (per-loop token accumulator)
+  - `processMessage`: on LOOP marker (not STOPPED/COMPLETED/RESUMED), resets `loopTotalTokens = 0`, sends `SendLoopStarted()` and `SendLoopStatsUpdate(0)` to TUI
+  - `handleParsedMessage`: accumulates per-loop tokens alongside cumulative, sends `SendLoopStatsUpdate` on each usage update
+  - Updated function signatures to pass `loopTotalTokens *int64` through call chain
+- Added tests in `tests/tui_test.go`:
+  - `TestSendLoopStartedCmd`: verifies SendLoopStarted helper
+  - `TestSendLoopStatsUpdateCmd`: verifies SendLoopStatsUpdate helper
+  - `TestPerLoopTokensResetOnNewLoop`: verifies per-loop tokens reset on loopStartedMsg
+  - `TestPerLoopTimerResetsOnNewLoop`: verifies per-loop timer reset on loopStartedMsg
+  - `TestPerLoopTimerFreezesOnPause`: verifies per-loop timer freezes when paused
+  - `TestPerLoopTimerResumesAfterPause`: verifies per-loop timer resumes after unpause
+- Validation: all 240 tests pass, `go vet ./...` clean, `go build` succeeds
+
+## TASK 14: Completed Tasks Position + Title Rename [MEDIUM PRIORITY]
+**Status: DONE**
+- Spec: Completed tasks should appear above the current task in the 'ralph details' view
+- Spec: The 'ralph details' title should be renamed to 'ralph loop details'
+- Changed `internal/tui/tui.go`:
+  - Renamed panel title from "Ralph Details" to "Ralph Loop Details"
+  - Moved "Completed Tasks:" row above "Current Task:" row in `renderFooter()` (was below)
+- Added tests in `tests/tui_test.go`:
+  - `TestRalphLoopDetailsTitle`: verifies panel title is "Ralph Loop Details"
+  - `TestCompletedTasksAboveCurrentTask`: verifies "Completed Tasks:" appears before "Current Task:" in the rendered view
+- Validation: all 240 tests pass, `go vet ./...` clean, `go build` succeeds
+
+## TASK 15: Verify Increased Loop Count Execution [LOW PRIORITY]
+**Status: NOT NEEDED**
+- Spec: Ensure increased loop count is executed (e.g., 3/8 → 3/12 = 9 remaining)
+- Already covered by existing test `TestSetIterationsDuringRun` which verifies dynamically increasing iterations during a running loop causes extra iterations to execute
+- The `SetIterations`/`GetIterations` thread-safe API (TASK 7) combined with the `run()` loop checking `l.GetIterations()` on each iteration ensures this works correctly

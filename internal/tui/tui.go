@@ -109,17 +109,24 @@ type Model struct {
 	baseElapsed    time.Duration // elapsed time from previous sessions
 	timerPaused    bool          // whether elapsed time tracking is paused
 	pausedElapsed  time.Duration // elapsed time when paused (for display)
-	viewport       viewport.Model
-	activityHeight int
-	footerHeight   int
-	msgChan        <-chan Message
-	doneChan       <-chan struct{}
-	loop           *loop.Loop
-	tmuxBar        *tmux.StatusBar
+	// Per-loop tracking for tmux status bar (spec: stats should be about current loop)
+	loopTotalTokens   int64         // tokens accumulated in the current loop iteration
+	loopStartTime     time.Time     // when the current loop iteration started
+	loopBaseElapsed   time.Duration // per-loop elapsed from before pause within same loop
+	loopTimerPaused   bool          // whether per-loop timer is paused
+	loopPausedElapsed time.Duration // per-loop elapsed at time of pause
+	viewport          viewport.Model
+	activityHeight    int
+	footerHeight      int
+	msgChan           <-chan Message
+	doneChan          <-chan struct{}
+	loop              *loop.Loop
+	tmuxBar           *tmux.StatusBar
 }
 
 // NewModel creates and returns a new initialized Model
 func NewModel() Model {
+	now := time.Now()
 	return Model{
 		ready:          false,
 		width:          0,
@@ -130,7 +137,8 @@ func NewModel() Model {
 		stats:          stats.NewTokenStats(),
 		currentLoop:    0,
 		totalLoops:     0,
-		startTime:      time.Now(),
+		startTime:      now,
+		loopStartTime:  now,
 		activityHeight: 0,
 		footerHeight:   11,
 	}
@@ -184,6 +192,14 @@ func (m Model) getElapsed() time.Duration {
 	return m.baseElapsed + time.Since(m.startTime)
 }
 
+// getLoopElapsed returns the elapsed time for the current loop iteration
+func (m Model) getLoopElapsed() time.Duration {
+	if m.loopTimerPaused {
+		return m.loopPausedElapsed
+	}
+	return m.loopBaseElapsed + time.Since(m.loopStartTime)
+}
+
 // AddMessage adds a message to the activity feed
 func (m *Model) AddMessage(msg Message) {
 	m.messages = append(m.messages, msg)
@@ -223,6 +239,14 @@ type taskUpdateMsg struct {
 type completedTasksUpdateMsg struct {
 	completed int
 	total     int
+}
+
+// loopStartedMsg is sent when a new loop iteration begins (resets per-loop stats)
+type loopStartedMsg struct{}
+
+// loopStatsUpdateMsg is sent to update per-loop token count
+type loopStatsUpdateMsg struct {
+	totalTokens int64
 }
 
 // doneMsg is sent when processing is complete
@@ -322,22 +346,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "p":
-			// Pause the loop - freeze elapsed time
+			// Pause the loop - freeze elapsed time (both total and per-loop)
 			if m.loop != nil {
 				if !m.timerPaused {
 					m.pausedElapsed = m.baseElapsed + time.Since(m.startTime)
 					m.timerPaused = true
 				}
+				if !m.loopTimerPaused {
+					m.loopPausedElapsed = m.loopBaseElapsed + time.Since(m.loopStartTime)
+					m.loopTimerPaused = true
+				}
 				m.loop.Pause()
 			}
 			return m, nil
 		case "r":
-			// Resume the loop - resume elapsed time from where we paused
+			// Resume the loop - resume elapsed time from where we paused (both total and per-loop)
 			if m.loop != nil {
 				if m.timerPaused {
 					m.baseElapsed = m.pausedElapsed
 					m.startTime = time.Now()
 					m.timerPaused = false
+				}
+				if m.loopTimerPaused {
+					m.loopBaseElapsed = m.loopPausedElapsed
+					m.loopStartTime = time.Now()
+					m.loopTimerPaused = false
 				}
 				m.loop.Resume()
 			}
@@ -403,12 +436,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.totalTasks = msg.total
 		return m, nil
 
+	case loopStartedMsg:
+		// New loop iteration started — reset per-loop timer and tokens
+		m.loopStartTime = time.Now()
+		m.loopBaseElapsed = 0
+		m.loopTimerPaused = false
+		m.loopPausedElapsed = 0
+		m.loopTotalTokens = 0
+		return m, nil
+
+	case loopStatsUpdateMsg:
+		m.loopTotalTokens = msg.totalTokens
+		return m, nil
+
 	case doneMsg:
-		// Processing is done — freeze timer and mark as completed
+		// Processing is done — freeze both timers and mark as completed
 		m.completed = true
 		if !m.timerPaused {
 			m.pausedElapsed = m.baseElapsed + time.Since(m.startTime)
 			m.timerPaused = true
+		}
+		if !m.loopTimerPaused {
+			m.loopPausedElapsed = m.loopBaseElapsed + time.Since(m.loopStartTime)
+			m.loopTimerPaused = true
 		}
 		return m, nil
 	}
@@ -599,13 +649,13 @@ func (m Model) renderFooter() string {
 
 	loopDetailsContent := lipgloss.JoinVertical(
 		lipgloss.Left,
-		titleStyle.Render("Ralph Details"),
+		titleStyle.Render("Ralph Loop Details"),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Loop:"), valueStyle.Render(fmt.Sprintf(" %s", loopDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Time:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Active Agents:"), agentStyle.Render(agentDisplay)),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Task:"), valueStyle.Render(taskDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Completed Tasks:"), valueStyle.Render(completedDisplay)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Task:"), valueStyle.Render(taskDisplay)),
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
 
@@ -648,7 +698,8 @@ func (m Model) renderFooter() string {
 	)
 }
 
-// updateTmuxStatusBar updates the tmux status-right bar with current loop/token/elapsed info
+// updateTmuxStatusBar updates the tmux status-right bar with current loop stats
+// (spec: stats should be about the current loop, not cumulative)
 func (m Model) updateTmuxStatusBar() {
 	if m.tmuxBar == nil || !m.tmuxBar.IsActive() {
 		return
@@ -659,12 +710,13 @@ func (m Model) updateTmuxStatusBar() {
 		loopDisplay = fmt.Sprintf("#%d/%d", m.currentLoop, m.totalLoops)
 	}
 
-	tokenDisplay := stats.FormatTokens(m.stats.TotalTokens())
+	// Per-loop tokens and elapsed time (not cumulative)
+	tokenDisplay := stats.FormatTokens(m.loopTotalTokens)
 
-	elapsed := m.getElapsed()
-	hours := int(elapsed.Hours())
-	minutes := int(elapsed.Minutes()) % 60
-	seconds := int(elapsed.Seconds()) % 60
+	loopElapsed := m.getLoopElapsed()
+	hours := int(loopElapsed.Hours())
+	minutes := int(loopElapsed.Minutes()) % 60
+	seconds := int(loopElapsed.Seconds()) % 60
 	timeDisplay := fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 
 	m.tmuxBar.Update(tmux.FormatStatusRight(loopDisplay, tokenDisplay, timeDisplay))
@@ -709,6 +761,20 @@ func SendTaskUpdate(task string) tea.Cmd {
 func SendCompletedTasksUpdate(completed, total int) tea.Cmd {
 	return func() tea.Msg {
 		return completedTasksUpdateMsg{completed: completed, total: total}
+	}
+}
+
+// SendLoopStarted is a helper command to signal a new loop iteration has begun
+func SendLoopStarted() tea.Cmd {
+	return func() tea.Msg {
+		return loopStartedMsg{}
+	}
+}
+
+// SendLoopStatsUpdate is a helper command to update per-loop token count
+func SendLoopStatsUpdate(totalTokens int64) tea.Cmd {
+	return func() tea.Msg {
+		return loopStatsUpdateMsg{totalTokens: totalTokens}
 	}
 }
 

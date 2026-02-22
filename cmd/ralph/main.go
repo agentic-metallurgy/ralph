@@ -162,6 +162,7 @@ func processLoopOutput(
 
 	loopOutput := claudeLoop.Output()
 	activeAgentIDs := make(map[string]bool)
+	var loopTotalTokens int64 // per-loop token tracking for tmux status bar
 
 	for {
 		select {
@@ -178,7 +179,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
 		}
 	}
 }
@@ -192,11 +193,22 @@ func processMessage(
 	msgChan chan<- tui.Message,
 	program *tea.Program,
 	activeAgentIDs map[string]bool,
+	loopTotalTokens *int64,
 ) {
 	switch msg.Type {
 	case "loop_marker":
 		// Update loop progress
 		program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
+		// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED)
+		isLoopStart := strings.Contains(msg.Content, "LOOP") &&
+			!strings.Contains(msg.Content, "STOPPED") &&
+			!strings.Contains(msg.Content, "COMPLETED") &&
+			!strings.Contains(msg.Content, "RESUMED")
+		if isLoopStart {
+			*loopTotalTokens = 0
+			program.Send(tui.SendLoopStarted()())
+			program.Send(tui.SendLoopStatsUpdate(0)())
+		}
 		// Use stop sign emoji for STOPPED messages
 		role := tui.RoleLoop
 		if strings.Contains(msg.Content, "STOPPED") {
@@ -215,7 +227,7 @@ func processMessage(
 			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 				claudeLoop.SetSessionID(sessionID)
 			}
-			handleParsedMessage(parsed, jsonParser, tokenStats, msgChan, program, activeAgentIDs)
+			handleParsedMessage(parsed, jsonParser, tokenStats, msgChan, program, activeAgentIDs, loopTotalTokens)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -246,6 +258,7 @@ func handleParsedMessage(
 	msgChan chan<- tui.Message,
 	program *tea.Program,
 	activeAgentIDs map[string]bool,
+	loopTotalTokens *int64,
 ) {
 	// Extract usage information
 	if usage := jsonParser.GetUsage(parsed); usage != nil {
@@ -256,6 +269,10 @@ func handleParsedMessage(
 			usage.CacheReadInputTokens,
 		)
 		program.Send(tui.SendStatsUpdate(tokenStats)())
+		// Also track per-loop tokens for tmux status bar
+		loopTokens := usage.InputTokens + usage.OutputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+		*loopTotalTokens += loopTokens
+		program.Send(tui.SendLoopStatsUpdate(*loopTotalTokens)())
 	}
 
 	// Extract cost from result messages

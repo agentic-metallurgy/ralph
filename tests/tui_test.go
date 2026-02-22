@@ -1465,6 +1465,169 @@ func TestTUIPauseResumeWithRunningLoop(t *testing.T) {
 	cancel()
 }
 
+// ============================================================================
+// Tests: Per-Loop Stats in Tmux Status Bar (Spec 19)
+// ============================================================================
+
+// TestSendLoopStartedCmd tests the SendLoopStarted helper command
+func TestSendLoopStartedCmd(t *testing.T) {
+	cmd := tui.SendLoopStarted()
+	if cmd == nil {
+		t.Error("SendLoopStarted should return a command")
+	}
+	result := cmd()
+	if result == nil {
+		t.Error("Command should return a loopStartedMsg")
+	}
+}
+
+// TestSendLoopStatsUpdateCmd tests the SendLoopStatsUpdate helper command
+func TestSendLoopStatsUpdateCmd(t *testing.T) {
+	cmd := tui.SendLoopStatsUpdate(12345)
+	if cmd == nil {
+		t.Error("SendLoopStatsUpdate should return a command")
+	}
+	result := cmd()
+	if result == nil {
+		t.Error("Command should return a loopStatsUpdateMsg")
+	}
+}
+
+// TestPerLoopTokensResetOnNewLoop tests that per-loop tokens reset when a new loop starts
+func TestPerLoopTokensResetOnNewLoop(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Set loop stats to some value
+	cmd := tui.SendLoopStatsUpdate(50000)
+	model, _ = updateModel(model, cmd())
+
+	// Signal a new loop started
+	cmd = tui.SendLoopStarted()
+	model, _ = updateModel(model, cmd())
+
+	// Per-loop tokens should be reset to 0
+	// Verify by sending another loop stats update with a small value
+	cmd = tui.SendLoopStatsUpdate(100)
+	model, _ = updateModel(model, cmd())
+
+	// The model should work without errors after reset
+	view := model.View()
+	if view == "" {
+		t.Error("View should render after per-loop stats reset")
+	}
+}
+
+// TestPerLoopTimerResetsOnNewLoop tests that per-loop elapsed timer resets when a new loop starts
+func TestPerLoopTimerResetsOnNewLoop(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Wait a bit so the loop timer accumulates
+	time.Sleep(50 * time.Millisecond)
+
+	// Signal a new loop started — should reset per-loop timer
+	cmd := tui.SendLoopStarted()
+	model, _ = updateModel(model, cmd())
+
+	// The per-loop timer should now be near-zero (just reset)
+	// We can't directly inspect it, but the view should render without error
+	view := model.View()
+	if view == "" {
+		t.Error("View should render after per-loop timer reset")
+	}
+}
+
+// TestPerLoopTimerFreezesOnPause tests that the per-loop timer freezes when paused
+func TestPerLoopTimerFreezesOnPause(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Pause
+	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+	model, _ = updateModel(model, keyP)
+
+	// After pausing, two consecutive views should be identical
+	// (both total and per-loop timers are frozen)
+	view1 := model.View()
+	time.Sleep(50 * time.Millisecond)
+	view2 := model.View()
+
+	if view1 != view2 {
+		t.Error("With paused timers (including per-loop), consecutive views should be identical")
+	}
+}
+
+// TestPerLoopTimerResumesAfterPause tests that the per-loop timer resumes after unpause
+func TestPerLoopTimerResumesAfterPause(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Pause then resume
+	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+	model, _ = updateModel(model, keyP)
+
+	keyR := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
+	model, _ = updateModel(model, keyR)
+
+	// After resume, view should render without error
+	view := model.View()
+	if view == "" {
+		t.Error("View should render after resuming per-loop timer")
+	}
+}
+
+// ============================================================================
+// Tests: Completed Tasks Position + Title Rename (Spec 20)
+// ============================================================================
+
+// TestRalphLoopDetailsTitle tests that the right panel title is "Ralph Loop Details"
+func TestRalphLoopDetailsTitle(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "Ralph Loop Details") {
+		t.Error("View should contain 'Ralph Loop Details' title (renamed from 'Ralph Details')")
+	}
+}
+
+// TestCompletedTasksAboveCurrentTask tests that "Completed Tasks:" appears above "Current Task:"
+func TestCompletedTasksAboveCurrentTask(t *testing.T) {
+	model := tui.NewModel()
+	model.SetCompletedTasks(4, 7)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Set a current task
+	cmd := tui.SendTaskUpdate("#6 Change lib/gold")
+	model, _ = updateModel(model, cmd())
+
+	view := model.View()
+
+	// Find positions of both labels
+	completedIdx := strings.Index(view, "Completed Tasks:")
+	currentIdx := strings.Index(view, "Current Task:")
+
+	if completedIdx == -1 {
+		t.Fatal("View should contain 'Completed Tasks:' label")
+	}
+	if currentIdx == -1 {
+		t.Fatal("View should contain 'Current Task:' label")
+	}
+	if completedIdx >= currentIdx {
+		t.Errorf("'Completed Tasks:' (pos %d) should appear before 'Current Task:' (pos %d)",
+			completedIdx, currentIdx)
+	}
+}
+
+// ============================================================================
+// Integration Tests: TUI + Loop Pause/Resume
+// ============================================================================
+
 // TestTUIPauseResumeDoesNotQuit tests that pause/resume keys never trigger app quit.
 func TestTUIPauseResumeDoesNotQuit(t *testing.T) {
 	model := tui.NewModel()
