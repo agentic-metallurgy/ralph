@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 //go:embed assets/prompt.md assets/plan_prompt.md
@@ -18,6 +19,7 @@ const embeddedPlanPromptPath = "assets/plan_prompt.md"
 type Loader struct {
 	overridePath string
 	planMode     bool
+	goal         string
 }
 
 // NewLoader creates a new prompt Loader.
@@ -31,24 +33,40 @@ func NewLoader(overridePath string) *Loader {
 
 // NewPlanLoader creates a prompt Loader for plan mode.
 // If overridePath is empty, the embedded plan prompt will be used.
-func NewPlanLoader(overridePath string) *Loader {
+// The goal parameter specifies the ultimate goal sentence for the plan prompt.
+func NewPlanLoader(overridePath string, goal string) *Loader {
 	return &Loader{
 		overridePath: overridePath,
 		planMode:     true,
+		goal:         goal,
 	}
 }
 
 // Load returns the prompt content.
 // If an override path was configured, it loads from that file.
 // Otherwise, it returns the embedded default prompt (build or plan based on mode).
+// In plan mode, the $ultimate_goal_sentence placeholder is substituted with the goal.
 func (l *Loader) Load() (string, error) {
+	var content string
+	var err error
+
 	if l.overridePath != "" {
-		return l.loadFromFile(l.overridePath)
+		content, err = l.loadFromFile(l.overridePath)
+	} else if l.planMode {
+		content, err = l.loadEmbeddedPlan()
+	} else {
+		content, err = l.loadEmbedded()
 	}
+
+	if err != nil {
+		return "", err
+	}
+
 	if l.planMode {
-		return l.loadEmbeddedPlan()
+		content = substituteGoal(content, l.goal)
 	}
-	return l.loadEmbedded()
+
+	return content, nil
 }
 
 // loadEmbedded returns the embedded default prompt
@@ -84,6 +102,17 @@ func (l *Loader) loadEmbeddedPlan() (string, error) {
 	return string(content), nil
 }
 
+// substituteGoal replaces the $ultimate_goal_sentence placeholder in the prompt content.
+// If goal is non-empty, the placeholder is replaced with the goal text (period is kept from template).
+// If goal is empty, the placeholder and its trailing ". " are removed for clean output.
+func substituteGoal(content, goal string) string {
+	if goal == "" {
+		return strings.Replace(content, "$ultimate_goal_sentence. ", "", 1)
+	}
+	goal = strings.TrimRight(goal, ".")
+	return strings.Replace(content, "$ultimate_goal_sentence", goal, 1)
+}
+
 // IsUsingOverride returns true if a custom prompt file is configured
 func (l *Loader) IsUsingOverride() bool {
 	return l.overridePath != ""
@@ -100,8 +129,12 @@ func GetEmbeddedPrompt() (string, error) {
 	return loader.Load()
 }
 
-// GetEmbeddedPlanPrompt is a convenience function to get the embedded plan prompt directly
+// GetEmbeddedPlanPrompt is a convenience function to get the raw embedded plan prompt template.
+// Note: this returns the template with $ultimate_goal_sentence placeholder unsubstituted.
 func GetEmbeddedPlanPrompt() (string, error) {
-	loader := NewPlanLoader("")
-	return loader.Load()
+	content, err := embeddedFS.ReadFile(embeddedPlanPromptPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read embedded plan prompt: %w", err)
+	}
+	return string(content), nil
 }

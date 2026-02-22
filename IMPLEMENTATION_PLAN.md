@@ -72,11 +72,37 @@ Based on `specs/default.md`, the following tasks are needed:
 - Validation: all 153 tests pass, `go vet ./...` clean, `go build` succeeds
 
 ## TASK 6: Plan Prompt Ultimate Goal [MEDIUM PRIORITY]
-**Status: TODO**
+**Status: DONE**
 - Spec: Add `--goal` flag to `ralph plan` for specifying an ultimate goal sentence
 - Spec: Add placeholder in `plan_prompt.md`: "ULTIMATE GOAL: $ultimate_goal_sentence. Consider missing elements and plan accordingly."
-- If `--goal` is not provided, derive from specs/ content or leave empty
-- Requires changes to: `internal/config/config.go` (new flag), `internal/prompt/prompt.go` (template substitution), `internal/prompt/assets/plan_prompt.md`
+- If `--goal` is not provided, placeholder and trailing ". " are removed for clean output
+- Changed `internal/config/config.go`:
+  - Added `Goal string` field to Config struct
+  - Added `--goal` flag: `flag.StringVar(&cfg.Goal, "goal", "", "Ultimate goal sentence for plan mode (used in plan prompt)")`
+- Changed `internal/prompt/assets/plan_prompt.md`:
+  - Inserted `$ultimate_goal_sentence. ` placeholder before "Consider missing elements" in the ULTIMATE GOAL line
+- Changed `internal/prompt/prompt.go`:
+  - Added `goal string` field to Loader struct
+  - Changed `NewPlanLoader(overridePath, goal string)` signature to accept goal
+  - Added `substituteGoal(content, goal string)` function: if goal non-empty, replaces placeholder with goal text (trailing period trimmed to avoid double-period); if goal empty, removes placeholder + ". " for clean output
+  - `Load()` now calls `substituteGoal()` after loading content in plan mode
+  - Goal substitution also applies to override files (plan mode with `--loop-prompt`)
+  - `GetEmbeddedPlanPrompt()` now reads raw template directly (returns unsubstituted placeholder) for introspection
+- Changed `cmd/ralph/main.go`:
+  - Updated `--show-prompt` handler to use Loader (so goal substitution is visible when debugging prompts)
+  - Updated `NewPlanLoader` call to pass `cfg.Goal`
+- Added tests in `tests/prompt_test.go`:
+  - `TestPlanPromptGoalSubstitution`: verifies goal text replaces placeholder
+  - `TestPlanPromptGoalEmpty`: verifies placeholder is cleanly removed when no goal
+  - `TestPlanPromptGoalWithTrailingPeriod`: verifies no double period when goal ends with "."
+  - `TestPlanPromptGoalDoesNotAffectBuildPrompt`: verifies build prompt is unaffected
+  - Updated `TestGetEmbeddedPlanPrompt` to verify raw template contains placeholder
+  - Updated `TestPlanLoaderWithOverride` to test goal substitution in override files
+  - Updated all `NewPlanLoader("")` calls to `NewPlanLoader("", "")`
+- Added tests in `tests/config_test.go`:
+  - `TestGoalFieldDefault`: verifies Goal defaults to empty
+  - `TestGoalFieldSet`: verifies Goal can be set
+- Validation: all 161 tests pass, `go vet ./...` clean, `go build` succeeds
 
 ## TASK 7: Add/Subtract Loop Keyboard Shortcuts [MEDIUM PRIORITY]
 **Status: TODO**

@@ -439,6 +439,23 @@ func TestSubcommandFieldDefault(t *testing.T) {
 	}
 }
 
+func TestGoalFieldDefault(t *testing.T) {
+	cfg := config.NewConfig()
+	if cfg.Goal != "" {
+		t.Errorf("Expected empty Goal by default, got %q", cfg.Goal)
+	}
+}
+
+func TestGoalFieldSet(t *testing.T) {
+	cfg := &config.Config{
+		Iterations: 1,
+		Goal:       "Build a world-class trading platform",
+	}
+	if cfg.Goal != "Build a world-class trading platform" {
+		t.Errorf("Expected Goal to be set, got %q", cfg.Goal)
+	}
+}
+
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))

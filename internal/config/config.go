@@ -22,6 +22,7 @@ type Config struct {
 	SpecFile    string
 	SpecFolder  string
 	LoopPrompt  string
+	Goal        string
 	ShowPrompt  bool
 	ShowVersion bool
 	NoTmux      bool
@@ -61,6 +62,7 @@ func ParseFlags() *Config {
 	flag.StringVar(&cfg.SpecFile, "spec-file", "", "Specific spec file to use (overrides spec-folder)")
 	flag.StringVar(&cfg.SpecFolder, "spec-folder", DefaultSpecFolder, "Folder containing spec files")
 	flag.StringVar(&cfg.LoopPrompt, "loop-prompt", "", "Path to loop prompt override (defaults to embedded prompt.md)")
+	flag.StringVar(&cfg.Goal, "goal", "", "Ultimate goal sentence for plan mode (used in plan prompt)")
 	flag.BoolVar(&cfg.ShowPrompt, "show-prompt", false, "Print the embedded loop prompt and exit")
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
 	flag.BoolVar(&cfg.NoTmux, "no-tmux", false, "Run without tmux wrapper")
