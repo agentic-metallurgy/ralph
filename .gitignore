@@ -16,3 +16,7 @@ coverage.out
 
 # OS files
 .DS_Store
+
+# ralph
+IMPLEMENTATION_PLAN.md
+specs/
