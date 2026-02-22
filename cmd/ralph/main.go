@@ -111,6 +111,14 @@ func main() {
 	completedTasks, totalTasks := parseTaskCounts(planFilePath)
 	model.SetCompletedTasks(completedTasks, totalTasks)
 
+	// Set plan mode for TUI display
+	if cfg.IsPlanMode() {
+		model.SetPlanMode(true)
+	} else if _, err := os.Stat(planFilePath); os.IsNotExist(err) {
+		// When IMPLEMENTATION_PLAN.md doesn't exist, show as initial task
+		model.SetCurrentTask("Creating IMPLEMENTATION_PLAN.md")
+	}
+
 	// Create the Bubble Tea program (must be after SetLoop so the model copy has the loop reference)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
@@ -247,6 +255,10 @@ func processMessage(
 			Role:    tui.RoleSystem,
 			Content: msg.Content,
 		}
+		// Signal TUI that the loop has completed its current iterations.
+		// The loop stays alive waiting for more iterations (post-completion extension),
+		// so we send doneMsg explicitly rather than relying on channel closure.
+		program.Send(tui.SendDone()())
 	}
 }
 
@@ -382,7 +394,7 @@ func parseTaskCounts(filepath string) (completed, total int) {
 		if strings.HasPrefix(trimmed, "## TASK ") {
 			total++
 		}
-		if strings.Contains(trimmed, "**Status: DONE**") {
+		if strings.Contains(trimmed, "**Status: DONE**") || strings.Contains(trimmed, "**Status: NOT NEEDED**") {
 			completed++
 		}
 	}

@@ -45,7 +45,7 @@ func NewPlanLoader(overridePath string, goal string) *Loader {
 // Load returns the prompt content.
 // If an override path was configured, it loads from that file.
 // Otherwise, it returns the embedded default prompt (build or plan based on mode).
-// In plan mode, the $ultimate_goal_sentence placeholder is substituted with the goal.
+// In plan mode, the $ultimate_goal_placeholder_sentence placeholder is substituted with the goal.
 func (l *Loader) Load() (string, error) {
 	var content string
 	var err error
@@ -102,15 +102,15 @@ func (l *Loader) loadEmbeddedPlan() (string, error) {
 	return string(content), nil
 }
 
-// substituteGoal replaces the $ultimate_goal_sentence placeholder in the prompt content.
+// substituteGoal replaces the $ultimate_goal_placeholder_sentence placeholder in the prompt content.
 // If goal is non-empty, the placeholder is replaced with the goal text (period is kept from template).
 // If goal is empty, the placeholder and its trailing ". " are removed for clean output.
 func substituteGoal(content, goal string) string {
 	if goal == "" {
-		return strings.Replace(content, "$ultimate_goal_sentence. ", "", 1)
+		return strings.Replace(content, "$ultimate_goal_placeholder_sentence. ", "", 1)
 	}
 	goal = strings.TrimRight(goal, ".")
-	return strings.Replace(content, "$ultimate_goal_sentence", goal, 1)
+	return strings.Replace(content, "$ultimate_goal_placeholder_sentence", goal, 1)
 }
 
 // IsUsingOverride returns true if a custom prompt file is configured
@@ -130,7 +130,7 @@ func GetEmbeddedPrompt() (string, error) {
 }
 
 // GetEmbeddedPlanPrompt is a convenience function to get the raw embedded plan prompt template.
-// Note: this returns the template with $ultimate_goal_sentence placeholder unsubstituted.
+// Note: this returns the template with $ultimate_goal_placeholder_sentence placeholder unsubstituted.
 func GetEmbeddedPlanPrompt() (string, error) {
 	content, err := embeddedFS.ReadFile(embeddedPlanPromptPath)
 	if err != nil {

@@ -43,16 +43,17 @@ type Message struct {
 
 // Loop manages the Claude CLI execution loop.
 type Loop struct {
-	config          Config
-	mu              sync.Mutex // protects config.Iterations, sessionID, resumeSessionID
-	output          chan Message
-	cancel          context.CancelFunc
-	running         bool
-	paused          bool
-	resumeCh        chan struct{}
-	iterationCancel context.CancelFunc // cancels current iteration only
-	sessionID       string             // latest session ID from Claude CLI output
-	resumeSessionID string             // session ID to use with --resume on next iteration
+	config           Config
+	mu               sync.Mutex // protects config.Iterations, sessionID, resumeSessionID, completedWaiting
+	output           chan Message
+	cancel           context.CancelFunc
+	running          bool
+	paused           bool
+	completedWaiting bool // loop finished all iterations but stays alive waiting for more
+	resumeCh         chan struct{}
+	iterationCancel  context.CancelFunc // cancels current iteration only
+	sessionID        string             // latest session ID from Claude CLI output
+	resumeSessionID  string             // session ID to use with --resume on next iteration
 }
 
 // New creates a new Loop with the given configuration.
@@ -118,12 +119,27 @@ func (l *Loop) Pause() {
 	}
 }
 
-// Resume resumes a paused loop.
+// Resume resumes a paused loop, or wakes a completed-waiting loop to run new iterations.
 func (l *Loop) Resume() {
 	if l.paused {
 		l.paused = false
 		l.resumeCh <- struct{}{}
+	} else {
+		l.mu.Lock()
+		cw := l.completedWaiting
+		l.mu.Unlock()
+		if cw {
+			l.resumeCh <- struct{}{}
+		}
 	}
+}
+
+// IsCompletedWaiting returns whether the loop has completed all iterations
+// and is waiting for more iterations to be added.
+func (l *Loop) IsCompletedWaiting() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.completedWaiting
 }
 
 // SetIterations dynamically adjusts the total iteration count.
@@ -159,110 +175,152 @@ func (l *Loop) GetSessionID() string {
 }
 
 // run executes the main loop logic.
+// After completing all iterations, the goroutine stays alive waiting for more
+// iterations to be added (via SetIterations + Resume). This enables the
+// post-completion loop extension workflow where users press '+' then 'r'.
 func (l *Loop) run(ctx context.Context) {
 	defer close(l.output)
 	defer func() { l.running = false }()
 
-	for i := 1; i <= l.GetIterations(); i++ {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		// Check if paused and wait for resume
-		if l.paused {
-			total := l.GetIterations()
-			l.output <- Message{
-				Type:    "loop_marker",
-				Content: "======= LOOP STOPPED =======",
-				Loop:    i,
-				Total:   total,
-			}
+	i := 1
+	for {
+		// Inner loop: run iterations until we catch up with GetIterations()
+		for ; i <= l.GetIterations(); i++ {
 			select {
 			case <-ctx.Done():
 				return
-			case <-l.resumeCh:
-				total = l.GetIterations()
+			default:
+			}
+
+			// Check if paused and wait for resume
+			if l.paused {
+				total := l.GetIterations()
 				l.output <- Message{
 					Type:    "loop_marker",
-					Content: "======= LOOP RESUMED =======",
+					Content: "======= LOOP STOPPED =======",
+					Loop:    i,
+					Total:   total,
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-l.resumeCh:
+					total = l.GetIterations()
+					l.output <- Message{
+						Type:    "loop_marker",
+						Content: "======= LOOP RESUMED =======",
+						Loop:    i,
+						Total:   total,
+					}
+				}
+			}
+
+			// Send loop marker
+			total := l.GetIterations()
+			l.output <- Message{
+				Type:    "loop_marker",
+				Content: fmt.Sprintf("======= LOOP %d/%d =======", i, total),
+				Loop:    i,
+				Total:   total,
+			}
+
+			// Create a cancellable context for this iteration
+			iterCtx, iterCancel := context.WithCancel(ctx)
+			l.iterationCancel = iterCancel
+
+			// Execute Claude CLI
+			err := l.executeIteration(iterCtx, i)
+			iterCancel() // clean up
+			l.iterationCancel = nil
+
+			// If we were paused (interrupted), don't report as error
+			if l.paused {
+				total := l.GetIterations()
+				l.output <- Message{
+					Type:    "loop_marker",
+					Content: "======= LOOP STOPPED =======",
+					Loop:    i,
+					Total:   total,
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-l.resumeCh:
+					total = l.GetIterations()
+					l.output <- Message{
+						Type:    "loop_marker",
+						Content: "======= LOOP RESUMED =======",
+						Loop:    i,
+						Total:   total,
+					}
+				}
+				// Retry this iteration
+				i--
+				continue
+			}
+
+			if err != nil {
+				total := l.GetIterations()
+				l.output <- Message{
+					Type:    "error",
+					Content: err.Error(),
 					Loop:    i,
 					Total:   total,
 				}
 			}
+
+			// Sleep between iterations (except for the last one)
+			if i < l.GetIterations() {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(l.config.SleepDuration):
+				}
+			}
 		}
 
-		// Send loop marker
+		// All current iterations complete — send completion marker
+		completedCount := i - 1
 		total := l.GetIterations()
 		l.output <- Message{
-			Type:    "loop_marker",
-			Content: fmt.Sprintf("======= LOOP %d/%d =======", i, total),
-			Loop:    i,
+			Type:    "complete",
+			Content: fmt.Sprintf("======= COMPLETED %d ITERATIONS =======", total),
+			Loop:    total,
 			Total:   total,
 		}
 
-		// Create a cancellable context for this iteration
-		iterCtx, iterCancel := context.WithCancel(ctx)
-		l.iterationCancel = iterCancel
+		// Enter waiting state: stay alive for potential new iterations
+		l.mu.Lock()
+		l.completedWaiting = true
+		l.mu.Unlock()
 
-		// Execute Claude CLI
-		err := l.executeIteration(iterCtx, i)
-		iterCancel() // clean up
-		l.iterationCancel = nil
+		select {
+		case <-ctx.Done():
+			l.mu.Lock()
+			l.completedWaiting = false
+			l.mu.Unlock()
+			return
+		case <-l.resumeCh:
+			l.mu.Lock()
+			l.completedWaiting = false
+			l.mu.Unlock()
+		}
 
-		// If we were paused (interrupted), don't report as error
-		if l.paused {
-			total := l.GetIterations()
-			l.output <- Message{
-				Type:    "loop_marker",
-				Content: "======= LOOP STOPPED =======",
-				Loop:    i,
-				Total:   total,
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-l.resumeCh:
-				total = l.GetIterations()
-				l.output <- Message{
-					Type:    "loop_marker",
-					Content: "======= LOOP RESUMED =======",
-					Loop:    i,
-					Total:   total,
-				}
-			}
-			// Retry this iteration
-			i--
+		// Check if new iterations were actually added
+		newTotal := l.GetIterations()
+		if completedCount >= newTotal {
+			// No new iterations — go back to waiting
 			continue
 		}
 
-		if err != nil {
-			total := l.GetIterations()
-			l.output <- Message{
-				Type:    "error",
-				Content: err.Error(),
-				Loop:    i,
-				Total:   total,
-			}
+		// Resume with new iterations
+		l.output <- Message{
+			Type:    "loop_marker",
+			Content: "======= LOOP RESUMED =======",
+			Loop:    i,
+			Total:   newTotal,
 		}
-
-		// Sleep between iterations (except for the last one)
-		if i < l.GetIterations() {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(l.config.SleepDuration):
-			}
-		}
-	}
-
-	total := l.GetIterations()
-	l.output <- Message{
-		Type:    "complete",
-		Content: fmt.Sprintf("======= COMPLETED %d ITERATIONS =======", total),
-		Loop:    total,
-		Total:   total,
+		// i is already at completedCount + 1; inner for-loop will pick up
 	}
 }
 
