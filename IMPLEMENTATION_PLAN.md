@@ -133,3 +133,45 @@ Based on `specs/default.md`, the following tasks are needed:
   - `TestMultipleAddLoopPresses`: verifies pressing '+' multiple times accumulates correctly
 - Validation: all 211 tests pass, `go vet ./...` clean, `go build` succeeds
 
+## TASK 8: Keyboard Shortcuts Rename + Visibility Fix [HIGH PRIORITY]
+**Status: DONE**
+- Spec: Final shortcut set should be `(q)uit (r)esume (p)ause (+) add loop (-) subtract loop`
+- Spec: Only pause/resume should dim/illuminate based on state; all others always visible
+- Spec: Make all token counts human-readable (individual breakdown fields were using raw `%d`)
+- Changed `internal/tui/tui.go`:
+  - Renamed key binding `"o"` → `"p"` for pause
+  - Renamed key binding `"a"` → `"r"` for resume
+  - Updated hotkey bar labels: `st(o)p`/`st(a)rt` → `(p)ause`/`(r)esume`
+  - Updated hotkey bar labels: `(+)add`/`(-)subtract` → `(+) add loop`/`(-) subtract loop` (matches spec format)
+  - Fixed visibility: `(+) add loop` and `(-) subtract loop` now always use `highlightStyle` (were incorrectly dim)
+  - Only `(p)ause` and `(r)esume` dim/illuminate based on paused state
+  - Changed individual token display (Input, Output, Cache Write, Cache Read) from `%d` to `stats.FormatTokens()` for human-readable formatting
+- Updated tests in `tests/tui_test.go`:
+  - Renamed `TestStopHotkey` → `TestPauseHotkey`: tests `'p'` key instead of `'o'`
+  - Renamed `TestStartHotkey` → `TestResumeHotkey`: tests `'r'` key instead of `'a'`
+  - Updated `TestCacheTokenBreakdownDisplayed`: checks for "12.3k"/"67.9k" instead of raw "12345"/"67890"
+- Validation: all 211 tests pass, `go vet ./...` clean, `go build` succeeds
+
+## TASK 9: Pause/Resume with Session Resumption [HIGH PRIORITY]
+**Status: TODO**
+- Spec: On resume after pause, use `claude --resume <session-id>` to continue from where it left off
+- Spec: If the user pauses, quits, comes back, and does NOT resume, start a fresh Claude session
+- Requires: Capture session ID from Claude CLI output, pass `--resume` flag on resume
+- Key changes needed: `internal/loop/loop.go` (CommandBuilder needs session ID support), session ID parsing from Claude output
+
+## TASK 10: Remove Old In-App Status Bar [MEDIUM PRIORITY]
+**Status: TODO**
+- Spec: "The old in-app status bar that was previously shown should be removed"
+- The `renderStatusBar()` in-app status bar duplicates the tmux status bar content
+- Should remove it when tmux bar is active, or remove entirely per spec
+
+## TASK 11: Truncation Fix [MEDIUM PRIORITY]
+**Status: TODO**
+- Spec: Responses/thinking from Claude are sometimes truncated; they should not be
+- Scanner buffer in `loop.go` is 1MB max — may need increase for very large responses
+- Tool use `inputJSON` is truncated to 150 chars (intentional display abbreviation, likely OK)
+
+## TASK 12: Integration Tests for Start/Pause/Start Flow [LOW PRIORITY]
+**Status: TODO**
+- Spec: Write integration tests for the start/pause/start flow
+- Should test: start loop → pause → resume → verify continuation

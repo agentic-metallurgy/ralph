@@ -321,8 +321,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.quitting = true
 			return m, tea.Quit
-		case "o":
-			// Stop/pause the loop - freeze elapsed time
+		case "p":
+			// Pause the loop - freeze elapsed time
 			if m.loop != nil {
 				if !m.timerPaused {
 					m.pausedElapsed = m.baseElapsed + time.Since(m.startTime)
@@ -331,8 +331,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loop.Pause()
 			}
 			return m, nil
-		case "a":
-			// Start/resume the loop - resume elapsed time from where we paused
+		case "r":
+			// Resume the loop - resume elapsed time from where we paused
 			if m.loop != nil {
 				if m.timerPaused {
 					m.baseElapsed = m.pausedElapsed
@@ -549,10 +549,10 @@ func (m Model) renderFooter() string {
 		lipgloss.Left,
 		titleStyle.Render("Usage & Cost"),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Tokens:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.TotalTokens())))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Input:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.InputTokens))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Output:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.OutputTokens))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Write:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.CacheCreationTokens))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Read:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.CacheReadTokens))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Input:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.InputTokens)))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Output:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.OutputTokens)))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Write:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.CacheCreationTokens)))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Read:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.CacheReadTokens)))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Cost:"), costStyle.Render(fmt.Sprintf(" $%.6f", m.stats.TotalCostUSD))),
 	)
 	usageCostPanel := panelStyle.Render(usageCostContent)
@@ -622,22 +622,24 @@ func (m Model) renderFooter() string {
 
 	quitKey := highlightStyle.Render("(q)")
 	quitLabel := highlightStyle.Render("uit")
-	stopKey := dimStyle.Render("st(o)p")
-	startKey := dimStyle.Render("st(a)rt")
-	addKey := dimStyle.Render("(+)add")
-	subKey := dimStyle.Render("(-)subtract")
+	pauseKey := dimStyle.Render("(p)ause")
+	resumeKey := dimStyle.Render("(r)esume")
+	addKey := highlightStyle.Render("(+)")
+	addLabel := highlightStyle.Render(" add loop")
+	subKey := highlightStyle.Render("(-)")
+	subLabel := highlightStyle.Render(" subtract loop")
 
 	if isPaused {
-		startKey = highlightStyle.Render("st(a)rt")
+		resumeKey = highlightStyle.Render("(r)esume")
 	} else {
-		stopKey = highlightStyle.Render("st(o)p")
+		pauseKey = highlightStyle.Render("(p)ause")
 	}
 
 	hotkeyBar := lipgloss.NewStyle().
 		Width(m.width - 2).
 		Align(lipgloss.Left).
 		PaddingLeft(1).
-		Render(fmt.Sprintf("%s%s   %s   %s   %s   %s", quitKey, quitLabel, stopKey, startKey, addKey, subKey))
+		Render(fmt.Sprintf("%s%s   %s   %s   %s%s   %s%s", quitKey, quitLabel, resumeKey, pauseKey, addKey, addLabel, subKey, subLabel))
 
 	// Status bar
 	statusBar := m.renderStatusBar()

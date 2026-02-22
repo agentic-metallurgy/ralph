@@ -1,0 +1,1 @@
+- plan_prompt.md: make plan_prompt.md a placeholder template. When running `ralph plan`, the user can pass an argument (e.g. --goal "...") to specify the ultimate goal, or we leave it empty and derive it from the specs/ that are given. The ultimate goal won't exceed a single sentence.
