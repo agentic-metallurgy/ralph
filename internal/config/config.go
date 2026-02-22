@@ -20,6 +20,7 @@ type Config struct {
 	SpecFolder string
 	LoopPrompt string
 	ShowPrompt bool
+	NoTmux     bool
 }
 
 // NewConfig returns a new Config with default values
@@ -42,6 +43,7 @@ func ParseFlags() *Config {
 	flag.StringVar(&cfg.SpecFolder, "spec-folder", DefaultSpecFolder, "Folder containing spec files")
 	flag.StringVar(&cfg.LoopPrompt, "loop-prompt", "", "Path to loop prompt override (defaults to embedded prompt.md)")
 	flag.BoolVar(&cfg.ShowPrompt, "show-prompt", false, "Print the embedded loop prompt and exit")
+	flag.BoolVar(&cfg.NoTmux, "no-tmux", false, "Run without tmux wrapper")
 
 	// Custom usage function to display flags with -- prefix
 	flag.Usage = func() {

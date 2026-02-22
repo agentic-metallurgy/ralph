@@ -15,6 +15,7 @@ import (
 	"github.com/cloudosai/ralph-go/internal/parser"
 	"github.com/cloudosai/ralph-go/internal/prompt"
 	"github.com/cloudosai/ralph-go/internal/stats"
+	"github.com/cloudosai/ralph-go/internal/tmux"
 	"github.com/cloudosai/ralph-go/internal/tui"
 )
 
@@ -33,6 +34,14 @@ func main() {
 		}
 		fmt.Print(content)
 		return
+	}
+
+	// Wrap in tmux if not already inside one
+	if tmux.ShouldWrap(cfg.NoTmux) {
+		if err := tmux.Wrap(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Could not wrap in tmux: %v\n", err)
+			// Continue without tmux
+		}
 	}
 
 	// Validate configuration
