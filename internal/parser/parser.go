@@ -36,11 +36,13 @@ type Usage struct {
 
 // ContentItem represents a single content item in a message
 type ContentItem struct {
-	Type    ContentType            `json:"type"`
-	Text    string                 `json:"text,omitempty"`
-	Name    string                 `json:"name,omitempty"`    // Tool name for tool_use
-	Input   map[string]interface{} `json:"input,omitempty"`   // Tool input for tool_use
-	Content interface{}            `json:"content,omitempty"` // Tool result content
+	Type      ContentType            `json:"type"`
+	Text      string                 `json:"text,omitempty"`
+	ID        string                 `json:"id,omitempty"`          // Tool use ID for tool_use
+	Name      string                 `json:"name,omitempty"`        // Tool name for tool_use
+	Input     map[string]interface{} `json:"input,omitempty"`       // Tool input for tool_use
+	ToolUseID string                 `json:"tool_use_id,omitempty"` // Tool use ID for tool_result
+	Content   interface{}            `json:"content,omitempty"`     // Tool result content
 }
 
 // InnerMessage represents the message field within an assistant/user message
@@ -51,10 +53,11 @@ type InnerMessage struct {
 
 // ParsedMessage represents a parsed Claude message
 type ParsedMessage struct {
-	Type         MessageType   `json:"type"`
-	Message      *InnerMessage `json:"message,omitempty"`
-	TotalCostUSD float64       `json:"total_cost_usd,omitempty"`
-	RawJSON      string        `json:"-"` // Original JSON for debugging
+	Type            MessageType   `json:"type"`
+	Message         *InnerMessage `json:"message,omitempty"`
+	TotalCostUSD    float64       `json:"total_cost_usd,omitempty"`
+	ParentToolUseID *string       `json:"parent_tool_use_id,omitempty"`
+	RawJSON         string        `json:"-"` // Original JSON for debugging
 }
 
 // LoopMarker represents a loop marker extracted from output
@@ -264,4 +267,28 @@ func (p *Parser) GetCost(msg *ParsedMessage) float64 {
 		return 0
 	}
 	return msg.TotalCostUSD
+}
+
+// IsSubagentMessage returns true if the message originates from a subagent
+// (i.e., has a non-nil, non-empty parent_tool_use_id)
+func (p *Parser) IsSubagentMessage(msg *ParsedMessage) bool {
+	if msg == nil || msg.ParentToolUseID == nil {
+		return false
+	}
+	return *msg.ParentToolUseID != ""
+}
+
+// GetTaskToolUseIDs returns the IDs of any "Task" tool_use content items in the message.
+// These IDs correspond to subagents being spawned.
+func (p *Parser) GetTaskToolUseIDs(msg *ParsedMessage) []string {
+	if msg == nil || msg.Message == nil {
+		return nil
+	}
+	var ids []string
+	for _, item := range msg.Message.Content {
+		if item.Type == ContentTypeToolUse && item.Name == "Task" && item.ID != "" {
+			ids = append(ids, item.ID)
+		}
+	}
+	return ids
 }

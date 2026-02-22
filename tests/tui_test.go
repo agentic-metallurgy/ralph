@@ -756,6 +756,72 @@ func TestViewportScrollsToBottomOnInit(t *testing.T) {
 	}
 }
 
+// TestAgentCountDisplayed tests that agent count appears in the Loop Details panel
+func TestAgentCountDisplayed(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	// With 0 agents, should show "Agents:" label and "0"
+	if !strings.Contains(view, "Agents:") {
+		t.Error("View should contain 'Agents:' label")
+	}
+	if !strings.Contains(view, "0") {
+		t.Error("View should show agent count of 0")
+	}
+}
+
+// TestAgentCountUpdate tests that the agent count updates via SendAgentUpdate
+func TestAgentCountUpdate(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate agent update
+	cmd := tui.SendAgentUpdate(3)
+	agentMsg := cmd()
+	model, _ = updateModel(model, agentMsg)
+
+	view := model.View()
+	if !strings.Contains(view, "3") {
+		t.Error("View should show updated agent count of 3")
+	}
+}
+
+// TestAgentCountZeroAfterReset tests agent count returns to 0
+func TestAgentCountZeroAfterReset(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Set agents to 2
+	cmd := tui.SendAgentUpdate(2)
+	agentMsg := cmd()
+	model, _ = updateModel(model, agentMsg)
+
+	// Reset to 0
+	cmd = tui.SendAgentUpdate(0)
+	agentMsg = cmd()
+	model, _ = updateModel(model, agentMsg)
+
+	view := model.View()
+	if !strings.Contains(view, "Agents:") {
+		t.Error("View should still contain 'Agents:' label after reset")
+	}
+}
+
+// TestSendAgentUpdateCmd tests the SendAgentUpdate helper command
+func TestSendAgentUpdateCmd(t *testing.T) {
+	cmd := tui.SendAgentUpdate(5)
+
+	if cmd == nil {
+		t.Error("SendAgentUpdate should return a command")
+	}
+
+	result := cmd()
+	if result == nil {
+		t.Error("Command should return an agent update message")
+	}
+}
+
 // TestResizeFromTinyToNormal tests transitioning from too-small to normal size
 func TestResizeFromTinyToNormal(t *testing.T) {
 	model := tui.NewModel()

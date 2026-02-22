@@ -99,6 +99,7 @@ type Model struct {
 	stats          *stats.TokenStats
 	currentLoop    int
 	totalLoops     int
+	activeAgents   int
 	startTime      time.Time
 	baseElapsed    time.Duration // elapsed time from previous sessions
 	timerPaused    bool          // whether elapsed time tracking is paused
@@ -125,7 +126,7 @@ func NewModel() Model {
 		totalLoops:     0,
 		startTime:      time.Now(),
 		activityHeight: 0,
-		footerHeight:   9,
+		footerHeight:   10,
 	}
 }
 
@@ -181,6 +182,11 @@ type loopUpdateMsg struct {
 // statsUpdateMsg is sent to update stats
 type statsUpdateMsg struct {
 	stats *stats.TokenStats
+}
+
+// agentUpdateMsg is sent to update active agent count
+type agentUpdateMsg struct {
+	count int
 }
 
 // doneMsg is sent when processing is complete
@@ -325,6 +331,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case statsUpdateMsg:
 		m.stats = msg.stats
+		return m, nil
+
+	case agentUpdateMsg:
+		m.activeAgents = msg.count
 		return m, nil
 
 	case doneMsg:
@@ -499,12 +509,20 @@ func (m Model) renderFooter() string {
 		statusStyle = valueStyle.Foreground(colorRed)
 	}
 
+	// Agents display
+	agentDisplay := fmt.Sprintf(" %d", m.activeAgents)
+	agentStyle := valueStyle
+	if m.activeAgents > 0 {
+		agentStyle = valueStyle.Foreground(colorGreen)
+	}
+
 	loopDetailsContent := lipgloss.JoinVertical(
 		lipgloss.Left,
 		titleStyle.Render("Loop Details"),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Loop:"), valueStyle.Render(fmt.Sprintf(" %s", loopDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Elapsed:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Agents:"), agentStyle.Render(agentDisplay)),
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
 
@@ -560,6 +578,13 @@ func SendLoopUpdate(current, total int) tea.Cmd {
 func SendStatsUpdate(s *stats.TokenStats) tea.Cmd {
 	return func() tea.Msg {
 		return statsUpdateMsg{stats: s}
+	}
+}
+
+// SendAgentUpdate is a helper command to update active agent count
+func SendAgentUpdate(count int) tea.Cmd {
+	return func() tea.Msg {
+		return agentUpdateMsg{count: count}
 	}
 }
 

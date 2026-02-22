@@ -619,3 +619,196 @@ func TestParseLinePreservesRawJSON(t *testing.T) {
 		t.Errorf("Expected RawJSON to be preserved, got %q", msg.RawJSON)
 	}
 }
+
+func TestParseLineParentToolUseIDNull(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"assistant","message":{"content":[]},"parent_tool_use_id":null}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil result")
+	}
+	// JSON null should result in nil pointer
+	if msg.ParentToolUseID != nil {
+		t.Errorf("Expected nil ParentToolUseID for null value, got %q", *msg.ParentToolUseID)
+	}
+}
+
+func TestParseLineParentToolUseIDPresent(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"assistant","message":{"content":[]},"parent_tool_use_id":"toolu_abc123"}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil result")
+	}
+	if msg.ParentToolUseID == nil {
+		t.Fatal("Expected non-nil ParentToolUseID")
+	}
+	if *msg.ParentToolUseID != "toolu_abc123" {
+		t.Errorf("Expected ParentToolUseID 'toolu_abc123', got %q", *msg.ParentToolUseID)
+	}
+}
+
+func TestParseLineParentToolUseIDAbsent(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"assistant","message":{"content":[]}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil result")
+	}
+	if msg.ParentToolUseID != nil {
+		t.Errorf("Expected nil ParentToolUseID when field absent, got %q", *msg.ParentToolUseID)
+	}
+}
+
+func TestIsSubagentMessage(t *testing.T) {
+	p := parser.NewParser()
+
+	tests := []struct {
+		name     string
+		line     string
+		expected bool
+	}{
+		{
+			"nil message",
+			"",
+			false,
+		},
+		{
+			"no parent_tool_use_id",
+			`{"type":"assistant","message":{"content":[]}}`,
+			false,
+		},
+		{
+			"null parent_tool_use_id",
+			`{"type":"assistant","message":{"content":[]},"parent_tool_use_id":null}`,
+			false,
+		},
+		{
+			"empty parent_tool_use_id",
+			`{"type":"assistant","message":{"content":[]},"parent_tool_use_id":""}`,
+			false,
+		},
+		{
+			"valid parent_tool_use_id",
+			`{"type":"assistant","message":{"content":[]},"parent_tool_use_id":"toolu_abc123"}`,
+			true,
+		},
+		{
+			"result from subagent",
+			`{"type":"result","total_cost_usd":0.01,"parent_tool_use_id":"toolu_xyz789"}`,
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var msg *parser.ParsedMessage
+			if tt.line != "" {
+				msg = p.ParseLine(tt.line)
+			}
+			result := p.IsSubagentMessage(msg)
+			if result != tt.expected {
+				t.Errorf("Expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestGetTaskToolUseIDs(t *testing.T) {
+	p := parser.NewParser()
+
+	tests := []struct {
+		name     string
+		line     string
+		expected []string
+	}{
+		{
+			"nil message",
+			"",
+			nil,
+		},
+		{
+			"no tool uses",
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}`,
+			nil,
+		},
+		{
+			"non-Task tool use",
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_abc","name":"Read","input":{"file_path":"/test"}}]}}`,
+			nil,
+		},
+		{
+			"Task tool use",
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_task1","name":"Task","input":{"prompt":"do something"}}]}}`,
+			[]string{"toolu_task1"},
+		},
+		{
+			"multiple Task tool uses",
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_t1","name":"Task","input":{"prompt":"a"}},{"type":"tool_use","id":"toolu_t2","name":"Task","input":{"prompt":"b"}}]}}`,
+			[]string{"toolu_t1", "toolu_t2"},
+		},
+		{
+			"mixed tool uses",
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_r1","name":"Read","input":{}},{"type":"tool_use","id":"toolu_t1","name":"Task","input":{"prompt":"a"}},{"type":"text","text":"hi"}]}}`,
+			[]string{"toolu_t1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var msg *parser.ParsedMessage
+			if tt.line != "" {
+				msg = p.ParseLine(tt.line)
+			}
+			result := p.GetTaskToolUseIDs(msg)
+			if len(result) != len(tt.expected) {
+				t.Fatalf("Expected %d IDs, got %d: %v", len(tt.expected), len(result), result)
+			}
+			for i, id := range result {
+				if id != tt.expected[i] {
+					t.Errorf("Expected ID[%d] %q, got %q", i, tt.expected[i], id)
+				}
+			}
+		})
+	}
+}
+
+func TestContentItemIDParsed(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_abc123","name":"Read","input":{"file_path":"/test"}}]}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil || msg.Message == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+	if len(msg.Message.Content) != 1 {
+		t.Fatalf("Expected 1 content item, got %d", len(msg.Message.Content))
+	}
+	if msg.Message.Content[0].ID != "toolu_abc123" {
+		t.Errorf("Expected ID 'toolu_abc123', got %q", msg.Message.Content[0].ID)
+	}
+}
+
+func TestContentItemToolUseIDParsed(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_abc123","content":"result text"}]}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil || msg.Message == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+	if len(msg.Message.Content) != 1 {
+		t.Fatalf("Expected 1 content item, got %d", len(msg.Message.Content))
+	}
+	if msg.Message.Content[0].ToolUseID != "toolu_abc123" {
+		t.Errorf("Expected ToolUseID 'toolu_abc123', got %q", msg.Message.Content[0].ToolUseID)
+	}
+}

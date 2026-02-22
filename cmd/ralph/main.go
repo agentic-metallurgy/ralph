@@ -126,6 +126,7 @@ func processLoopOutput(
 	defer close(msgChan)
 
 	loopOutput := claudeLoop.Output()
+	activeAgentIDs := make(map[string]bool)
 
 	for {
 		select {
@@ -142,7 +143,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, jsonParser, tokenStats, msgChan, program)
+			processMessage(msg, jsonParser, tokenStats, msgChan, program, activeAgentIDs)
 		}
 	}
 }
@@ -154,6 +155,7 @@ func processMessage(
 	tokenStats *stats.TokenStats,
 	msgChan chan<- tui.Message,
 	program *tea.Program,
+	activeAgentIDs map[string]bool,
 ) {
 	switch msg.Type {
 	case "loop_marker":
@@ -173,7 +175,7 @@ func processMessage(
 		// Try to parse as JSON first
 		parsed := jsonParser.ParseLine(msg.Content)
 		if parsed != nil {
-			handleParsedMessage(parsed, jsonParser, tokenStats, msgChan, program)
+			handleParsedMessage(parsed, jsonParser, tokenStats, msgChan, program, activeAgentIDs)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -203,6 +205,7 @@ func handleParsedMessage(
 	tokenStats *stats.TokenStats,
 	msgChan chan<- tui.Message,
 	program *tea.Program,
+	activeAgentIDs map[string]bool,
 ) {
 	// Extract usage information
 	if usage := jsonParser.GetUsage(parsed); usage != nil {
@@ -219,6 +222,26 @@ func handleParsedMessage(
 	if cost := jsonParser.GetCost(parsed); cost > 0 {
 		tokenStats.AddCost(cost)
 		program.Send(tui.SendStatsUpdate(tokenStats)())
+	}
+
+	// Track parallel subagents
+	prevCount := len(activeAgentIDs)
+	if jsonParser.IsSubagentMessage(parsed) {
+		parentID := *parsed.ParentToolUseID
+		if parsed.Type == parser.MessageTypeResult {
+			// Subagent finished
+			delete(activeAgentIDs, parentID)
+		} else {
+			// Subagent is active
+			activeAgentIDs[parentID] = true
+		}
+	}
+	// Also track "Task" tool_use items as pending agents
+	for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
+		activeAgentIDs[taskID] = true
+	}
+	if newCount := len(activeAgentIDs); newCount != prevCount {
+		program.Send(tui.SendAgentUpdate(newCount)())
 	}
 
 	// Process message content based on type
