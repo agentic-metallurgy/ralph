@@ -1,0 +1,1 @@
+- no claude attribution in commits/prs

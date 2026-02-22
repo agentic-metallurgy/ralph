@@ -813,6 +813,72 @@ func TestContentItemToolUseIDParsed(t *testing.T) {
 	}
 }
 
+func TestParseLineSessionID(t *testing.T) {
+	p := parser.NewParser()
+
+	tests := []struct {
+		name     string
+		line     string
+		expected string
+	}{
+		{
+			"system message with session_id",
+			`{"type":"system","session_id":"sess-abc-123","subtype":"init"}`,
+			"sess-abc-123",
+		},
+		{
+			"system message without session_id",
+			`{"type":"system","subtype":"init"}`,
+			"",
+		},
+		{
+			"assistant message ignores session_id",
+			`{"type":"assistant","session_id":"should-be-ignored","message":{"content":[]}}`,
+			"",
+		},
+		{
+			"result message ignores session_id",
+			`{"type":"result","session_id":"should-be-ignored","total_cost_usd":0.001}`,
+			"",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := p.ParseLine(tt.line)
+			if msg == nil {
+				t.Fatal("Expected non-nil result")
+			}
+			result := p.GetSessionID(msg)
+			if result != tt.expected {
+				t.Errorf("Expected session ID %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestGetSessionIDNilMessage(t *testing.T) {
+	p := parser.NewParser()
+	result := p.GetSessionID(nil)
+	if result != "" {
+		t.Errorf("Expected empty string for nil message, got %q", result)
+	}
+}
+
+func TestSessionIDFieldParsed(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"system","session_id":"my-session-id-12345"}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil result")
+	}
+	if msg.SessionID != "my-session-id-12345" {
+		t.Errorf("Expected SessionID 'my-session-id-12345', got %q", msg.SessionID)
+	}
+}
+
 func TestExtractTaskReference(t *testing.T) {
 	p := parser.NewParser()
 

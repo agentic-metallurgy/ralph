@@ -171,7 +171,7 @@ func TestEmbeddedPromptSize(t *testing.T) {
 }
 
 func TestLoadEmbeddedPlanPrompt(t *testing.T) {
-	loader := prompt.NewPlanLoader("")
+	loader := prompt.NewPlanLoader("", "")
 	content, err := loader.Load()
 
 	if err != nil {
@@ -208,18 +208,15 @@ func TestGetEmbeddedPlanPrompt(t *testing.T) {
 		t.Error("Expected non-empty content from GetEmbeddedPlanPrompt")
 	}
 
-	// Should be same as loading via PlanLoader
-	loader := prompt.NewPlanLoader("")
-	loaderContent, _ := loader.Load()
-
-	if content != loaderContent {
-		t.Error("GetEmbeddedPlanPrompt and PlanLoader.Load() returned different content")
+	// GetEmbeddedPlanPrompt returns the raw template with placeholder
+	if !strings.Contains(content, "$ultimate_goal_sentence") {
+		t.Error("Expected raw template to contain $ultimate_goal_sentence placeholder")
 	}
 }
 
 func TestNewPlanLoader(t *testing.T) {
 	// Test creating plan loader without override
-	loader := prompt.NewPlanLoader("")
+	loader := prompt.NewPlanLoader("", "")
 	if loader.IsUsingOverride() {
 		t.Error("Expected IsUsingOverride() to be false for empty path")
 	}
@@ -228,7 +225,7 @@ func TestNewPlanLoader(t *testing.T) {
 	}
 
 	// Test creating plan loader with override
-	loaderWithOverride := prompt.NewPlanLoader("/some/path.md")
+	loaderWithOverride := prompt.NewPlanLoader("/some/path.md", "")
 	if !loaderWithOverride.IsUsingOverride() {
 		t.Error("Expected IsUsingOverride() to be true for non-empty path")
 	}
@@ -245,21 +242,22 @@ func TestPlanLoaderWithOverride(t *testing.T) {
 	}
 	defer os.Remove(tmpFile.Name())
 
-	customContent := "# Custom Plan Prompt\n\nCustom planning instructions.\n"
+	customContent := "# Custom Plan Prompt\n\nULTIMATE GOAL: $ultimate_goal_sentence. Custom planning instructions.\n"
 	if _, err := tmpFile.WriteString(customContent); err != nil {
 		t.Fatalf("Failed to write to temp file: %v", err)
 	}
 	tmpFile.Close()
 
-	loader := prompt.NewPlanLoader(tmpFile.Name())
+	loader := prompt.NewPlanLoader(tmpFile.Name(), "Build the best app")
 	content, err := loader.Load()
 
 	if err != nil {
 		t.Fatalf("Expected no error loading plan override, got: %v", err)
 	}
 
-	if content != customContent {
-		t.Errorf("Expected content %q, got %q", customContent, content)
+	expected := "# Custom Plan Prompt\n\nULTIMATE GOAL: Build the best app. Custom planning instructions.\n"
+	if content != expected {
+		t.Errorf("Expected content %q, got %q", expected, content)
 	}
 }
 
@@ -285,9 +283,78 @@ func TestPromptIsPlanMode(t *testing.T) {
 		t.Error("Build loader should not be in plan mode")
 	}
 
-	planLoader := prompt.NewPlanLoader("")
+	planLoader := prompt.NewPlanLoader("", "")
 	if !planLoader.IsPlanMode() {
 		t.Error("Plan loader should be in plan mode")
+	}
+}
+
+func TestPlanPromptGoalSubstitution(t *testing.T) {
+	// With a goal provided, $ultimate_goal_sentence should be replaced
+	loader := prompt.NewPlanLoader("", "Build a world-class trading platform")
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if strings.Contains(content, "$ultimate_goal_sentence") {
+		t.Error("Expected $ultimate_goal_sentence placeholder to be substituted")
+	}
+	if !strings.Contains(content, "ULTIMATE GOAL: Build a world-class trading platform.") {
+		t.Error("Expected goal text to appear in ULTIMATE GOAL line")
+	}
+	// The rest of the line should still be present
+	if !strings.Contains(content, "Consider missing elements and plan accordingly.") {
+		t.Error("Expected 'Consider missing elements' text to remain")
+	}
+}
+
+func TestPlanPromptGoalEmpty(t *testing.T) {
+	// With empty goal, placeholder and trailing ". " should be removed
+	loader := prompt.NewPlanLoader("", "")
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if strings.Contains(content, "$ultimate_goal_sentence") {
+		t.Error("Expected $ultimate_goal_sentence placeholder to be removed")
+	}
+	// Should read "ULTIMATE GOAL: Consider missing elements..."
+	if !strings.Contains(content, "ULTIMATE GOAL: Consider missing elements and plan accordingly.") {
+		t.Errorf("Expected clean ULTIMATE GOAL line without placeholder, got content:\n%s", content)
+	}
+}
+
+func TestPlanPromptGoalWithTrailingPeriod(t *testing.T) {
+	// Goal with trailing period should not produce double period
+	loader := prompt.NewPlanLoader("", "Build the best app.")
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if strings.Contains(content, "..") {
+		t.Error("Expected no double period in output")
+	}
+	if !strings.Contains(content, "ULTIMATE GOAL: Build the best app.") {
+		t.Error("Expected goal text with single period")
+	}
+}
+
+func TestPlanPromptGoalDoesNotAffectBuildPrompt(t *testing.T) {
+	// Build mode prompt should not be affected by goal substitution
+	buildLoader := prompt.NewLoader("")
+	content, err := buildLoader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if strings.Contains(content, "$ultimate_goal_sentence") {
+		t.Error("Build prompt should not contain goal placeholder")
+	}
+	if strings.Contains(content, "ULTIMATE GOAL") {
+		t.Error("Build prompt should not contain ULTIMATE GOAL")
 	}
 }
 

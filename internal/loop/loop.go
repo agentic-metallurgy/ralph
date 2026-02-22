@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -43,12 +44,15 @@ type Message struct {
 // Loop manages the Claude CLI execution loop.
 type Loop struct {
 	config          Config
+	mu              sync.Mutex // protects config.Iterations, sessionID, resumeSessionID
 	output          chan Message
 	cancel          context.CancelFunc
 	running         bool
 	paused          bool
 	resumeCh        chan struct{}
 	iterationCancel context.CancelFunc // cancels current iteration only
+	sessionID       string             // latest session ID from Claude CLI output
+	resumeSessionID string             // session ID to use with --resume on next iteration
 }
 
 // New creates a new Loop with the given configuration.
@@ -99,9 +103,14 @@ func (l *Loop) IsPaused() bool {
 }
 
 // Pause immediately interrupts the current iteration and pauses the loop.
+// Captures the current session ID so the next resume can use --resume.
 func (l *Loop) Pause() {
 	if !l.paused && l.running {
 		l.paused = true
+		// Capture session ID for resume
+		l.mu.Lock()
+		l.resumeSessionID = l.sessionID
+		l.mu.Unlock()
 		// Cancel the current iteration to interrupt it immediately
 		if l.iterationCancel != nil {
 			l.iterationCancel()
@@ -117,12 +126,44 @@ func (l *Loop) Resume() {
 	}
 }
 
+// SetIterations dynamically adjusts the total iteration count.
+// Thread-safe: can be called from any goroutine.
+func (l *Loop) SetIterations(n int) {
+	l.mu.Lock()
+	l.config.Iterations = n
+	l.mu.Unlock()
+}
+
+// GetIterations returns the current total iteration count.
+// Thread-safe: can be called from any goroutine.
+func (l *Loop) GetIterations() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.config.Iterations
+}
+
+// SetSessionID stores the latest session ID from Claude CLI output.
+// Thread-safe: can be called from any goroutine (typically the output processing goroutine).
+func (l *Loop) SetSessionID(id string) {
+	l.mu.Lock()
+	l.sessionID = id
+	l.mu.Unlock()
+}
+
+// GetSessionID returns the current session ID.
+// Thread-safe: can be called from any goroutine.
+func (l *Loop) GetSessionID() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sessionID
+}
+
 // run executes the main loop logic.
 func (l *Loop) run(ctx context.Context) {
 	defer close(l.output)
 	defer func() { l.running = false }()
 
-	for i := 1; i <= l.config.Iterations; i++ {
+	for i := 1; i <= l.GetIterations(); i++ {
 		select {
 		case <-ctx.Done():
 			return
@@ -131,31 +172,34 @@ func (l *Loop) run(ctx context.Context) {
 
 		// Check if paused and wait for resume
 		if l.paused {
+			total := l.GetIterations()
 			l.output <- Message{
 				Type:    "loop_marker",
 				Content: "======= LOOP STOPPED =======",
 				Loop:    i,
-				Total:   l.config.Iterations,
+				Total:   total,
 			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-l.resumeCh:
+				total = l.GetIterations()
 				l.output <- Message{
 					Type:    "loop_marker",
 					Content: "======= LOOP RESUMED =======",
 					Loop:    i,
-					Total:   l.config.Iterations,
+					Total:   total,
 				}
 			}
 		}
 
 		// Send loop marker
+		total := l.GetIterations()
 		l.output <- Message{
 			Type:    "loop_marker",
-			Content: fmt.Sprintf("======= LOOP %d/%d =======", i, l.config.Iterations),
+			Content: fmt.Sprintf("======= LOOP %d/%d =======", i, total),
 			Loop:    i,
-			Total:   l.config.Iterations,
+			Total:   total,
 		}
 
 		// Create a cancellable context for this iteration
@@ -169,21 +213,23 @@ func (l *Loop) run(ctx context.Context) {
 
 		// If we were paused (interrupted), don't report as error
 		if l.paused {
+			total := l.GetIterations()
 			l.output <- Message{
 				Type:    "loop_marker",
 				Content: "======= LOOP STOPPED =======",
 				Loop:    i,
-				Total:   l.config.Iterations,
+				Total:   total,
 			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-l.resumeCh:
+				total = l.GetIterations()
 				l.output <- Message{
 					Type:    "loop_marker",
 					Content: "======= LOOP RESUMED =======",
 					Loop:    i,
-					Total:   l.config.Iterations,
+					Total:   total,
 				}
 			}
 			// Retry this iteration
@@ -192,16 +238,17 @@ func (l *Loop) run(ctx context.Context) {
 		}
 
 		if err != nil {
+			total := l.GetIterations()
 			l.output <- Message{
 				Type:    "error",
 				Content: err.Error(),
 				Loop:    i,
-				Total:   l.config.Iterations,
+				Total:   total,
 			}
 		}
 
 		// Sleep between iterations (except for the last one)
-		if i < l.config.Iterations {
+		if i < l.GetIterations() {
 			select {
 			case <-ctx.Done():
 				return
@@ -210,11 +257,12 @@ func (l *Loop) run(ctx context.Context) {
 		}
 	}
 
+	total := l.GetIterations()
 	l.output <- Message{
 		Type:    "complete",
-		Content: fmt.Sprintf("======= COMPLETED %d ITERATIONS =======", l.config.Iterations),
-		Loop:    l.config.Iterations,
-		Total:   l.config.Iterations,
+		Content: fmt.Sprintf("======= COMPLETED %d ITERATIONS =======", total),
+		Loop:    total,
+		Total:   total,
 	}
 }
 
@@ -222,6 +270,15 @@ func (l *Loop) run(ctx context.Context) {
 func (l *Loop) executeIteration(ctx context.Context, iteration int) error {
 	// Build the command using the configured builder
 	cmd := l.config.CommandBuilder(ctx, l.config.Prompt)
+
+	// If resuming after pause, add --resume flag with the captured session ID
+	l.mu.Lock()
+	resumeID := l.resumeSessionID
+	l.resumeSessionID = "" // consume it
+	l.mu.Unlock()
+	if resumeID != "" {
+		cmd.Args = append(cmd.Args, "--resume", resumeID)
+	}
 
 	// Set up stdin with the prompt
 	stdin, err := cmd.StdinPipe()
@@ -252,13 +309,29 @@ func (l *Loop) executeIteration(ctx context.Context, iteration int) error {
 		io.WriteString(stdin, l.config.Prompt)
 	}()
 
+	// Wait for both streamOutput goroutines to finish before returning,
+	// so they don't race against channel close in run()
+	var wg sync.WaitGroup
+	wg.Add(2)
+
 	// Read stdout in a goroutine
-	go l.streamOutput(stdout, iteration)
+	go func() {
+		defer wg.Done()
+		l.streamOutput(stdout, iteration)
+	}()
 
 	// Read stderr in a goroutine
-	go l.streamOutput(stderr, iteration)
+	go func() {
+		defer wg.Done()
+		l.streamOutput(stderr, iteration)
+	}()
 
-	// Wait for command to complete
+	// Wait for stream readers to finish processing all output BEFORE cmd.Wait(),
+	// because cmd.Wait() closes the pipes. Per Go docs: "it is incorrect to call
+	// Wait before all reads from the pipe have completed."
+	wg.Wait()
+
+	// Wait for command to complete (process already exited at this point)
 	if err := cmd.Wait(); err != nil {
 		// Don't return error for context cancellation
 		if ctx.Err() != nil {
@@ -273,16 +346,26 @@ func (l *Loop) executeIteration(ctx context.Context, iteration int) error {
 // streamOutput reads from a reader and sends lines to the output channel.
 func (l *Loop) streamOutput(r io.Reader, iteration int) {
 	scanner := bufio.NewScanner(r)
-	// Increase buffer size for long lines
+	// Use a 10MB max buffer to handle very large Claude CLI responses
+	// (tool results with full file contents, long assistant messages, etc.)
 	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
+	scanner.Buffer(buf, 10*1024*1024)
 
 	for scanner.Scan() {
 		l.output <- Message{
 			Type:    "output",
 			Content: scanner.Text(),
 			Loop:    iteration,
-			Total:   l.config.Iterations,
+			Total:   l.GetIterations(),
+		}
+	}
+	// Report scanner errors (e.g., lines exceeding buffer limit)
+	if err := scanner.Err(); err != nil {
+		l.output <- Message{
+			Type:    "error",
+			Content: fmt.Sprintf("output stream error: %v", err),
+			Loop:    iteration,
+			Total:   l.GetIterations(),
 		}
 	}
 }

@@ -4,8 +4,86 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 )
+
+// StatusBar manages the tmux status-right bar for ralph.
+// When active (inside tmux), it sets the status-right to show loop/token/elapsed info.
+// On Restore, it unsets the session-level override so tmux falls back to the global default.
+type StatusBar struct {
+	active bool
+}
+
+// NewStatusBar creates a StatusBar. If not inside tmux, it returns an inactive no-op bar.
+func NewStatusBar() *StatusBar {
+	if !IsInsideTmux() {
+		return &StatusBar{active: false}
+	}
+	sb := &StatusBar{active: true}
+	// Override the tmux status bar completely: clear the left side and extend
+	// status-right to full width so our content takes over the entire bar.
+	if path := FindBinary(); path != "" {
+		exec.Command(path, "set-option", "status-left", "").Run()
+		exec.Command(path, "set-option", "status-left-length", "0").Run()
+		exec.Command(path, "set-option", "status-right-length", "200").Run()
+	}
+	return sb
+}
+
+// IsActive returns whether the status bar is managing tmux.
+func (s *StatusBar) IsActive() bool {
+	return s != nil && s.active
+}
+
+// Update sets the tmux status-right to the given content string.
+func (s *StatusBar) Update(content string) {
+	if s == nil || !s.active {
+		return
+	}
+	path := FindBinary()
+	if path == "" {
+		return
+	}
+	exec.Command(path, "set-option", "status-right", content).Run()
+}
+
+// Restore unsets the session-level status-right override so tmux falls back to the global default.
+func (s *StatusBar) Restore() {
+	if s == nil || !s.active {
+		return
+	}
+	path := FindBinary()
+	if path == "" {
+		return
+	}
+	exec.Command(path, "set-option", "-u", "status-right").Run()
+	exec.Command(path, "set-option", "-u", "status-right-length").Run()
+	exec.Command(path, "set-option", "-u", "status-left").Run()
+	exec.Command(path, "set-option", "-u", "status-left-length").Run()
+}
+
+// FormatStatusRight builds the tmux status bar content string.
+func FormatStatusRight(loopDisplay, tokenDisplay, timeDisplay string) string {
+	return fmt.Sprintf("[current loop: %s   tokens: %s   elapsed: %s]",
+		loopDisplay, tokenDisplay, timeDisplay)
+}
+
+// GetCurrentSessionName returns the current tmux session name, or empty if not in tmux.
+func GetCurrentSessionName() string {
+	if !IsInsideTmux() {
+		return ""
+	}
+	path := FindBinary()
+	if path == "" {
+		return ""
+	}
+	out, err := exec.Command(path, "display-message", "-p", "#{session_name}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
 // IsInsideTmux returns true if the current process is running inside a tmux session.
 func IsInsideTmux() bool {

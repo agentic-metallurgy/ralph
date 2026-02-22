@@ -20,6 +20,7 @@ import (
 )
 
 const statsFilePath = ".claude_stats"
+const planFilePath = "IMPLEMENTATION_PLAN.md"
 
 func main() {
 	// Parse command-line flags and get configuration
@@ -33,13 +34,13 @@ func main() {
 
 	// Handle --show-prompt: print embedded prompt and exit
 	if cfg.ShowPrompt {
-		var content string
-		var err error
+		var showLoader *prompt.Loader
 		if cfg.IsPlanMode() {
-			content, err = prompt.GetEmbeddedPlanPrompt()
+			showLoader = prompt.NewPlanLoader("", cfg.Goal)
 		} else {
-			content, err = prompt.GetEmbeddedPrompt()
+			showLoader = prompt.NewLoader("")
 		}
+		content, err := showLoader.Load()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -65,7 +66,7 @@ func main() {
 	// Load the loop prompt (embedded or from override file)
 	var promptLoader *prompt.Loader
 	if cfg.IsPlanMode() {
-		promptLoader = prompt.NewPlanLoader(cfg.LoopPrompt)
+		promptLoader = prompt.NewPlanLoader(cfg.LoopPrompt, cfg.Goal)
 	} else {
 		promptLoader = prompt.NewLoader(cfg.LoopPrompt)
 	}
@@ -95,12 +96,20 @@ func main() {
 	// Create the loop
 	claudeLoop := loop.New(loopConfig)
 
+	// Create tmux status bar (no-op if not inside tmux)
+	tmuxBar := tmux.NewStatusBar()
+
 	// Create the TUI model with channels
 	model := tui.NewModelWithChannels(msgChan, doneChan)
 	model.SetStats(tokenStats)
 	model.SetBaseElapsed(time.Duration(tokenStats.TotalElapsedNs))
 	model.SetLoopProgress(0, cfg.Iterations)
 	model.SetLoop(claudeLoop)
+	model.SetTmuxStatusBar(tmuxBar)
+
+	// Parse implementation plan for task counts
+	completedTasks, totalTasks := parseTaskCounts(planFilePath)
+	model.SetCompletedTasks(completedTasks, totalTasks)
 
 	// Create the Bubble Tea program (must be after SetLoop so the model copy has the loop reference)
 	program := tea.NewProgram(model, tea.WithAltScreen())
@@ -153,6 +162,7 @@ func processLoopOutput(
 
 	loopOutput := claudeLoop.Output()
 	activeAgentIDs := make(map[string]bool)
+	var loopTotalTokens int64 // per-loop token tracking for tmux status bar
 
 	for {
 		select {
@@ -169,7 +179,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, jsonParser, tokenStats, msgChan, program, activeAgentIDs)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
 		}
 	}
 }
@@ -177,16 +187,28 @@ func processLoopOutput(
 // processMessage handles a single message from the loop
 func processMessage(
 	msg loop.Message,
+	claudeLoop *loop.Loop,
 	jsonParser *parser.Parser,
 	tokenStats *stats.TokenStats,
 	msgChan chan<- tui.Message,
 	program *tea.Program,
 	activeAgentIDs map[string]bool,
+	loopTotalTokens *int64,
 ) {
 	switch msg.Type {
 	case "loop_marker":
 		// Update loop progress
 		program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
+		// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED)
+		isLoopStart := strings.Contains(msg.Content, "LOOP") &&
+			!strings.Contains(msg.Content, "STOPPED") &&
+			!strings.Contains(msg.Content, "COMPLETED") &&
+			!strings.Contains(msg.Content, "RESUMED")
+		if isLoopStart {
+			*loopTotalTokens = 0
+			program.Send(tui.SendLoopStarted()())
+			program.Send(tui.SendLoopStatsUpdate(0)())
+		}
 		// Use stop sign emoji for STOPPED messages
 		role := tui.RoleLoop
 		if strings.Contains(msg.Content, "STOPPED") {
@@ -201,7 +223,11 @@ func processMessage(
 		// Try to parse as JSON first
 		parsed := jsonParser.ParseLine(msg.Content)
 		if parsed != nil {
-			handleParsedMessage(parsed, jsonParser, tokenStats, msgChan, program, activeAgentIDs)
+			// Capture session ID from system messages for --resume support
+			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
+				claudeLoop.SetSessionID(sessionID)
+			}
+			handleParsedMessage(parsed, jsonParser, tokenStats, msgChan, program, activeAgentIDs, loopTotalTokens)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -232,6 +258,7 @@ func handleParsedMessage(
 	msgChan chan<- tui.Message,
 	program *tea.Program,
 	activeAgentIDs map[string]bool,
+	loopTotalTokens *int64,
 ) {
 	// Extract usage information
 	if usage := jsonParser.GetUsage(parsed); usage != nil {
@@ -242,6 +269,10 @@ func handleParsedMessage(
 			usage.CacheReadInputTokens,
 		)
 		program.Send(tui.SendStatsUpdate(tokenStats)())
+		// Also track per-loop tokens for tmux status bar
+		loopTokens := usage.InputTokens + usage.OutputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+		*loopTotalTokens += loopTokens
+		program.Send(tui.SendLoopStatsUpdate(*loopTotalTokens)())
 	}
 
 	// Extract cost from result messages
@@ -288,9 +319,9 @@ func handleParsedMessage(
 				}
 				// Detect IMPLEMENTATION_PLAN.md task references
 				if ref := jsonParser.ExtractTaskReference(text); ref != nil {
-					taskLabel := fmt.Sprintf("Task %d", ref.Number)
+					taskLabel := fmt.Sprintf("#%d", ref.Number)
 					if ref.Description != "" {
-						taskLabel = fmt.Sprintf("Task %d: %s", ref.Number, ref.Description)
+						taskLabel = fmt.Sprintf("#%d %s", ref.Number, ref.Description)
 					}
 					program.Send(tui.SendTaskUpdate(taskLabel)())
 				}
@@ -317,9 +348,9 @@ func handleParsedMessage(
 				}
 				// Detect IMPLEMENTATION_PLAN.md task references in tool results
 				if ref := jsonParser.ExtractTaskReference(toolResult.Content); ref != nil {
-					taskLabel := fmt.Sprintf("Task %d", ref.Number)
+					taskLabel := fmt.Sprintf("#%d", ref.Number)
 					if ref.Description != "" {
-						taskLabel = fmt.Sprintf("Task %d: %s", ref.Number, ref.Description)
+						taskLabel = fmt.Sprintf("#%d %s", ref.Number, ref.Description)
 					}
 					program.Send(tui.SendTaskUpdate(taskLabel)())
 				}
@@ -336,4 +367,24 @@ func handleParsedMessage(
 			}
 		}
 	}
+}
+
+// parseTaskCounts reads an IMPLEMENTATION_PLAN.md file and returns the number of
+// completed (DONE) tasks and the total number of tasks.
+func parseTaskCounts(filepath string) (completed, total int) {
+	data, err := os.ReadFile(filepath)
+	if err != nil {
+		return 0, 0
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## TASK ") {
+			total++
+		}
+		if strings.Contains(trimmed, "**Status: DONE**") {
+			completed++
+		}
+	}
+	return completed, total
 }

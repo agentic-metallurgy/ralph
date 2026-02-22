@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/cloudosai/ralph-go/internal/loop"
 	"github.com/cloudosai/ralph-go/internal/stats"
+	"github.com/cloudosai/ralph-go/internal/tmux"
 )
 
 // Minimum terminal dimensions for proper rendering
@@ -94,40 +95,52 @@ type Model struct {
 	width          int
 	height         int
 	quitting       bool
+	completed      bool // whether the loop has finished all iterations
 	messages       []Message
 	maxMessages    int
 	stats          *stats.TokenStats
 	currentLoop    int
 	totalLoops     int
 	activeAgents   int
-	currentTask    string // Current IMPLEMENTATION_PLAN.md task (e.g., "Task 6: Track Phase/Task")
+	currentTask    string // Current task (e.g., "#6 Change the lib/gold into lib/silver")
+	completedTasks int    // Number of completed tasks from plan
+	totalTasks     int    // Total number of tasks from plan
 	startTime      time.Time
 	baseElapsed    time.Duration // elapsed time from previous sessions
 	timerPaused    bool          // whether elapsed time tracking is paused
 	pausedElapsed  time.Duration // elapsed time when paused (for display)
-	viewport       viewport.Model
-	activityHeight int
-	footerHeight   int
-	msgChan        <-chan Message
-	doneChan       <-chan struct{}
-	loop           *loop.Loop
+	// Per-loop tracking for tmux status bar (spec: stats should be about current loop)
+	loopTotalTokens   int64         // tokens accumulated in the current loop iteration
+	loopStartTime     time.Time     // when the current loop iteration started
+	loopBaseElapsed   time.Duration // per-loop elapsed from before pause within same loop
+	loopTimerPaused   bool          // whether per-loop timer is paused
+	loopPausedElapsed time.Duration // per-loop elapsed at time of pause
+	viewport          viewport.Model
+	activityHeight    int
+	footerHeight      int
+	msgChan           <-chan Message
+	doneChan          <-chan struct{}
+	loop              *loop.Loop
+	tmuxBar           *tmux.StatusBar
 }
 
 // NewModel creates and returns a new initialized Model
 func NewModel() Model {
+	now := time.Now()
 	return Model{
 		ready:          false,
 		width:          0,
 		height:         0,
 		quitting:       false,
 		messages:       []Message{},
-		maxMessages:    20,
+		maxMessages:    100000,
 		stats:          stats.NewTokenStats(),
 		currentLoop:    0,
 		totalLoops:     0,
-		startTime:      time.Now(),
+		startTime:      now,
+		loopStartTime:  now,
 		activityHeight: 0,
-		footerHeight:   12,
+		footerHeight:   11,
 	}
 }
 
@@ -160,12 +173,31 @@ func (m *Model) SetBaseElapsed(d time.Duration) {
 	m.baseElapsed = d
 }
 
+// SetTmuxStatusBar sets the tmux status bar manager for live tmux status updates
+func (m *Model) SetTmuxStatusBar(sb *tmux.StatusBar) {
+	m.tmuxBar = sb
+}
+
+// SetCompletedTasks sets the completed/total task counts from the implementation plan
+func (m *Model) SetCompletedTasks(completed, total int) {
+	m.completedTasks = completed
+	m.totalTasks = total
+}
+
 // getElapsed returns the current total elapsed time
 func (m Model) getElapsed() time.Duration {
 	if m.timerPaused {
 		return m.pausedElapsed
 	}
 	return m.baseElapsed + time.Since(m.startTime)
+}
+
+// getLoopElapsed returns the elapsed time for the current loop iteration
+func (m Model) getLoopElapsed() time.Duration {
+	if m.loopTimerPaused {
+		return m.loopPausedElapsed
+	}
+	return m.loopBaseElapsed + time.Since(m.loopStartTime)
 }
 
 // AddMessage adds a message to the activity feed
@@ -201,6 +233,20 @@ type agentUpdateMsg struct {
 // taskUpdateMsg is sent to update the current IMPLEMENTATION_PLAN.md task
 type taskUpdateMsg struct {
 	task string
+}
+
+// completedTasksUpdateMsg is sent to update the completed/total task counts
+type completedTasksUpdateMsg struct {
+	completed int
+	total     int
+}
+
+// loopStartedMsg is sent when a new loop iteration begins (resets per-loop stats)
+type loopStartedMsg struct{}
+
+// loopStatsUpdateMsg is sent to update per-loop token count
+type loopStatsUpdateMsg struct {
+	totalTokens int64
 }
 
 // doneMsg is sent when processing is complete
@@ -293,37 +339,67 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.stats.TotalElapsedNs = totalElapsed.Nanoseconds()
 			}
+			// Restore tmux status bar to its original state
+			if m.tmuxBar != nil {
+				m.tmuxBar.Restore()
+			}
 			m.quitting = true
 			return m, tea.Quit
-		case "o":
-			// Stop/pause the loop - freeze elapsed time
+		case "p":
+			// Pause the loop - freeze elapsed time (both total and per-loop)
 			if m.loop != nil {
 				if !m.timerPaused {
 					m.pausedElapsed = m.baseElapsed + time.Since(m.startTime)
 					m.timerPaused = true
 				}
+				if !m.loopTimerPaused {
+					m.loopPausedElapsed = m.loopBaseElapsed + time.Since(m.loopStartTime)
+					m.loopTimerPaused = true
+				}
 				m.loop.Pause()
 			}
 			return m, nil
-		case "a":
-			// Start/resume the loop - resume elapsed time from where we paused
+		case "r":
+			// Resume the loop - resume elapsed time from where we paused (both total and per-loop)
 			if m.loop != nil {
 				if m.timerPaused {
 					m.baseElapsed = m.pausedElapsed
 					m.startTime = time.Now()
 					m.timerPaused = false
 				}
+				if m.loopTimerPaused {
+					m.loopBaseElapsed = m.loopPausedElapsed
+					m.loopStartTime = time.Now()
+					m.loopTimerPaused = false
+				}
 				m.loop.Resume()
+			}
+			return m, nil
+		case "+":
+			// Add a loop iteration
+			if m.loop != nil && !m.completed {
+				m.totalLoops++
+				m.loop.SetIterations(m.totalLoops)
+			}
+			return m, nil
+		case "-":
+			// Subtract a loop iteration (floor: can't go below current loop)
+			if m.loop != nil && !m.completed && m.totalLoops > m.currentLoop {
+				m.totalLoops--
+				m.loop.SetIterations(m.totalLoops)
 			}
 			return m, nil
 		}
 
 	case tickMsg:
 		// Update viewport content and schedule next tick
+		// Note: we do NOT call GotoBottom() here — that would override the user's
+		// scroll position every 250ms, making the viewport effectively unscrollable.
+		// GotoBottom() is only called on viewport init and when new messages arrive.
 		if m.viewportReady {
 			m.viewport.SetContent(m.renderActivityContent())
-			m.viewport.GotoBottom()
 		}
+		m.updateTmuxStatusBar()
 		return m, tickCmd()
 
 	case newMessageMsg:
@@ -355,8 +431,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentTask = msg.task
 		return m, nil
 
+	case completedTasksUpdateMsg:
+		m.completedTasks = msg.completed
+		m.totalTasks = msg.total
+		return m, nil
+
+	case loopStartedMsg:
+		// New loop iteration started — reset per-loop timer and tokens
+		m.loopStartTime = time.Now()
+		m.loopBaseElapsed = 0
+		m.loopTimerPaused = false
+		m.loopPausedElapsed = 0
+		m.loopTotalTokens = 0
+		return m, nil
+
+	case loopStatsUpdateMsg:
+		m.loopTotalTokens = msg.totalTokens
+		return m, nil
+
 	case doneMsg:
-		// Processing is done, but keep TUI running until user quits
+		// Processing is done — freeze both timers and mark as completed
+		m.completed = true
+		if !m.timerPaused {
+			m.pausedElapsed = m.baseElapsed + time.Since(m.startTime)
+			m.timerPaused = true
+		}
+		if !m.loopTimerPaused {
+			m.loopPausedElapsed = m.loopBaseElapsed + time.Since(m.loopStartTime)
+			m.loopTimerPaused = true
+		}
 		return m, nil
 	}
 
@@ -412,13 +515,16 @@ func (m Model) View() string {
 
 // renderLayout creates the full layout with activity panel and footer
 func (m Model) renderLayout() string {
-	// Check if loop is paused
+	// Check if loop is paused or completed
 	isPaused := m.loop != nil && m.loop.IsPaused()
 
-	// Choose colors based on paused state
+	// Choose colors based on state
 	borderColor := colorBlue
 	statusText := "RUNNING"
-	if isPaused {
+	if m.completed {
+		borderColor = colorGreen
+		statusText = "COMPLETED"
+	} else if isPaused {
 		borderColor = colorRed
 		statusText = "STOPPED"
 	}
@@ -470,12 +576,12 @@ func (m Model) renderFooter() string {
 		BorderForeground(colorPurple).
 		Padding(0, 1).
 		Width(panelWidth).
-		Height(m.footerHeight - 4) // Leave room for status bar and hotkey bar
+		Height(m.footerHeight - 3) // Leave room for hotkey bar
 
 	labelStyle := lipgloss.NewStyle().
 		Foreground(colorBlue).
 		Align(lipgloss.Right).
-		Width(14)
+		Width(17)
 
 	valueStyle := lipgloss.NewStyle().
 		Foreground(colorLightGray)
@@ -493,10 +599,10 @@ func (m Model) renderFooter() string {
 		lipgloss.Left,
 		titleStyle.Render("Usage & Cost"),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Tokens:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.TotalTokens())))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Input:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.InputTokens))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Output:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.OutputTokens))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Write:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.CacheCreationTokens))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Read:"), valueStyle.Render(fmt.Sprintf(" %d", m.stats.CacheReadTokens))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Input:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.InputTokens)))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Output:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.OutputTokens)))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Write:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.CacheCreationTokens)))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Read:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.CacheReadTokens)))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Cost:"), costStyle.Render(fmt.Sprintf(" $%.6f", m.stats.TotalCostUSD))),
 	)
 	usageCostPanel := panelStyle.Render(usageCostContent)
@@ -517,33 +623,39 @@ func (m Model) renderFooter() string {
 	isPaused := m.loop != nil && m.loop.IsPaused()
 	statusText := "Running"
 	statusStyle := valueStyle.Foreground(colorGreen)
-	if isPaused {
+	if m.completed {
+		statusText = "Completed"
+		statusStyle = valueStyle.Foreground(colorGreen)
+	} else if isPaused {
 		statusText = "Stopped"
 		statusStyle = valueStyle.Foreground(colorRed)
 	}
 
-	// Agents display
+	// Active Agents display
 	agentDisplay := fmt.Sprintf(" %d", m.activeAgents)
 	agentStyle := valueStyle
 	if m.activeAgents > 0 {
 		agentStyle = valueStyle.Foreground(colorGreen)
 	}
 
-	// Task display - strip leading "Task " to avoid "Task: Task 6: ..." duplication
+	// Current Task display
 	taskDisplay := " -"
 	if m.currentTask != "" {
-		task := strings.TrimPrefix(m.currentTask, "Task ")
-		taskDisplay = fmt.Sprintf(" %s", task)
+		taskDisplay = fmt.Sprintf(" %s", m.currentTask)
 	}
+
+	// Completed Tasks display
+	completedDisplay := fmt.Sprintf(" %d/%d", m.completedTasks, m.totalTasks)
 
 	loopDetailsContent := lipgloss.JoinVertical(
 		lipgloss.Left,
-		titleStyle.Render("Ralph Details"),
+		titleStyle.Render("Ralph Loop Details"),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Loop:"), valueStyle.Render(fmt.Sprintf(" %s", loopDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Time:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Agents:"), agentStyle.Render(agentDisplay)),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Task:"), valueStyle.Render(taskDisplay)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Active Agents:"), agentStyle.Render(agentDisplay)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Completed Tasks:"), valueStyle.Render(completedDisplay)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Task:"), valueStyle.Render(taskDisplay)),
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
 
@@ -560,67 +672,54 @@ func (m Model) renderFooter() string {
 
 	quitKey := highlightStyle.Render("(q)")
 	quitLabel := highlightStyle.Render("uit")
-	stopKey := dimStyle.Render("st(o)p")
-	startKey := dimStyle.Render("st(a)rt")
+	pauseKey := dimStyle.Render("(p)ause")
+	resumeKey := dimStyle.Render("(r)esume")
+	addKey := highlightStyle.Render("(+)")
+	addLabel := highlightStyle.Render(" add loop")
+	subKey := highlightStyle.Render("(-)")
+	subLabel := highlightStyle.Render(" subtract loop")
 
 	if isPaused {
-		startKey = highlightStyle.Render("st(a)rt")
+		resumeKey = highlightStyle.Render("(r)esume")
 	} else {
-		stopKey = highlightStyle.Render("st(o)p")
+		pauseKey = highlightStyle.Render("(p)ause")
 	}
 
 	hotkeyBar := lipgloss.NewStyle().
 		Width(m.width - 2).
 		Align(lipgloss.Left).
 		PaddingLeft(1).
-		Render(fmt.Sprintf("%s%s   %s   %s", quitKey, quitLabel, stopKey, startKey))
-
-	// Status bar
-	statusBar := m.renderStatusBar()
+		Render(fmt.Sprintf("%s%s   %s   %s   %s%s   %s%s", quitKey, quitLabel, resumeKey, pauseKey, addKey, addLabel, subKey, subLabel))
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		panels,
-		statusBar,
 		hotkeyBar,
 	)
 }
 
-// renderStatusBar renders the bottom status bar with loop, tokens, and elapsed time
-func (m Model) renderStatusBar() string {
-	// Loop display
+// updateTmuxStatusBar updates the tmux status-right bar with current loop stats
+// (spec: stats should be about the current loop, not cumulative)
+func (m Model) updateTmuxStatusBar() {
+	if m.tmuxBar == nil || !m.tmuxBar.IsActive() {
+		return
+	}
+
 	loopDisplay := "#0/0"
 	if m.totalLoops > 0 {
 		loopDisplay = fmt.Sprintf("#%d/%d", m.currentLoop, m.totalLoops)
 	}
 
-	// Token display (human-readable)
-	tokenDisplay := stats.FormatTokens(m.stats.TotalTokens())
+	// Per-loop tokens and elapsed time (not cumulative)
+	tokenDisplay := stats.FormatTokens(m.loopTotalTokens)
 
-	// Elapsed time display
-	elapsed := m.getElapsed()
-	hours := int(elapsed.Hours())
-	minutes := int(elapsed.Minutes()) % 60
-	seconds := int(elapsed.Seconds()) % 60
+	loopElapsed := m.getLoopElapsed()
+	hours := int(loopElapsed.Hours())
+	minutes := int(loopElapsed.Minutes()) % 60
+	seconds := int(loopElapsed.Seconds()) % 60
 	timeDisplay := fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 
-	// Build styled status bar content
-	labelStyle := lipgloss.NewStyle().Foreground(colorPurple)
-	valueStyle := lipgloss.NewStyle().Foreground(colorLightGray)
-	bracketStyle := lipgloss.NewStyle().Foreground(colorPurple).Bold(true)
-
-	inner := fmt.Sprintf("%s %s      %s %s      %s %s",
-		labelStyle.Render("current loop:"), valueStyle.Render(loopDisplay),
-		labelStyle.Render("tokens:"), valueStyle.Render(tokenDisplay),
-		labelStyle.Render("elapsed:"), valueStyle.Render(timeDisplay),
-	)
-
-	bar := fmt.Sprintf("%s%s%s", bracketStyle.Render("["), inner, bracketStyle.Render("]"))
-
-	return lipgloss.NewStyle().
-		Width(m.width - 2).
-		Align(lipgloss.Center).
-		Render(bar)
+	m.tmuxBar.Update(tmux.FormatStatusRight(loopDisplay, tokenDisplay, timeDisplay))
 }
 
 // SendMessage is a helper command to send a message to the TUI
@@ -656,6 +755,39 @@ func SendTaskUpdate(task string) tea.Cmd {
 	return func() tea.Msg {
 		return taskUpdateMsg{task: task}
 	}
+}
+
+// SendCompletedTasksUpdate is a helper command to update completed/total task counts
+func SendCompletedTasksUpdate(completed, total int) tea.Cmd {
+	return func() tea.Msg {
+		return completedTasksUpdateMsg{completed: completed, total: total}
+	}
+}
+
+// SendLoopStarted is a helper command to signal a new loop iteration has begun
+func SendLoopStarted() tea.Cmd {
+	return func() tea.Msg {
+		return loopStartedMsg{}
+	}
+}
+
+// SendLoopStatsUpdate is a helper command to update per-loop token count
+func SendLoopStatsUpdate(totalTokens int64) tea.Cmd {
+	return func() tea.Msg {
+		return loopStatsUpdateMsg{totalTokens: totalTokens}
+	}
+}
+
+// SendDone is a helper command to signal processing completion
+func SendDone() tea.Cmd {
+	return func() tea.Msg {
+		return doneMsg{}
+	}
+}
+
+// TickMsgForTest returns a tickMsg for use in tests
+func TickMsgForTest() tea.Msg {
+	return tickMsg(time.Now())
 }
 
 // Run starts the Bubble Tea program
