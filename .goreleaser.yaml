@@ -38,7 +38,7 @@ changelog:
 
 brews:
   - name: ralph
-    skip_upload: true
+    skip_upload: false
     repository:
       owner: agentic-metallurgy
       name: homebrew-tap
