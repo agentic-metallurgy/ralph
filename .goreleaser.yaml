@@ -38,6 +38,7 @@ changelog:
 
 brews:
   - name: ralph
+    skip_upload: auto
     repository:
       owner: agentic-metallurgy
       name: homebrew-ralph
