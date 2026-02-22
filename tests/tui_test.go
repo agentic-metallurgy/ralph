@@ -1297,6 +1297,45 @@ func TestHotkeyBarShowsAddSubtract(t *testing.T) {
 	}
 }
 
+// TestScrollbackRetainsMessages tests that the TUI retains a large number of messages
+// (spec: scrollback should be 100000 lines)
+func TestScrollbackRetainsMessages(t *testing.T) {
+	model := tui.NewModel()
+
+	// Add 50 messages — previously maxMessages was 20, so messages 1-30 would be dropped
+	for i := 0; i < 50; i++ {
+		model.AddMessage(tui.Message{
+			Role:    tui.RoleAssistant,
+			Content: fmt.Sprintf("SCROLLBACK_MSG_%03d", i),
+		})
+	}
+
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	// With 100000 maxMessages, the earliest message should still be present
+	if !strings.Contains(view, "SCROLLBACK_MSG_000") {
+		// The earliest message might not be visible in the viewport (scrolled to bottom),
+		// but we can verify it's in the content by scrolling up
+		// Let's scroll up and check
+		for i := 0; i < 20; i++ {
+			model, _ = updateModel(model, tea.KeyMsg{Type: tea.KeyPgUp})
+		}
+		view = model.View()
+		if !strings.Contains(view, "SCROLLBACK_MSG_000") {
+			t.Error("Earliest message should be retained with 100000 message scrollback limit")
+		}
+	}
+	// Latest message should be visible after scrolling back down
+	for i := 0; i < 20; i++ {
+		model, _ = updateModel(model, tea.KeyMsg{Type: tea.KeyPgDown})
+	}
+	view = model.View()
+	if !strings.Contains(view, "SCROLLBACK_MSG_049") {
+		t.Error("Latest message should be visible when scrolled to bottom")
+	}
+}
+
 // TestMultipleAddLoopPresses tests pressing '+' multiple times
 func TestMultipleAddLoopPresses(t *testing.T) {
 	model := tui.NewModel()

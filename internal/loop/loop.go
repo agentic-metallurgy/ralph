@@ -309,13 +309,29 @@ func (l *Loop) executeIteration(ctx context.Context, iteration int) error {
 		io.WriteString(stdin, l.config.Prompt)
 	}()
 
+	// Wait for both streamOutput goroutines to finish before returning,
+	// so they don't race against channel close in run()
+	var wg sync.WaitGroup
+	wg.Add(2)
+
 	// Read stdout in a goroutine
-	go l.streamOutput(stdout, iteration)
+	go func() {
+		defer wg.Done()
+		l.streamOutput(stdout, iteration)
+	}()
 
 	// Read stderr in a goroutine
-	go l.streamOutput(stderr, iteration)
+	go func() {
+		defer wg.Done()
+		l.streamOutput(stderr, iteration)
+	}()
 
-	// Wait for command to complete
+	// Wait for stream readers to finish processing all output BEFORE cmd.Wait(),
+	// because cmd.Wait() closes the pipes. Per Go docs: "it is incorrect to call
+	// Wait before all reads from the pipe have completed."
+	wg.Wait()
+
+	// Wait for command to complete (process already exited at this point)
 	if err := cmd.Wait(); err != nil {
 		// Don't return error for context cancellation
 		if ctx.Err() != nil {
@@ -330,14 +346,24 @@ func (l *Loop) executeIteration(ctx context.Context, iteration int) error {
 // streamOutput reads from a reader and sends lines to the output channel.
 func (l *Loop) streamOutput(r io.Reader, iteration int) {
 	scanner := bufio.NewScanner(r)
-	// Increase buffer size for long lines
+	// Use a 10MB max buffer to handle very large Claude CLI responses
+	// (tool results with full file contents, long assistant messages, etc.)
 	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
+	scanner.Buffer(buf, 10*1024*1024)
 
 	for scanner.Scan() {
 		l.output <- Message{
 			Type:    "output",
 			Content: scanner.Text(),
+			Loop:    iteration,
+			Total:   l.GetIterations(),
+		}
+	}
+	// Report scanner errors (e.g., lines exceeding buffer limit)
+	if err := scanner.Err(); err != nil {
+		l.output <- Message{
+			Type:    "error",
+			Content: fmt.Sprintf("output stream error: %v", err),
 			Loop:    iteration,
 			Total:   l.GetIterations(),
 		}

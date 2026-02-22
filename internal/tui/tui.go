@@ -126,7 +126,7 @@ func NewModel() Model {
 		height:         0,
 		quitting:       false,
 		messages:       []Message{},
-		maxMessages:    20,
+		maxMessages:    100000,
 		stats:          stats.NewTokenStats(),
 		currentLoop:    0,
 		totalLoops:     0,

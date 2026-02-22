@@ -209,12 +209,32 @@ Based on `specs/default.md`, the following tasks are needed:
 - Validation: all 219 tests pass, `go vet ./...` clean, `go build` succeeds
 
 ## TASK 11: Truncation Fix [MEDIUM PRIORITY]
-**Status: TODO**
+**Status: DONE**
 - Spec: Responses/thinking from Claude are sometimes truncated; they should not be
-- Scanner buffer in `loop.go` is 1MB max — may need increase for very large responses
-- Tool use `inputJSON` is truncated to 150 chars (intentional display abbreviation, likely OK)
+- Spec: Scrollback in main log window should be 100000 lines
+- Root causes identified and fixed:
+  1. Scanner buffer in `loop.go` was 1MB max — increased to 10MB to handle very large JSON lines from Claude CLI (tool results with full file contents, long assistant messages)
+  2. Scanner errors were silently ignored — added `scanner.Err()` check in `streamOutput` that reports errors as `"error"` type messages on the output channel
+  3. TUI message buffer (`maxMessages`) was 20 — increased to 100000 (spec requirement for scrollback)
+- Fixed race condition: `streamOutput` goroutines could race against `close(l.output)` in `run()`. Added `sync.WaitGroup` in `executeIteration` to wait for both stdout/stderr goroutines to finish before returning. Also fixed pipe ordering: `wg.Wait()` is called before `cmd.Wait()` per Go docs ("it is incorrect to call Wait before all reads from the pipe have completed")
+- Tool use `inputJSON` truncation to 150 chars is intentional display abbreviation — left as-is
+- Changed `internal/loop/loop.go`:
+  - Increased scanner max buffer from `1024*1024` (1MB) to `10*1024*1024` (10MB)
+  - Added `scanner.Err()` check after scan loop — sends error message on output channel
+  - Added `sync.WaitGroup` in `executeIteration` for stdout/stderr goroutine synchronization
+  - Fixed pipe read ordering: `wg.Wait()` before `cmd.Wait()` to prevent "file already closed" errors
+- Changed `internal/tui/tui.go`:
+  - Increased `maxMessages` from 20 to 100000 (spec: scrollback should be 100000 lines)
+- Added tests in `tests/loop_test.go`:
+  - `TestLargeOutputNotTruncated`: verifies 1.5MB JSON lines pass through scanner without truncation or error
+  - `TestScannerErrorReported`: verifies normal output does not produce spurious scanner errors
+  - Added `mockLargeOutputCommandBuilder` and `"claude-large-output"` mock case in `TestHelperProcess`
+- Added tests in `tests/tui_test.go`:
+  - `TestScrollbackRetainsMessages`: verifies 50 messages are all retained (not dropped by old 20-message limit) and accessible via scrolling
+- Validation: all 222 tests pass, `go vet ./...` clean, `go build` succeeds
 
 ## TASK 12: Integration Tests for Start/Pause/Start Flow [LOW PRIORITY]
 **Status: TODO**
 - Spec: Write integration tests for the start/pause/start flow
 - Should test: start loop → pause → resume → verify continuation
+- Make pause -> resume work based on test results
