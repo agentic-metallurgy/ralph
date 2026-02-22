@@ -102,7 +102,9 @@ type Model struct {
 	currentLoop    int
 	totalLoops     int
 	activeAgents   int
-	currentTask    string // Current IMPLEMENTATION_PLAN.md task (e.g., "Task 6: Track Phase/Task")
+	currentTask    string // Current task (e.g., "#6 Change the lib/gold into lib/silver")
+	completedTasks int    // Number of completed tasks from plan
+	totalTasks     int    // Total number of tasks from plan
 	startTime      time.Time
 	baseElapsed    time.Duration // elapsed time from previous sessions
 	timerPaused    bool          // whether elapsed time tracking is paused
@@ -168,6 +170,12 @@ func (m *Model) SetTmuxStatusBar(sb *tmux.StatusBar) {
 	m.tmuxBar = sb
 }
 
+// SetCompletedTasks sets the completed/total task counts from the implementation plan
+func (m *Model) SetCompletedTasks(completed, total int) {
+	m.completedTasks = completed
+	m.totalTasks = total
+}
+
 // getElapsed returns the current total elapsed time
 func (m Model) getElapsed() time.Duration {
 	if m.timerPaused {
@@ -209,6 +217,12 @@ type agentUpdateMsg struct {
 // taskUpdateMsg is sent to update the current IMPLEMENTATION_PLAN.md task
 type taskUpdateMsg struct {
 	task string
+}
+
+// completedTasksUpdateMsg is sent to update the completed/total task counts
+type completedTasksUpdateMsg struct {
+	completed int
+	total     int
 }
 
 // doneMsg is sent when processing is complete
@@ -370,6 +384,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentTask = msg.task
 		return m, nil
 
+	case completedTasksUpdateMsg:
+		m.completedTasks = msg.completed
+		m.totalTasks = msg.total
+		return m, nil
+
 	case doneMsg:
 		// Processing is done — freeze timer and mark as completed
 		m.completed = true
@@ -498,7 +517,7 @@ func (m Model) renderFooter() string {
 	labelStyle := lipgloss.NewStyle().
 		Foreground(colorBlue).
 		Align(lipgloss.Right).
-		Width(15)
+		Width(17)
 
 	valueStyle := lipgloss.NewStyle().
 		Foreground(colorLightGray)
@@ -555,12 +574,14 @@ func (m Model) renderFooter() string {
 		agentStyle = valueStyle.Foreground(colorGreen)
 	}
 
-	// Task display - strip leading "Task " to avoid "Task: Task 6: ..." duplication
+	// Current Task display
 	taskDisplay := " -"
 	if m.currentTask != "" {
-		task := strings.TrimPrefix(m.currentTask, "Task ")
-		taskDisplay = fmt.Sprintf(" %s", task)
+		taskDisplay = fmt.Sprintf(" %s", m.currentTask)
 	}
+
+	// Completed Tasks display
+	completedDisplay := fmt.Sprintf(" %d/%d", m.completedTasks, m.totalTasks)
 
 	loopDetailsContent := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -569,7 +590,8 @@ func (m Model) renderFooter() string {
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Time:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Active Agents:"), agentStyle.Render(agentDisplay)),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Task:"), valueStyle.Render(taskDisplay)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Task:"), valueStyle.Render(taskDisplay)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Completed Tasks:"), valueStyle.Render(completedDisplay)),
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
 
@@ -703,6 +725,13 @@ func SendAgentUpdate(count int) tea.Cmd {
 func SendTaskUpdate(task string) tea.Cmd {
 	return func() tea.Msg {
 		return taskUpdateMsg{task: task}
+	}
+}
+
+// SendCompletedTasksUpdate is a helper command to update completed/total task counts
+func SendCompletedTasksUpdate(completed, total int) tea.Cmd {
+	return func() tea.Msg {
+		return completedTasksUpdateMsg{completed: completed, total: total}
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 )
 
 const statsFilePath = ".claude_stats"
+const planFilePath = "IMPLEMENTATION_PLAN.md"
 
 func main() {
 	// Parse command-line flags and get configuration
@@ -105,6 +106,10 @@ func main() {
 	model.SetLoopProgress(0, cfg.Iterations)
 	model.SetLoop(claudeLoop)
 	model.SetTmuxStatusBar(tmuxBar)
+
+	// Parse implementation plan for task counts
+	completedTasks, totalTasks := parseTaskCounts(planFilePath)
+	model.SetCompletedTasks(completedTasks, totalTasks)
 
 	// Create the Bubble Tea program (must be after SetLoop so the model copy has the loop reference)
 	program := tea.NewProgram(model, tea.WithAltScreen())
@@ -292,9 +297,9 @@ func handleParsedMessage(
 				}
 				// Detect IMPLEMENTATION_PLAN.md task references
 				if ref := jsonParser.ExtractTaskReference(text); ref != nil {
-					taskLabel := fmt.Sprintf("Task %d", ref.Number)
+					taskLabel := fmt.Sprintf("#%d", ref.Number)
 					if ref.Description != "" {
-						taskLabel = fmt.Sprintf("Task %d: %s", ref.Number, ref.Description)
+						taskLabel = fmt.Sprintf("#%d %s", ref.Number, ref.Description)
 					}
 					program.Send(tui.SendTaskUpdate(taskLabel)())
 				}
@@ -321,9 +326,9 @@ func handleParsedMessage(
 				}
 				// Detect IMPLEMENTATION_PLAN.md task references in tool results
 				if ref := jsonParser.ExtractTaskReference(toolResult.Content); ref != nil {
-					taskLabel := fmt.Sprintf("Task %d", ref.Number)
+					taskLabel := fmt.Sprintf("#%d", ref.Number)
 					if ref.Description != "" {
-						taskLabel = fmt.Sprintf("Task %d: %s", ref.Number, ref.Description)
+						taskLabel = fmt.Sprintf("#%d %s", ref.Number, ref.Description)
 					}
 					program.Send(tui.SendTaskUpdate(taskLabel)())
 				}
@@ -340,4 +345,24 @@ func handleParsedMessage(
 			}
 		}
 	}
+}
+
+// parseTaskCounts reads an IMPLEMENTATION_PLAN.md file and returns the number of
+// completed (DONE) tasks and the total number of tasks.
+func parseTaskCounts(filepath string) (completed, total int) {
+	data, err := os.ReadFile(filepath)
+	if err != nil {
+		return 0, 0
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## TASK ") {
+			total++
+		}
+		if strings.Contains(trimmed, "**Status: DONE**") {
+			completed++
+		}
+	}
+	return completed, total
 }

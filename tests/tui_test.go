@@ -908,8 +908,8 @@ func TestTaskDisplayDefault(t *testing.T) {
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	view := model.View()
-	if !strings.Contains(view, "Task:") {
-		t.Error("View should contain 'Task:' label")
+	if !strings.Contains(view, "Current Task:") {
+		t.Error("View should contain 'Current Task:' label")
 	}
 }
 
@@ -918,14 +918,14 @@ func TestTaskUpdateDisplayed(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Simulate task update — "Task " prefix is stripped to avoid "Task: Task 6: ..."
-	cmd := tui.SendTaskUpdate("Task 6: Track Phase/Task")
+	// Simulate task update with new "#N Description" format
+	cmd := tui.SendTaskUpdate("#6 Track Phase/Task")
 	taskMsg := cmd()
 	model, _ = updateModel(model, taskMsg)
 
 	view := model.View()
-	if !strings.Contains(view, "6:") {
-		t.Error("View should display the current task number (with 'Task ' prefix stripped)")
+	if !strings.Contains(view, "#6 Track Phase/Task") {
+		t.Error("View should display the current task in '#N Description' format")
 	}
 }
 
@@ -935,16 +935,16 @@ func TestTaskUpdateOverwritesPrevious(t *testing.T) {
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	// Set task 3
-	cmd := tui.SendTaskUpdate("Task 3")
+	cmd := tui.SendTaskUpdate("#3")
 	model, _ = updateModel(model, cmd())
 
-	// Set task 6 — "Task " prefix is stripped in display
-	cmd = tui.SendTaskUpdate("Task 6: Track Phase/Task")
+	// Set task 6
+	cmd = tui.SendTaskUpdate("#6 Track Phase/Task")
 	model, _ = updateModel(model, cmd())
 
 	view := model.View()
-	if !strings.Contains(view, "6:") {
-		t.Error("View should show the latest task number (with 'Task ' prefix stripped)")
+	if !strings.Contains(view, "#6 Track Phase/Task") {
+		t.Error("View should show the latest task in '#N Description' format")
 	}
 }
 
@@ -1030,40 +1030,38 @@ func TestQuitHotkeyAlwaysHighlighted(t *testing.T) {
 	}
 }
 
-// TestTaskDisplayStripsDuplicatePrefix tests that "Task: Task 6: ..." becomes "Task: 6: ..."
-func TestTaskDisplayStripsDuplicatePrefix(t *testing.T) {
+// TestCurrentTaskDisplayFormat tests the "Current Task: #N Description" format
+func TestCurrentTaskDisplayFormat(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Simulate task update with "Task 6: Description"
-	cmd := tui.SendTaskUpdate("Task 6: Track Phase/Task")
+	// Simulate task update with "#N Description" format (keep short to fit panel width)
+	cmd := tui.SendTaskUpdate("#6 Change lib/gold")
 	taskMsg := cmd()
 	model, _ = updateModel(model, taskMsg)
 
 	view := model.View()
-	// The display should show "6: Track Phase/Task" not "Task 6: Track Phase/Task"
-	// after the "Task:" label, avoiding "Task: Task 6: ..."
-	if strings.Contains(view, "Task 6") {
-		t.Error("View should strip 'Task ' prefix from task value to avoid 'Task: Task 6: ...' duplication")
+	if !strings.Contains(view, "Current Task:") {
+		t.Error("View should contain 'Current Task:' label")
 	}
-	if !strings.Contains(view, "6:") {
-		t.Error("View should show task number after stripping duplicate 'Task ' prefix")
+	if !strings.Contains(view, "#6 Change lib/gold") {
+		t.Error("View should display task in '#N Description' format")
 	}
 }
 
-// TestTaskDisplayWithoutPrefix tests that tasks not starting with "Task " are shown as-is
-func TestTaskDisplayWithoutPrefix(t *testing.T) {
+// TestTaskDisplayWithoutDescription tests task display with number only
+func TestTaskDisplayWithoutDescription(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Simulate task update without "Task" prefix
-	cmd := tui.SendTaskUpdate("Fix broken tests")
+	// Simulate task update with number only
+	cmd := tui.SendTaskUpdate("#5")
 	taskMsg := cmd()
 	model, _ = updateModel(model, taskMsg)
 
 	view := model.View()
-	if !strings.Contains(view, "Fix broken tests") {
-		t.Error("View should show task text as-is when it doesn't start with 'Task '")
+	if !strings.Contains(view, "#5") {
+		t.Error("View should show task number when no description is present")
 	}
 }
 
@@ -1088,6 +1086,62 @@ func TestSetTmuxStatusBar(t *testing.T) {
 	view := model.View()
 	if view == "" {
 		t.Error("View should render with inactive tmux status bar")
+	}
+}
+
+// TestCompletedTasksDefault tests that completed tasks shows "0/0" by default
+func TestCompletedTasksDefault(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "Completed Tasks:") {
+		t.Error("View should contain 'Completed Tasks:' label")
+	}
+	if !strings.Contains(view, "0/0") {
+		t.Error("View should show '0/0' for default completed tasks")
+	}
+}
+
+// TestCompletedTasksUpdate tests that completed task counts update via SendCompletedTasksUpdate
+func TestCompletedTasksUpdate(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate completed tasks update
+	cmd := tui.SendCompletedTasksUpdate(4, 7)
+	msg := cmd()
+	model, _ = updateModel(model, msg)
+
+	view := model.View()
+	if !strings.Contains(view, "4/7") {
+		t.Error("View should show '4/7' after completed tasks update")
+	}
+}
+
+// TestSendCompletedTasksUpdateCmd tests the SendCompletedTasksUpdate helper command
+func TestSendCompletedTasksUpdateCmd(t *testing.T) {
+	cmd := tui.SendCompletedTasksUpdate(3, 8)
+
+	if cmd == nil {
+		t.Error("SendCompletedTasksUpdate should return a command")
+	}
+
+	result := cmd()
+	if result == nil {
+		t.Error("Command should return a completed tasks update message")
+	}
+}
+
+// TestSetCompletedTasks tests the SetCompletedTasks setter method
+func TestSetCompletedTasks(t *testing.T) {
+	model := tui.NewModel()
+	model.SetCompletedTasks(5, 10)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "5/10") {
+		t.Error("View should show '5/10' after SetCompletedTasks")
 	}
 }
 

@@ -47,11 +47,29 @@ Based on `specs/default.md`, the following tasks are needed:
 - Validation: all 149 tests pass, `go vet ./...` clean, `go build` succeeds
 
 ## TASK 5: Current Task Display Format [MEDIUM PRIORITY]
-**Status: TODO**
+**Status: DONE**
 - Spec: Change Task into `Current Task: <task title>` e.g. "Current Task: #6 Change the lib/gold into lib/silver"
 - Spec: Add `Completed Tasks: count_completed/total_tasks` e.g. "Completed Tasks: 4/7"
-- Note: task numbers and completed counts may be out of order (highest priority first)
-- Requires changes to: `internal/tui/tui.go` (footer rendering), task tracking in `cmd/ralph/main.go`
+- Changed `internal/tui/tui.go`:
+  - Renamed "Task:" label to "Current Task:" in footer
+  - Added "Completed Tasks:" row showing "X/Y" (completed/total) in footer
+  - Added `completedTasks` and `totalTasks` fields to Model struct
+  - Added `completedTasksUpdateMsg` message type and `SendCompletedTasksUpdate()` helper
+  - Added `SetCompletedTasks(completed, total int)` setter method
+  - Increased `labelStyle` width from 15 to 17 to accommodate "Completed Tasks:" label
+  - Removed "Task " prefix stripping (no longer needed with new "#N Description" format)
+- Changed `cmd/ralph/main.go`:
+  - Added `parseTaskCounts(filepath)` to read IMPLEMENTATION_PLAN.md and count DONE/total tasks at startup
+  - Changed task label format from "Task N: Description" to "#N Description" (spec format)
+  - Calls `model.SetCompletedTasks()` with initial counts from plan file
+- Updated tests in `tests/tui_test.go`:
+  - Updated `TestTaskDisplayDefault` to check for "Current Task:" label
+  - Updated `TestTaskUpdateDisplayed` for "#N Description" format
+  - Updated `TestTaskUpdateOverwritesPrevious` for new format
+  - Replaced `TestTaskDisplayStripsDuplicatePrefix` with `TestCurrentTaskDisplayFormat`
+  - Replaced `TestTaskDisplayWithoutPrefix` with `TestTaskDisplayWithoutDescription`
+  - Added `TestCompletedTasksDefault`, `TestCompletedTasksUpdate`, `TestSendCompletedTasksUpdateCmd`, `TestSetCompletedTasks`
+- Validation: all 153 tests pass, `go vet ./...` clean, `go build` succeeds
 
 ## TASK 6: Plan Prompt Ultimate Goal [MEDIUM PRIORITY]
 **Status: TODO**
