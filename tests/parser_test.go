@@ -571,13 +571,13 @@ func TestToolUseTruncation(t *testing.T) {
 	}
 }
 
-func TestToolResultTruncation(t *testing.T) {
+func TestToolResultPreservesFullContent(t *testing.T) {
 	p := parser.NewParser()
 
-	// Create a tool result with very long content
+	// Create a tool result with very long content (exceeds old 200-char limit)
 	longContent := "This is a very long result that should definitely exceed 200 characters. " +
-		"We need to make sure the truncation is working correctly so let's add even more text here. " +
-		"Adding more content to make absolutely sure we exceed the limit by a good margin."
+		"We need to make sure the full content is preserved without truncation so let's add even more text here. " +
+		"Adding more content to make absolutely sure we exceed the old limit by a good margin."
 
 	line := `{"type":"user","message":{"content":[{"type":"tool_result","content":"` + longContent + `"}]}}`
 
@@ -588,8 +588,8 @@ func TestToolResultTruncation(t *testing.T) {
 		t.Fatalf("Expected 1 tool result, got %d", len(content.ToolResults))
 	}
 
-	if len(content.ToolResults[0].Content) > 200 {
-		t.Errorf("Expected Content to be truncated to 200 chars, got %d", len(content.ToolResults[0].Content))
+	if content.ToolResults[0].Content != longContent {
+		t.Errorf("Expected full content to be preserved (len %d), got len %d", len(longContent), len(content.ToolResults[0].Content))
 	}
 }
 

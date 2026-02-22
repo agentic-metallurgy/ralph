@@ -235,7 +235,7 @@ func handleParsedMessage(
 			if text != "" {
 				msgChan <- tui.Message{
 					Role:    tui.RoleAssistant,
-					Content: truncate(text, 300),
+					Content: text,
 				}
 			}
 		}
@@ -256,7 +256,7 @@ func handleParsedMessage(
 			if toolResult.Content != "" {
 				msgChan <- tui.Message{
 					Role:    tui.RoleUser,
-					Content: truncate(toolResult.Content, 200),
+					Content: toolResult.Content,
 				}
 			}
 		}
@@ -271,12 +271,4 @@ func handleParsedMessage(
 			}
 		}
 	}
-}
-
-// truncate limits a string to the specified length
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

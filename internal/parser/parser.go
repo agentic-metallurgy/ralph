@@ -21,8 +21,8 @@ const (
 type ContentType string
 
 const (
-	ContentTypeText      ContentType = "text"
-	ContentTypeToolUse   ContentType = "tool_use"
+	ContentTypeText       ContentType = "text"
+	ContentTypeToolUse    ContentType = "tool_use"
 	ContentTypeToolResult ContentType = "tool_result"
 )
 
@@ -38,9 +38,9 @@ type Usage struct {
 type ContentItem struct {
 	Type    ContentType            `json:"type"`
 	Text    string                 `json:"text,omitempty"`
-	Name    string                 `json:"name,omitempty"`         // Tool name for tool_use
-	Input   map[string]interface{} `json:"input,omitempty"`        // Tool input for tool_use
-	Content interface{}            `json:"content,omitempty"`      // Tool result content
+	Name    string                 `json:"name,omitempty"`    // Tool name for tool_use
+	Input   map[string]interface{} `json:"input,omitempty"`   // Tool input for tool_use
+	Content interface{}            `json:"content,omitempty"` // Tool result content
 }
 
 // InnerMessage represents the message field within an assistant/user message
@@ -51,10 +51,10 @@ type InnerMessage struct {
 
 // ParsedMessage represents a parsed Claude message
 type ParsedMessage struct {
-	Type         MessageType    `json:"type"`
-	Message      *InnerMessage  `json:"message,omitempty"`
-	TotalCostUSD float64        `json:"total_cost_usd,omitempty"`
-	RawJSON      string         `json:"-"` // Original JSON for debugging
+	Type         MessageType   `json:"type"`
+	Message      *InnerMessage `json:"message,omitempty"`
+	TotalCostUSD float64       `json:"total_cost_usd,omitempty"`
+	RawJSON      string        `json:"-"` // Original JSON for debugging
 }
 
 // LoopMarker represents a loop marker extracted from output
@@ -65,16 +65,16 @@ type LoopMarker struct {
 
 // ParsedContent represents the extracted content from a message
 type ParsedContent struct {
-	TextContent    []string      // Text items
-	ToolUses       []ToolUse     // Tool uses
-	ToolResults    []ToolResult  // Tool results
-	Thinking       string        // Extracted <thinking> content
+	TextContent []string     // Text items
+	ToolUses    []ToolUse    // Tool uses
+	ToolResults []ToolResult // Tool results
+	Thinking    string       // Extracted <thinking> content
 }
 
 // ToolUse represents a tool use from the assistant
 type ToolUse struct {
-	Name       string
-	InputJSON  string // Truncated JSON preview
+	Name      string
+	InputJSON string // Truncated JSON preview
 }
 
 // ToolResult represents a tool result from the user
@@ -183,9 +183,9 @@ func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
 	}
 
 	content := &ParsedContent{
-		TextContent:  []string{},
-		ToolUses:     []ToolUse{},
-		ToolResults:  []ToolResult{},
+		TextContent: []string{},
+		ToolUses:    []ToolUse{},
+		ToolResults: []ToolResult{},
 	}
 
 	for _, item := range msg.Message.Content {
@@ -229,10 +229,6 @@ func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
 				}
 			}
 			resultText = p.StripSystemReminders(resultText)
-			// Truncate to 200 characters like Python version
-			if len(resultText) > 200 {
-				resultText = resultText[:200]
-			}
 			if resultText != "" {
 				content.ToolResults = append(content.ToolResults, ToolResult{
 					Content: resultText,

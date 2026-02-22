@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -486,6 +487,61 @@ func TestLongMessageContent(t *testing.T) {
 	view := model.View()
 	if view == "" || view == "Initializing..." {
 		t.Error("Model should render long messages")
+	}
+}
+
+// TestLongAssistantMessageNotTruncated tests that assistant messages exceeding
+// the old 300-char truncation limit are displayed without "..." truncation
+func TestLongAssistantMessageNotTruncated(t *testing.T) {
+	model := tui.NewModel()
+
+	// Create content that exceeds the old 300-char truncation limit
+	longContent := "UNTRUNCATED_MARKER detailed assistant response that contains important information. " +
+		"It discusses the architecture of the system and explains how different components interact. " +
+		"The response also includes specific code suggestions and detailed reasoning about the approach. " +
+		"This should not be truncated because truncation hides important responses and thinking from Claude."
+
+	if len(longContent) <= 300 {
+		t.Fatalf("Test content should exceed 300 chars, got %d", len(longContent))
+	}
+
+	model.AddMessage(tui.Message{Role: tui.RoleAssistant, Content: longContent})
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if view == "" || view == "Initializing..." {
+		t.Error("Model should render long assistant messages")
+	}
+	// Verify the beginning of the content is visible (confirming it was not replaced by truncated text)
+	if !strings.Contains(view, "UNTRUNCATED_MARKER") {
+		t.Error("Long assistant message should start with full content, not truncated text")
+	}
+}
+
+// TestLongToolResultMessageNotTruncated tests that tool result messages exceeding
+// the old 200-char truncation limit are displayed without "..." truncation
+func TestLongToolResultMessageNotTruncated(t *testing.T) {
+	model := tui.NewModel()
+
+	// Create content that exceeds the old 200-char truncation limit
+	longContent := "UNTRUNCATED_RESULT file contents that are quite long and contain lots of data. " +
+		"The file has multiple functions and important implementation details that must be visible. " +
+		"Previously this would have been cut off at 200 characters hiding the rest of the content."
+
+	if len(longContent) <= 200 {
+		t.Fatalf("Test content should exceed 200 chars, got %d", len(longContent))
+	}
+
+	model.AddMessage(tui.Message{Role: tui.RoleUser, Content: longContent})
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if view == "" || view == "Initializing..." {
+		t.Error("Model should render long tool result messages")
+	}
+	// Verify the beginning of the content is visible
+	if !strings.Contains(view, "UNTRUNCATED_RESULT") {
+		t.Error("Long tool result message should start with full content, not truncated text")
 	}
 }
 

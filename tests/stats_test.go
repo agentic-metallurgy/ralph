@@ -447,11 +447,11 @@ func TestAccumulationMatchesPython(t *testing.T) {
 	s.AddCost(0.002100)
 
 	// Verify totals
-	expectedInput := int64(2200)    // 1500 + 200 + 500
-	expectedOutput := int64(650)    // 300 + 150 + 200
+	expectedInput := int64(2200)      // 1500 + 200 + 500
+	expectedOutput := int64(650)      // 300 + 150 + 200
 	expectedCacheCreate := int64(150) // 100 + 0 + 50
 	expectedCacheRead := int64(175)   // 50 + 100 + 25
-	expectedCost := 0.00785          // 0.004500 + 0.001250 + 0.002100
+	expectedCost := 0.00785           // 0.004500 + 0.001250 + 0.002100
 
 	if s.InputTokens != expectedInput {
 		t.Errorf("InputTokens: expected %d, got %d", expectedInput, s.InputTokens)
