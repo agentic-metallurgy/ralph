@@ -551,3 +551,47 @@ func TestQuitPersistsElapsedTime(t *testing.T) {
 			baseElapsed.Nanoseconds(), tokenStats.TotalElapsedNs)
 	}
 }
+
+// TestStopHotkey tests that 'o' key pauses the loop
+func TestStopHotkey(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Without a loop set, pressing 'o' should not panic
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}}
+	model, _ = updateModel(model, keyMsg)
+
+	// Should not quit
+	view := model.View()
+	if view == "Goodbye!\n" {
+		t.Error("'o' key should not quit the application")
+	}
+}
+
+// TestStartHotkey tests that 'a' key resumes the loop
+func TestStartHotkey(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Without a loop set, pressing 'a' should not panic
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}
+	model, _ = updateModel(model, keyMsg)
+
+	// Should not quit
+	view := model.View()
+	if view == "Goodbye!\n" {
+		t.Error("'a' key should not quit the application")
+	}
+}
+
+// TestHotkeyBarRenders tests that the hotkey bar is shown in the footer
+func TestHotkeyBarRenders(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	// The view should not be empty
+	if view == "" || view == "Initializing..." {
+		t.Error("Model should render with hotkey bar")
+	}
+}

@@ -83,26 +83,25 @@ func (m Message) GetStyle() lipgloss.Style {
 
 // Model represents the TUI application state
 type Model struct {
-	ready                 bool
-	width                 int
-	height                int
-	quitting              bool
-	messages              []Message
-	maxMessages           int
-	stats                 *stats.TokenStats
-	currentLoop           int
-	totalLoops            int
-	startTime             time.Time
-	baseElapsed           time.Duration // elapsed time from previous sessions
-	timerPaused           bool          // whether elapsed time tracking is paused
-	pausedElapsed         time.Duration // elapsed time when paused (for display)
-	viewport              viewport.Model
-	activityHeight        int
-	footerHeight          int
-	msgChan               <-chan Message
-	doneChan              <-chan struct{}
-	controlPanelSelection int // 0 = Stop Loop, 1 = Start Loop
-	loop                  *loop.Loop
+	ready          bool
+	width          int
+	height         int
+	quitting       bool
+	messages       []Message
+	maxMessages    int
+	stats          *stats.TokenStats
+	currentLoop    int
+	totalLoops     int
+	startTime      time.Time
+	baseElapsed    time.Duration // elapsed time from previous sessions
+	timerPaused    bool          // whether elapsed time tracking is paused
+	pausedElapsed  time.Duration // elapsed time when paused (for display)
+	viewport       viewport.Model
+	activityHeight int
+	footerHeight   int
+	msgChan        <-chan Message
+	doneChan       <-chan struct{}
+	loop           *loop.Loop
 }
 
 // NewModel creates and returns a new initialized Model
@@ -119,7 +118,7 @@ func NewModel() Model {
 		totalLoops:     0,
 		startTime:      time.Now(),
 		activityHeight: 0,
-		footerHeight:   9,
+		footerHeight:   7,
 	}
 }
 
@@ -258,48 +257,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.quitting = true
 			return m, tea.Quit
-		case "up", "k":
-			if m.controlPanelSelection > 0 {
-				m.controlPanelSelection--
-			}
-			return m, nil
-		case "down", "j":
-			if m.controlPanelSelection < 2 {
-				m.controlPanelSelection++
-			}
-			return m, nil
-		case "enter":
-			if m.controlPanelSelection == 2 {
-				// Quit selected - persist elapsed time
-				if m.stats != nil {
-					var totalElapsed time.Duration
-					if m.timerPaused {
-						totalElapsed = m.pausedElapsed
-					} else {
-						totalElapsed = m.baseElapsed + time.Since(m.startTime)
-					}
-					m.stats.TotalElapsedNs = totalElapsed.Nanoseconds()
-				}
-				m.quitting = true
-				return m, tea.Quit
-			}
+		case "o":
+			// Stop/pause the loop - freeze elapsed time
 			if m.loop != nil {
-				if m.controlPanelSelection == 0 {
-					// Stop Loop selected - freeze elapsed time
-					if !m.timerPaused {
-						m.pausedElapsed = m.baseElapsed + time.Since(m.startTime)
-						m.timerPaused = true
-					}
-					m.loop.Pause()
-				} else if m.controlPanelSelection == 1 {
-					// Start Loop selected - resume elapsed time from where we paused
-					if m.timerPaused {
-						m.baseElapsed = m.pausedElapsed
-						m.startTime = time.Now()
-						m.timerPaused = false
-					}
-					m.loop.Resume()
+				if !m.timerPaused {
+					m.pausedElapsed = m.baseElapsed + time.Since(m.startTime)
+					m.timerPaused = true
 				}
+				m.loop.Pause()
+			}
+			return m, nil
+		case "a":
+			// Start/resume the loop - resume elapsed time from where we paused
+			if m.loop != nil {
+				if m.timerPaused {
+					m.baseElapsed = m.pausedElapsed
+					m.startTime = time.Now()
+					m.timerPaused = false
+				}
+				m.loop.Resume()
 			}
 			return m, nil
 		}
@@ -429,10 +405,10 @@ func (m Model) renderLayout() string {
 	)
 }
 
-// renderFooter renders the three-panel footer
+// renderFooter renders the two-panel footer with hotkey bar
 func (m Model) renderFooter() string {
-	// Calculate panel width (divide by 3, accounting for spacing)
-	panelWidth := (m.width - 8) / 3
+	// Calculate panel width (divide by 2, accounting for spacing)
+	panelWidth := (m.width - 6) / 2
 
 	// Panel styles
 	panelStyle := lipgloss.NewStyle().
@@ -440,12 +416,12 @@ func (m Model) renderFooter() string {
 		BorderForeground(colorPurple).
 		Padding(0, 1).
 		Width(panelWidth).
-		Height(m.footerHeight - 2)
+		Height(m.footerHeight - 3) // Leave room for hotkey bar
 
 	labelStyle := lipgloss.NewStyle().
 		Foreground(colorBlue).
 		Align(lipgloss.Right).
-		Width(12)
+		Width(14)
 
 	valueStyle := lipgloss.NewStyle().
 		Foreground(colorLightGray)
@@ -504,34 +480,37 @@ func (m Model) renderFooter() string {
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
 
-	// Control Panel
-	stopLoopLine := "  Stop Loop"
-	startLoopLine := "  Start Loop"
-	quitLine := "  Quit"
-	switch m.controlPanelSelection {
-	case 0:
-		stopLoopLine = "> Stop Loop"
-	case 1:
-		startLoopLine = "> Start Loop"
-	case 2:
-		quitLine = "> Quit"
-	}
-
-	controlPanelContent := lipgloss.JoinVertical(
-		lipgloss.Left,
-		titleStyle.Render("Control Panel"),
-		valueStyle.Render(stopLoopLine),
-		valueStyle.Render(startLoopLine),
-		valueStyle.Render(quitLine),
-	)
-	controlPanel := panelStyle.Render(controlPanelContent)
-
-	// Join all panels horizontally
-	return lipgloss.JoinHorizontal(
+	// Join panels horizontally
+	panels := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		usageCostPanel,
 		loopDetailsPanel,
-		controlPanel,
+	)
+
+	// Hotkey bar
+	dimStyle := lipgloss.NewStyle().Foreground(colorDimGray)
+	highlightStyle := lipgloss.NewStyle().Bold(true).Foreground(colorLightGray)
+
+	quitKey := dimStyle.Render("(q)")
+	quitLabel := dimStyle.Render("uit")
+	stopKey := dimStyle.Render("st(o)p")
+	startKey := dimStyle.Render("st(a)rt")
+
+	if isPaused {
+		startKey = highlightStyle.Render("st(a)rt")
+	} else {
+		stopKey = highlightStyle.Render("st(o)p")
+	}
+
+	hotkeyBar := lipgloss.NewStyle().
+		Width(m.width - 2).
+		Align(lipgloss.Center).
+		Render(fmt.Sprintf("%s%s   %s   %s", quitKey, quitLabel, stopKey, startKey))
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		panels,
+		hotkeyBar,
 	)
 }
 
