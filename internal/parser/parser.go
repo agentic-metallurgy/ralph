@@ -151,7 +151,6 @@ func (p *Parser) ParseLoopMarker(line string) *LoopMarker {
 	}
 
 	var current, total int
-	_, _ = strings.NewReader(matches[1]).Read(make([]byte, 0))
 
 	// Parse current and total
 	current = parseInt(matches[1])

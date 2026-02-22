@@ -189,27 +189,6 @@ func (c *Config) validateSpecsAvailable(path string) error {
 	return nil
 }
 
-// validateDirExists checks if a directory exists at the given path
-func (c *Config) validateDirExists(path, flagName string) error {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("%s: invalid path %q: %w", flagName, path, err)
-	}
-
-	info, err := os.Stat(absPath)
-	if os.IsNotExist(err) {
-		return fmt.Errorf("%s: directory does not exist: %s", flagName, path)
-	}
-	if err != nil {
-		return fmt.Errorf("%s: cannot access %q: %w", flagName, path, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s: expected directory but got file: %s", flagName, path)
-	}
-
-	return nil
-}
-
 // String returns a string representation of the Config for debug printing
 func (c *Config) String() string {
 	return fmt.Sprintf("Config{Iterations: %d, SpecFile: %q, SpecFolder: %q, LoopPrompt: %q}",
