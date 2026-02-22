@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/cloudosai/ralph-go/internal/loop"
 	"github.com/cloudosai/ralph-go/internal/stats"
 	"github.com/cloudosai/ralph-go/internal/tmux"
 	"github.com/cloudosai/ralph-go/internal/tui"
@@ -1165,5 +1166,158 @@ func TestResizeFromTinyToNormal(t *testing.T) {
 	}
 	if !strings.Contains(view, "RESIZE_TEST_CONTENT") {
 		t.Error("Messages should be visible after resize to normal")
+	}
+}
+
+// TestAddLoopHotkey tests that '+' key increases total loops
+func TestAddLoopHotkey(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(2, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press '+' to add a loop
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
+	model, _ = updateModel(model, keyMsg)
+
+	view := model.View()
+	if !strings.Contains(view, "#2/6") {
+		t.Errorf("After pressing '+', total loops should increase from 5 to 6, view should contain '#2/6'")
+	}
+
+	// Verify the loop's iteration count was updated
+	if l.GetIterations() != 6 {
+		t.Errorf("Expected loop iterations to be 6 after '+', got %d", l.GetIterations())
+	}
+}
+
+// TestSubtractLoopHotkey tests that '-' key decreases total loops
+func TestSubtractLoopHotkey(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(2, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press '-' to subtract a loop
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'-'}}
+	model, _ = updateModel(model, keyMsg)
+
+	view := model.View()
+	if !strings.Contains(view, "#2/4") {
+		t.Errorf("After pressing '-', total loops should decrease from 5 to 4, view should contain '#2/4'")
+	}
+
+	// Verify the loop's iteration count was updated
+	if l.GetIterations() != 4 {
+		t.Errorf("Expected loop iterations to be 4 after '-', got %d", l.GetIterations())
+	}
+}
+
+// TestSubtractLoopFloorConstraint tests that '-' cannot go below current loop
+func TestSubtractLoopFloorConstraint(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 4, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(4, 4) // on loop 4 of 4
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press '-' — should be a no-op since currentLoop == totalLoops
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'-'}}
+	model, _ = updateModel(model, keyMsg)
+
+	view := model.View()
+	if !strings.Contains(view, "#4/4") {
+		t.Errorf("After pressing '-' at floor, loops should remain at 4/4, view should contain '#4/4'")
+	}
+
+	// Verify the loop's iteration count was NOT changed
+	if l.GetIterations() != 4 {
+		t.Errorf("Expected loop iterations to remain 4 at floor, got %d", l.GetIterations())
+	}
+}
+
+// TestAddLoopNoopWithoutLoop tests that '+' is a no-op when no loop is set
+func TestAddLoopNoopWithoutLoop(t *testing.T) {
+	model := tui.NewModel()
+	model.SetLoopProgress(1, 3)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press '+' without a loop set — should not panic
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
+	model, _ = updateModel(model, keyMsg)
+
+	view := model.View()
+	if !strings.Contains(view, "#1/3") {
+		t.Errorf("Without loop, '+' should be a no-op, view should still contain '#1/3'")
+	}
+}
+
+// TestAddSubtractLoopNoopWhenCompleted tests that '+'/'-' are no-ops when completed
+func TestAddSubtractLoopNoopWhenCompleted(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(5, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate completion
+	cmd := tui.SendDone()
+	doneMsg := cmd()
+	model, _ = updateModel(model, doneMsg)
+
+	// Press '+' — should be a no-op because completed
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
+	model, _ = updateModel(model, keyMsg)
+
+	if l.GetIterations() != 5 {
+		t.Errorf("Expected loop iterations to remain 5 after '+' when completed, got %d", l.GetIterations())
+	}
+
+	// Press '-' — should also be a no-op because completed
+	keyMsg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'-'}}
+	model, _ = updateModel(model, keyMsg)
+
+	if l.GetIterations() != 5 {
+		t.Errorf("Expected loop iterations to remain 5 after '-' when completed, got %d", l.GetIterations())
+	}
+}
+
+// TestHotkeyBarShowsAddSubtract tests that the hotkey bar includes (+)add and (-)subtract
+func TestHotkeyBarShowsAddSubtract(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "add") {
+		t.Error("Hotkey bar should contain 'add' label")
+	}
+	if !strings.Contains(view, "subtract") {
+		t.Error("Hotkey bar should contain 'subtract' label")
+	}
+}
+
+// TestMultipleAddLoopPresses tests pressing '+' multiple times
+func TestMultipleAddLoopPresses(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 3, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(1, 3)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press '+' three times
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
+	for i := 0; i < 3; i++ {
+		model, _ = updateModel(model, keyMsg)
+	}
+
+	view := model.View()
+	if !strings.Contains(view, "#1/6") {
+		t.Errorf("After pressing '+' three times from 3, total should be 6, view should contain '#1/6'")
+	}
+
+	if l.GetIterations() != 6 {
+		t.Errorf("Expected loop iterations to be 6 after 3 '+' presses, got %d", l.GetIterations())
 	}
 }

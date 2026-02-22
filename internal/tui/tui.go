@@ -342,6 +342,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loop.Resume()
 			}
 			return m, nil
+		case "+":
+			// Add a loop iteration
+			if m.loop != nil && !m.completed {
+				m.totalLoops++
+				m.loop.SetIterations(m.totalLoops)
+			}
+			return m, nil
+		case "-":
+			// Subtract a loop iteration (floor: can't go below current loop)
+			if m.loop != nil && !m.completed && m.totalLoops > m.currentLoop {
+				m.totalLoops--
+				m.loop.SetIterations(m.totalLoops)
+			}
+			return m, nil
 		}
 
 	case tickMsg:
@@ -610,6 +624,8 @@ func (m Model) renderFooter() string {
 	quitLabel := highlightStyle.Render("uit")
 	stopKey := dimStyle.Render("st(o)p")
 	startKey := dimStyle.Render("st(a)rt")
+	addKey := dimStyle.Render("(+)add")
+	subKey := dimStyle.Render("(-)subtract")
 
 	if isPaused {
 		startKey = highlightStyle.Render("st(a)rt")
@@ -621,7 +637,7 @@ func (m Model) renderFooter() string {
 		Width(m.width - 2).
 		Align(lipgloss.Left).
 		PaddingLeft(1).
-		Render(fmt.Sprintf("%s%s   %s   %s", quitKey, quitLabel, stopKey, startKey))
+		Render(fmt.Sprintf("%s%s   %s   %s   %s   %s", quitKey, quitLabel, stopKey, startKey, addKey, subKey))
 
 	// Status bar
 	statusBar := m.renderStatusBar()

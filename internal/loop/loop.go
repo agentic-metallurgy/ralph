@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -43,6 +44,7 @@ type Message struct {
 // Loop manages the Claude CLI execution loop.
 type Loop struct {
 	config          Config
+	mu              sync.Mutex // protects config.Iterations for dynamic adjustment
 	output          chan Message
 	cancel          context.CancelFunc
 	running         bool
@@ -117,12 +119,28 @@ func (l *Loop) Resume() {
 	}
 }
 
+// SetIterations dynamically adjusts the total iteration count.
+// Thread-safe: can be called from any goroutine.
+func (l *Loop) SetIterations(n int) {
+	l.mu.Lock()
+	l.config.Iterations = n
+	l.mu.Unlock()
+}
+
+// GetIterations returns the current total iteration count.
+// Thread-safe: can be called from any goroutine.
+func (l *Loop) GetIterations() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.config.Iterations
+}
+
 // run executes the main loop logic.
 func (l *Loop) run(ctx context.Context) {
 	defer close(l.output)
 	defer func() { l.running = false }()
 
-	for i := 1; i <= l.config.Iterations; i++ {
+	for i := 1; i <= l.GetIterations(); i++ {
 		select {
 		case <-ctx.Done():
 			return
@@ -131,31 +149,34 @@ func (l *Loop) run(ctx context.Context) {
 
 		// Check if paused and wait for resume
 		if l.paused {
+			total := l.GetIterations()
 			l.output <- Message{
 				Type:    "loop_marker",
 				Content: "======= LOOP STOPPED =======",
 				Loop:    i,
-				Total:   l.config.Iterations,
+				Total:   total,
 			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-l.resumeCh:
+				total = l.GetIterations()
 				l.output <- Message{
 					Type:    "loop_marker",
 					Content: "======= LOOP RESUMED =======",
 					Loop:    i,
-					Total:   l.config.Iterations,
+					Total:   total,
 				}
 			}
 		}
 
 		// Send loop marker
+		total := l.GetIterations()
 		l.output <- Message{
 			Type:    "loop_marker",
-			Content: fmt.Sprintf("======= LOOP %d/%d =======", i, l.config.Iterations),
+			Content: fmt.Sprintf("======= LOOP %d/%d =======", i, total),
 			Loop:    i,
-			Total:   l.config.Iterations,
+			Total:   total,
 		}
 
 		// Create a cancellable context for this iteration
@@ -169,21 +190,23 @@ func (l *Loop) run(ctx context.Context) {
 
 		// If we were paused (interrupted), don't report as error
 		if l.paused {
+			total := l.GetIterations()
 			l.output <- Message{
 				Type:    "loop_marker",
 				Content: "======= LOOP STOPPED =======",
 				Loop:    i,
-				Total:   l.config.Iterations,
+				Total:   total,
 			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-l.resumeCh:
+				total = l.GetIterations()
 				l.output <- Message{
 					Type:    "loop_marker",
 					Content: "======= LOOP RESUMED =======",
 					Loop:    i,
-					Total:   l.config.Iterations,
+					Total:   total,
 				}
 			}
 			// Retry this iteration
@@ -192,16 +215,17 @@ func (l *Loop) run(ctx context.Context) {
 		}
 
 		if err != nil {
+			total := l.GetIterations()
 			l.output <- Message{
 				Type:    "error",
 				Content: err.Error(),
 				Loop:    i,
-				Total:   l.config.Iterations,
+				Total:   total,
 			}
 		}
 
 		// Sleep between iterations (except for the last one)
-		if i < l.config.Iterations {
+		if i < l.GetIterations() {
 			select {
 			case <-ctx.Done():
 				return
@@ -210,11 +234,12 @@ func (l *Loop) run(ctx context.Context) {
 		}
 	}
 
+	total := l.GetIterations()
 	l.output <- Message{
 		Type:    "complete",
-		Content: fmt.Sprintf("======= COMPLETED %d ITERATIONS =======", l.config.Iterations),
-		Loop:    l.config.Iterations,
-		Total:   l.config.Iterations,
+		Content: fmt.Sprintf("======= COMPLETED %d ITERATIONS =======", total),
+		Loop:    total,
+		Total:   total,
 	}
 }
 
@@ -282,7 +307,7 @@ func (l *Loop) streamOutput(r io.Reader, iteration int) {
 			Type:    "output",
 			Content: scanner.Text(),
 			Loop:    iteration,
-			Total:   l.config.Iterations,
+			Total:   l.GetIterations(),
 		}
 	}
 }

@@ -659,6 +659,70 @@ func TestDefaultCommandBuilder(t *testing.T) {
 	}
 }
 
+func TestSetIterations(t *testing.T) {
+	cfg := loop.Config{
+		Iterations: 5,
+		Prompt:     "test",
+	}
+	l := loop.New(cfg)
+
+	if l.GetIterations() != 5 {
+		t.Errorf("Expected initial iterations 5, got %d", l.GetIterations())
+	}
+
+	l.SetIterations(10)
+	if l.GetIterations() != 10 {
+		t.Errorf("Expected iterations 10 after SetIterations, got %d", l.GetIterations())
+	}
+
+	l.SetIterations(3)
+	if l.GetIterations() != 3 {
+		t.Errorf("Expected iterations 3 after SetIterations, got %d", l.GetIterations())
+	}
+}
+
+func TestGetIterationsDefault(t *testing.T) {
+	cfg := loop.Config{
+		Iterations: 7,
+		Prompt:     "test",
+	}
+	l := loop.New(cfg)
+
+	if l.GetIterations() != 7 {
+		t.Errorf("Expected iterations 7, got %d", l.GetIterations())
+	}
+}
+
+func TestSetIterationsDuringRun(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+
+	// Increase iterations while running
+	l.SetIterations(4)
+
+	var markers []loop.Message
+	for msg := range l.Output() {
+		if msg.Type == "loop_marker" {
+			markers = append(markers, msg)
+		}
+	}
+
+	// Should have run more than 2 iterations since we increased to 4
+	if len(markers) < 3 {
+		t.Errorf("Expected at least 3 loop markers after increasing iterations to 4, got %d", len(markers))
+	}
+}
+
 func TestLoopMultipleIterationsWithOutput(t *testing.T) {
 	cfg := loop.Config{
 		Iterations:     3,

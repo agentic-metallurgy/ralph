@@ -105,13 +105,31 @@ Based on `specs/default.md`, the following tasks are needed:
 - Validation: all 161 tests pass, `go vet ./...` clean, `go build` succeeds
 
 ## TASK 7: Add/Subtract Loop Keyboard Shortcuts [MEDIUM PRIORITY]
-**Status: TODO**
+**Status: DONE**
 - Spec: Add keyboard shortcuts `(+)` add and `(-)` subtract loops
-- Floor constraint: can't subtract below current loop number (e.g., on loop 4, minimum is 4 loops)
-- Shortcuts should appear in the bottom hotkey bar
-- Requires changes to: `internal/tui/tui.go` (key handlers, hotkey bar), `internal/loop/loop.go` (dynamic iteration count adjustment)
+- Spec: Floor constraint: can't subtract below current loop number (e.g., on loop 4, minimum is 4 loops)
+- Spec: Shortcuts should appear in the bottom hotkey bar as `(+)add` and `(-)subtract`
+- Changed `internal/loop/loop.go`:
+  - Added `sync.Mutex` (`mu`) field to Loop struct for thread-safe iteration adjustment
+  - Added `SetIterations(n int)` method: mutex-protected setter for `config.Iterations`
+  - Added `GetIterations() int` method: mutex-protected getter for `config.Iterations`
+  - Updated `run()` to use `l.GetIterations()` instead of direct `l.config.Iterations` access in for-loop condition, all message `Total` fields, and sleep check
+  - Updated `streamOutput()` to use `l.GetIterations()` for message `Total` field
+- Changed `internal/tui/tui.go`:
+  - Added `+` key handler: increments `m.totalLoops` and calls `m.loop.SetIterations(m.totalLoops)`, guarded by `m.loop != nil && !m.completed`
+  - Added `-` key handler: decrements `m.totalLoops` and calls `m.loop.SetIterations(m.totalLoops)`, with floor constraint `m.totalLoops > m.currentLoop`
+  - Updated hotkey bar to show `(+)add` and `(-)subtract` alongside existing `(q)uit`, `st(o)p`, `st(a)rt`
+- Added tests in `tests/loop_test.go`:
+  - `TestSetIterations`: verifies SetIterations/GetIterations round-trip
+  - `TestGetIterationsDefault`: verifies GetIterations returns initial config value
+  - `TestSetIterationsDuringRun`: verifies dynamically increasing iterations causes extra loops to execute
+- Added tests in `tests/tui_test.go`:
+  - `TestAddLoopHotkey`: verifies '+' increases totalLoops and updates loop's iteration count
+  - `TestSubtractLoopHotkey`: verifies '-' decreases totalLoops and updates loop's iteration count
+  - `TestSubtractLoopFloorConstraint`: verifies '-' is a no-op when currentLoop == totalLoops
+  - `TestAddLoopNoopWithoutLoop`: verifies '+' is a no-op when no loop is set
+  - `TestAddSubtractLoopNoopWhenCompleted`: verifies '+'/'-' are no-ops after completion
+  - `TestHotkeyBarShowsAddSubtract`: verifies hotkey bar contains 'add' and 'subtract'
+  - `TestMultipleAddLoopPresses`: verifies pressing '+' multiple times accumulates correctly
+- Validation: all 211 tests pass, `go vet ./...` clean, `go build` succeeds
 
-## TASK 8: Commit plan_prompt.md Fix [LOW PRIORITY]
-**Status: TODO**
-- Spec: "also i fixed a problem with the plan_prompt.md please commit that along with things"
-- Note: This appears to refer to a user-made fix that should be included in the next commit. Verify if `plan_prompt.md` has uncommitted changes.
