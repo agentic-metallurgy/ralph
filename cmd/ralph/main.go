@@ -95,12 +95,16 @@ func main() {
 	// Create the loop
 	claudeLoop := loop.New(loopConfig)
 
+	// Create tmux status bar (no-op if not inside tmux)
+	tmuxBar := tmux.NewStatusBar()
+
 	// Create the TUI model with channels
 	model := tui.NewModelWithChannels(msgChan, doneChan)
 	model.SetStats(tokenStats)
 	model.SetBaseElapsed(time.Duration(tokenStats.TotalElapsedNs))
 	model.SetLoopProgress(0, cfg.Iterations)
 	model.SetLoop(claudeLoop)
+	model.SetTmuxStatusBar(tmuxBar)
 
 	// Create the Bubble Tea program (must be after SetLoop so the model copy has the loop reference)
 	program := tea.NewProgram(model, tea.WithAltScreen())

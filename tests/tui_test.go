@@ -2,12 +2,14 @@ package tests
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cloudosai/ralph-go/internal/stats"
+	"github.com/cloudosai/ralph-go/internal/tmux"
 	"github.com/cloudosai/ralph-go/internal/tui"
 )
 
@@ -1018,6 +1020,30 @@ func TestTaskDisplayWithoutPrefix(t *testing.T) {
 	view := model.View()
 	if !strings.Contains(view, "Fix broken tests") {
 		t.Error("View should show task text as-is when it doesn't start with 'Task '")
+	}
+}
+
+// TestSetTmuxStatusBar tests that SetTmuxStatusBar does not panic with nil or inactive bar
+func TestSetTmuxStatusBar(t *testing.T) {
+	model := tui.NewModel()
+
+	// Setting nil tmux bar should not panic
+	model.SetTmuxStatusBar(nil)
+
+	// Setting inactive bar should not panic
+	orig := os.Getenv("TMUX")
+	defer os.Setenv("TMUX", orig)
+	os.Unsetenv("TMUX")
+	sb := tmux.NewStatusBar()
+	model.SetTmuxStatusBar(sb)
+
+	// Tick should not panic with inactive tmux bar
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	model, _ = updateModel(model, tui.TickMsgForTest())
+
+	view := model.View()
+	if view == "" {
+		t.Error("View should render with inactive tmux status bar")
 	}
 }
 

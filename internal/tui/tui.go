@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/cloudosai/ralph-go/internal/loop"
 	"github.com/cloudosai/ralph-go/internal/stats"
+	"github.com/cloudosai/ralph-go/internal/tmux"
 )
 
 // Minimum terminal dimensions for proper rendering
@@ -112,6 +113,7 @@ type Model struct {
 	msgChan        <-chan Message
 	doneChan       <-chan struct{}
 	loop           *loop.Loop
+	tmuxBar        *tmux.StatusBar
 }
 
 // NewModel creates and returns a new initialized Model
@@ -159,6 +161,11 @@ func (m *Model) SetLoop(l *loop.Loop) {
 // SetBaseElapsed sets the elapsed time from previous sessions
 func (m *Model) SetBaseElapsed(d time.Duration) {
 	m.baseElapsed = d
+}
+
+// SetTmuxStatusBar sets the tmux status bar manager for live tmux status updates
+func (m *Model) SetTmuxStatusBar(sb *tmux.StatusBar) {
+	m.tmuxBar = sb
 }
 
 // getElapsed returns the current total elapsed time
@@ -294,6 +301,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.stats.TotalElapsedNs = totalElapsed.Nanoseconds()
 			}
+			// Restore tmux status bar to its original state
+			if m.tmuxBar != nil {
+				m.tmuxBar.Restore()
+			}
 			m.quitting = true
 			return m, tea.Quit
 		case "o":
@@ -325,6 +336,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(m.renderActivityContent())
 			m.viewport.GotoBottom()
 		}
+		m.updateTmuxStatusBar()
 		return m, tickCmd()
 
 	case newMessageMsg:
@@ -635,6 +647,28 @@ func (m Model) renderStatusBar() string {
 		Render(bar)
 }
 
+// updateTmuxStatusBar updates the tmux status-right bar with current loop/token/elapsed info
+func (m Model) updateTmuxStatusBar() {
+	if m.tmuxBar == nil || !m.tmuxBar.IsActive() {
+		return
+	}
+
+	loopDisplay := "#0/0"
+	if m.totalLoops > 0 {
+		loopDisplay = fmt.Sprintf("#%d/%d", m.currentLoop, m.totalLoops)
+	}
+
+	tokenDisplay := stats.FormatTokens(m.stats.TotalTokens())
+
+	elapsed := m.getElapsed()
+	hours := int(elapsed.Hours())
+	minutes := int(elapsed.Minutes()) % 60
+	seconds := int(elapsed.Seconds()) % 60
+	timeDisplay := fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
+
+	m.tmuxBar.Update(tmux.FormatStatusRight(loopDisplay, tokenDisplay, timeDisplay))
+}
+
 // SendMessage is a helper command to send a message to the TUI
 func SendMessage(msg Message) tea.Cmd {
 	return func() tea.Msg {
@@ -675,6 +709,11 @@ func SendDone() tea.Cmd {
 	return func() tea.Msg {
 		return doneMsg{}
 	}
+}
+
+// TickMsgForTest returns a tickMsg for use in tests
+func TickMsgForTest() tea.Msg {
+	return tickMsg(time.Now())
 }
 
 // Run starts the Bubble Tea program
