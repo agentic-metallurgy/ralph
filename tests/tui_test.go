@@ -608,6 +608,32 @@ func TestQuitPersistsElapsedTime(t *testing.T) {
 	}
 }
 
+// TestCacheTokenBreakdownDisplayed tests that cache write and cache read tokens
+// appear in the Usage & Cost panel footer
+func TestCacheTokenBreakdownDisplayed(t *testing.T) {
+	model := tui.NewModel()
+
+	s := stats.NewTokenStats()
+	s.AddUsage(500, 250, 12345, 67890)
+	model.SetStats(s)
+
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	view := model.View()
+
+	if !strings.Contains(view, "12345") {
+		t.Error("View should display cache creation token count (12345)")
+	}
+	if !strings.Contains(view, "67890") {
+		t.Error("View should display cache read token count (67890)")
+	}
+	if !strings.Contains(view, "Cache Write") {
+		t.Error("View should contain 'Cache Write' label")
+	}
+	if !strings.Contains(view, "Cache Read") {
+		t.Error("View should contain 'Cache Read' label")
+	}
+}
+
 // TestStopHotkey tests that 'o' key pauses the loop
 func TestStopHotkey(t *testing.T) {
 	model := tui.NewModel()
