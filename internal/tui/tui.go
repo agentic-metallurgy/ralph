@@ -94,6 +94,7 @@ type Model struct {
 	width          int
 	height         int
 	quitting       bool
+	completed      bool // whether the loop has finished all iterations
 	messages       []Message
 	maxMessages    int
 	stats          *stats.TokenStats
@@ -356,7 +357,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case doneMsg:
-		// Processing is done, but keep TUI running until user quits
+		// Processing is done — freeze timer and mark as completed
+		m.completed = true
+		if !m.timerPaused {
+			m.pausedElapsed = m.baseElapsed + time.Since(m.startTime)
+			m.timerPaused = true
+		}
 		return m, nil
 	}
 
@@ -412,13 +418,16 @@ func (m Model) View() string {
 
 // renderLayout creates the full layout with activity panel and footer
 func (m Model) renderLayout() string {
-	// Check if loop is paused
+	// Check if loop is paused or completed
 	isPaused := m.loop != nil && m.loop.IsPaused()
 
-	// Choose colors based on paused state
+	// Choose colors based on state
 	borderColor := colorBlue
 	statusText := "RUNNING"
-	if isPaused {
+	if m.completed {
+		borderColor = colorGreen
+		statusText = "COMPLETED"
+	} else if isPaused {
 		borderColor = colorRed
 		statusText = "STOPPED"
 	}
@@ -475,7 +484,7 @@ func (m Model) renderFooter() string {
 	labelStyle := lipgloss.NewStyle().
 		Foreground(colorBlue).
 		Align(lipgloss.Right).
-		Width(14)
+		Width(15)
 
 	valueStyle := lipgloss.NewStyle().
 		Foreground(colorLightGray)
@@ -517,12 +526,15 @@ func (m Model) renderFooter() string {
 	isPaused := m.loop != nil && m.loop.IsPaused()
 	statusText := "Running"
 	statusStyle := valueStyle.Foreground(colorGreen)
-	if isPaused {
+	if m.completed {
+		statusText = "Completed"
+		statusStyle = valueStyle.Foreground(colorGreen)
+	} else if isPaused {
 		statusText = "Stopped"
 		statusStyle = valueStyle.Foreground(colorRed)
 	}
 
-	// Agents display
+	// Active Agents display
 	agentDisplay := fmt.Sprintf(" %d", m.activeAgents)
 	agentStyle := valueStyle
 	if m.activeAgents > 0 {
@@ -542,7 +554,7 @@ func (m Model) renderFooter() string {
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Loop:"), valueStyle.Render(fmt.Sprintf(" %s", loopDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Time:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Agents:"), agentStyle.Render(agentDisplay)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Active Agents:"), agentStyle.Render(agentDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Task:"), valueStyle.Render(taskDisplay)),
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
@@ -655,6 +667,13 @@ func SendAgentUpdate(count int) tea.Cmd {
 func SendTaskUpdate(task string) tea.Cmd {
 	return func() tea.Msg {
 		return taskUpdateMsg{task: task}
+	}
+}
+
+// SendDone is a helper command to signal processing completion
+func SendDone() tea.Cmd {
+	return func() tea.Msg {
+		return doneMsg{}
 	}
 }
 
