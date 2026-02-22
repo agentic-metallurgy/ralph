@@ -117,7 +117,7 @@ func (c *Config) Validate() error {
 	} else if c.SpecFolder != "" && c.LoopPrompt == "" {
 		// Only validate spec-folder when using the default embedded prompt.
 		// Custom prompts may not need specs at all.
-		if err := c.validateDirExists(c.SpecFolder, "--spec-folder"); err != nil {
+		if err := c.validateSpecsAvailable(c.SpecFolder); err != nil {
 			return err
 		}
 	}
@@ -147,6 +147,36 @@ func (c *Config) validateFileExists(path, flagName string) error {
 	}
 	if info.IsDir() {
 		return fmt.Errorf("%s: expected file but got directory: %s", flagName, path)
+	}
+
+	return nil
+}
+
+// validateSpecsAvailable checks that a spec folder exists, is a directory, and contains at least one file.
+// Returns user-friendly error messages with guidance on how to fix the issue.
+func (c *Config) validateSpecsAvailable(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("invalid spec folder path %q: %w", path, err)
+	}
+
+	info, err := os.Stat(absPath)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("no spec files found: %s does not exist\nCreate a specs/ directory with spec files, or use --spec-file or --spec-folder to specify a custom location", path)
+	}
+	if err != nil {
+		return fmt.Errorf("cannot access spec folder %q: %w", path, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("--spec-folder: expected directory but got file: %s", path)
+	}
+
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		return fmt.Errorf("cannot read spec folder %q: %w", path, err)
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("no spec files found: %s is empty\nAdd spec files to the directory, or use --spec-file or --spec-folder to specify a custom location", path)
 	}
 
 	return nil
