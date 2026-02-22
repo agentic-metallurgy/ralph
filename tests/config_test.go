@@ -562,6 +562,23 @@ func TestGoalFieldSet(t *testing.T) {
 	}
 }
 
+func TestDaemonFieldDefault(t *testing.T) {
+	cfg := config.NewConfig()
+	if cfg.Daemon {
+		t.Error("Expected Daemon to be false by default")
+	}
+}
+
+func TestDaemonFieldSet(t *testing.T) {
+	cfg := &config.Config{
+		Iterations: 1,
+		Daemon:     true,
+	}
+	if !cfg.Daemon {
+		t.Error("Expected Daemon to be true when set")
+	}
+}
+
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))

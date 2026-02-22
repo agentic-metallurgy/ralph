@@ -28,3 +28,4 @@
 - `--loop-prompt` — custom prompt override
 - `--show-prompt` — print embedded prompt (respects plan mode)
 - `--no-tmux` — skip tmux wrapping
+- `--daemon` / `-d` — run without TUI, exit on completion
