@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -20,10 +21,10 @@ func updateModel(m tui.Model, msg tea.Msg) (tui.Model, tea.Cmd) {
 func TestNewModel(t *testing.T) {
 	model := tui.NewModel()
 
-	// Check initial state via View output
+	// Before WindowSizeMsg, view should be empty (clean alt screen, no flash)
 	view := model.View()
-	if view != "Initializing..." {
-		t.Errorf("Expected 'Initializing...' view before window size, got: %s", view)
+	if view != "" {
+		t.Errorf("Expected empty view before window size (clean init), got: %q", view)
 	}
 }
 
@@ -36,8 +37,8 @@ func TestNewModelWithChannels(t *testing.T) {
 
 	model := tui.NewModelWithChannels(msgChan, doneChan)
 	view := model.View()
-	if view != "Initializing..." {
-		t.Errorf("Expected 'Initializing...' view, got: %s", view)
+	if view != "" {
+		t.Errorf("Expected empty view before window size (clean init), got: %q", view)
 	}
 }
 
@@ -94,10 +95,10 @@ func TestModelWindowSize(t *testing.T) {
 	msg := tea.WindowSizeMsg{Width: 120, Height: 40}
 	updatedModel, _ := updateModel(model, msg)
 
-	// After window size, the view should not be "Initializing..."
+	// After window size, the view should render the full layout (not empty)
 	view := updatedModel.View()
-	if view == "Initializing..." {
-		t.Error("Model should be ready after receiving WindowSizeMsg")
+	if view == "" {
+		t.Error("Model should be ready and render content after receiving WindowSizeMsg")
 	}
 }
 
@@ -673,7 +674,107 @@ func TestHotkeyBarRenders(t *testing.T) {
 
 	view := model.View()
 	// The view should not be empty
-	if view == "" || view == "Initializing..." {
+	if view == "" {
 		t.Error("Model should render with hotkey bar")
+	}
+}
+
+// TestCleanInitNoFlash tests that the initial view is empty (no unstyled text flash)
+func TestCleanInitNoFlash(t *testing.T) {
+	model := tui.NewModel()
+	view := model.View()
+
+	// Before WindowSizeMsg, view should be empty for a clean alt screen
+	if view != "" {
+		t.Errorf("Expected empty initial view (no flash), got: %q", view)
+	}
+}
+
+// TestTinyTerminalShowsMessage tests that a very small terminal shows a size warning
+func TestTinyTerminalShowsMessage(t *testing.T) {
+	model := tui.NewModel()
+
+	// Terminal below minimum dimensions
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 20, Height: 10})
+	view := model.View()
+
+	if !strings.Contains(view, "Terminal too small") {
+		t.Errorf("Expected 'Terminal too small' message for tiny terminal, got: %q", view)
+	}
+	if !strings.Contains(view, "20x10") {
+		t.Error("Terminal too small message should include current dimensions")
+	}
+}
+
+// TestMinimumWidthBoundary tests rendering at exactly the minimum width boundary
+func TestMinimumWidthBoundary(t *testing.T) {
+	model := tui.NewModel()
+
+	// At minimum dimensions: should render full layout
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 40, Height: 15})
+	view := model.View()
+
+	if strings.Contains(view, "Terminal too small") {
+		t.Error("Should render full layout at minimum dimensions (40x15)")
+	}
+	if view == "" {
+		t.Error("View should not be empty at minimum dimensions")
+	}
+}
+
+// TestBelowMinimumHeight tests that below-minimum height shows warning
+func TestBelowMinimumHeight(t *testing.T) {
+	model := tui.NewModel()
+
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 14})
+	view := model.View()
+
+	if !strings.Contains(view, "Terminal too small") {
+		t.Error("Expected 'Terminal too small' message for height below minimum")
+	}
+}
+
+// TestViewportScrollsToBottomOnInit tests that viewport starts scrolled to bottom
+func TestViewportScrollsToBottomOnInit(t *testing.T) {
+	model := tui.NewModel()
+
+	// Add many messages before viewport is initialized
+	for i := 0; i < 20; i++ {
+		model.AddMessage(tui.Message{
+			Role:    tui.RoleAssistant,
+			Content: fmt.Sprintf("Message %d with some content", i),
+		})
+	}
+
+	// Initialize viewport
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 30})
+	view := model.View()
+
+	// The latest messages should be visible (viewport scrolled to bottom)
+	if !strings.Contains(view, "Message 19") {
+		t.Error("Viewport should be scrolled to bottom showing latest messages")
+	}
+}
+
+// TestResizeFromTinyToNormal tests transitioning from too-small to normal size
+func TestResizeFromTinyToNormal(t *testing.T) {
+	model := tui.NewModel()
+	model.AddMessage(tui.Message{Role: tui.RoleAssistant, Content: "RESIZE_TEST_CONTENT"})
+
+	// Start tiny
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 20, Height: 10})
+	view := model.View()
+	if !strings.Contains(view, "Terminal too small") {
+		t.Error("Should show too-small message")
+	}
+
+	// Resize to normal
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	view = model.View()
+	if strings.Contains(view, "Terminal too small") {
+		t.Error("Should show full layout after resize to normal")
+	}
+	if !strings.Contains(view, "RESIZE_TEST_CONTENT") {
+		t.Error("Messages should be visible after resize to normal")
 	}
 }

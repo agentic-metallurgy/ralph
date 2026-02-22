@@ -12,6 +12,12 @@ import (
 	"github.com/cloudosai/ralph-go/internal/stats"
 )
 
+// Minimum terminal dimensions for proper rendering
+const (
+	minWidth  = 40
+	minHeight = 15
+)
+
 // Color palette matching Python visualizer (Tokyo Night theme)
 var (
 	colorBlue      = lipgloss.Color("#7AA2F7")
@@ -84,6 +90,7 @@ func (m Message) GetStyle() lipgloss.Style {
 // Model represents the TUI application state
 type Model struct {
 	ready          bool
+	viewportReady  bool
 	width          int
 	height         int
 	quitting       bool
@@ -181,7 +188,7 @@ type doneMsg struct{}
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tickCmd()}
+	cmds := []tea.Cmd{tea.ClearScreen, tickCmd()}
 
 	// If we have channels, start listening
 	if m.msgChan != nil {
@@ -230,15 +237,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.activityHeight = m.height - m.footerHeight - 2 // account for borders
+		m.ready = true
+
+		// If terminal is too small, skip viewport setup
+		if m.width < minWidth || m.height < minHeight {
+			return m, nil
+		}
+
+		// Guard viewport dimensions against going below 1
+		vpWidth := max(m.width-4, 1)
+		vpHeight := max(m.activityHeight-2, 1)
 
 		// Initialize or update viewport
-		if !m.ready {
-			m.viewport = viewport.New(m.width-4, m.activityHeight-2)
+		if !m.viewportReady {
+			m.viewport = viewport.New(vpWidth, vpHeight)
 			m.viewport.SetContent(m.renderActivityContent())
-			m.ready = true
+			m.viewport.GotoBottom()
+			m.viewportReady = true
 		} else {
-			m.viewport.Width = m.width - 4
-			m.viewport.Height = m.activityHeight - 2
+			m.viewport.Width = vpWidth
+			m.viewport.Height = vpHeight
 		}
 		return m, nil
 
@@ -282,7 +300,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		// Update viewport content and schedule next tick
-		if m.ready {
+		if m.viewportReady {
 			m.viewport.SetContent(m.renderActivityContent())
 			m.viewport.GotoBottom()
 		}
@@ -290,7 +308,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case newMessageMsg:
 		m.AddMessage(Message(msg))
-		if m.ready {
+		if m.viewportReady {
 			m.viewport.SetContent(m.renderActivityContent())
 			m.viewport.GotoBottom()
 		}
@@ -349,7 +367,15 @@ func (m Model) View() string {
 	}
 
 	if !m.ready {
-		return "Initializing..."
+		// Return empty string for a clean alt screen during init
+		// instead of flashing unstyled "Initializing..." text
+		return ""
+	}
+
+	// Show message if terminal is too small for the full layout
+	if m.width < minWidth || m.height < minHeight {
+		return fmt.Sprintf("\n  Terminal too small (%dx%d). Minimum: %dx%d\n",
+			m.width, m.height, minWidth, minHeight)
 	}
 
 	// Render the main layout
