@@ -41,7 +41,7 @@ brews:
     skip_upload: true
     repository:
       owner: agentic-metallurgy
-      name: homebrew-ralph
+      name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
     homepage: "https://github.com/agentic-metallurgy/ralph"
