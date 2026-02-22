@@ -792,6 +792,50 @@ func TestViewportScrollsToBottomOnInit(t *testing.T) {
 	}
 }
 
+// TestViewportScrollPreservedOnTick tests that scrolling up is not undone by ticks
+func TestViewportScrollPreservedOnTick(t *testing.T) {
+	model := tui.NewModel()
+
+	// Add many messages so scrolling is needed
+	for i := 0; i < 20; i++ {
+		model.AddMessage(tui.Message{
+			Role:    tui.RoleAssistant,
+			Content: fmt.Sprintf("SCROLL_MSG_%02d", i),
+		})
+	}
+
+	// Initialize viewport with a height that requires scrolling (small viewport)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 25})
+
+	// Verify we start at bottom (latest message visible)
+	view := model.View()
+	if !strings.Contains(view, "SCROLL_MSG_19") {
+		t.Fatal("Viewport should start at bottom showing latest messages")
+	}
+
+	// Scroll up via multiple PgUp keys to reach the top
+	for i := 0; i < 10; i++ {
+		model, _ = updateModel(model, tea.KeyMsg{Type: tea.KeyPgUp})
+	}
+
+	// After scrolling up, the earliest message should be visible
+	view = model.View()
+	if !strings.Contains(view, "SCROLL_MSG_00") {
+		t.Fatal("After scrolling up, earliest messages should be visible")
+	}
+
+	// Send a tick — scroll position should NOT snap back to bottom
+	model, _ = updateModel(model, tui.TickMsgForTest())
+
+	view = model.View()
+	if strings.Contains(view, "SCROLL_MSG_19") {
+		t.Error("Tick should not snap viewport back to bottom — scroll position must be preserved")
+	}
+	if !strings.Contains(view, "SCROLL_MSG_00") {
+		t.Error("After tick, earliest messages should still be visible (scroll preserved)")
+	}
+}
+
 // TestAgentCountDisplayed tests that agent count appears in the Loop Details panel
 func TestAgentCountDisplayed(t *testing.T) {
 	model := tui.NewModel()

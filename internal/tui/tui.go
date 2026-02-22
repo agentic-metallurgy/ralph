@@ -332,9 +332,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		// Update viewport content and schedule next tick
+		// Note: we do NOT call GotoBottom() here — that would override the user's
+		// scroll position every 250ms, making the viewport effectively unscrollable.
+		// GotoBottom() is only called on viewport init and when new messages arrive.
 		if m.viewportReady {
 			m.viewport.SetContent(m.renderActivityContent())
-			m.viewport.GotoBottom()
 		}
 		m.updateTmuxStatusBar()
 		return m, tickCmd()
