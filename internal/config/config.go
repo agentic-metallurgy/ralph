@@ -25,6 +25,7 @@ type Config struct {
 	ShowPrompt  bool
 	ShowVersion bool
 	NoTmux      bool
+	Subcommand  string // "plan" or "" (default: build mode)
 }
 
 // NewConfig returns a new Config with default values
@@ -37,10 +38,24 @@ func NewConfig() *Config {
 	}
 }
 
+// DetectSubcommand checks os.Args for a subcommand ("plan") before flag parsing.
+// If found, it removes the subcommand from os.Args so flag.Parse() works correctly.
+// Returns the detected subcommand or "".
+func DetectSubcommand() string {
+	if len(os.Args) > 1 && os.Args[1] == "plan" {
+		os.Args = append(os.Args[:1], os.Args[2:]...)
+		return "plan"
+	}
+	return ""
+}
+
 // ParseFlags parses command-line flags and returns a Config.
 // It defines the flags, parses them, and returns the resulting configuration.
 func ParseFlags() *Config {
 	cfg := NewConfig()
+
+	// Detect subcommand before flag parsing
+	cfg.Subcommand = DetectSubcommand()
 
 	flag.IntVar(&cfg.Iterations, "iterations", DefaultIterations, "Number of loop iterations")
 	flag.StringVar(&cfg.SpecFile, "spec-file", "", "Specific spec file to use (overrides spec-folder)")
@@ -52,7 +67,7 @@ func ParseFlags() *Config {
 
 	// Custom usage function to display flags with -- prefix
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [plan] [flags]\n\nSubcommands:\n  plan\tRun in planning mode (uses plan prompt instead of build prompt)\n\nFlags:\n", os.Args[0])
 		flag.VisitAll(func(f *flag.Flag) {
 			// Format: --flag-name type
 			//     description (default: value)
@@ -75,6 +90,11 @@ func ParseFlags() *Config {
 	flag.Parse()
 
 	return cfg
+}
+
+// IsPlanMode returns true if the "plan" subcommand was specified
+func (c *Config) IsPlanMode() bool {
+	return c.Subcommand == "plan"
 }
 
 // Validate checks if the configuration is valid.

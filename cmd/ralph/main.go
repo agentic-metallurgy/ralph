@@ -33,7 +33,13 @@ func main() {
 
 	// Handle --show-prompt: print embedded prompt and exit
 	if cfg.ShowPrompt {
-		content, err := prompt.GetEmbeddedPrompt()
+		var content string
+		var err error
+		if cfg.IsPlanMode() {
+			content, err = prompt.GetEmbeddedPlanPrompt()
+		} else {
+			content, err = prompt.GetEmbeddedPrompt()
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -57,7 +63,12 @@ func main() {
 	}
 
 	// Load the loop prompt (embedded or from override file)
-	promptLoader := prompt.NewLoader(cfg.LoopPrompt)
+	var promptLoader *prompt.Loader
+	if cfg.IsPlanMode() {
+		promptLoader = prompt.NewPlanLoader(cfg.LoopPrompt)
+	} else {
+		promptLoader = prompt.NewLoader(cfg.LoopPrompt)
+	}
 	promptContent, err := promptLoader.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading prompt: %v\n", err)

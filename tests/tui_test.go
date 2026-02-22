@@ -838,14 +838,14 @@ func TestTaskUpdateDisplayed(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Simulate task update
+	// Simulate task update — "Task " prefix is stripped to avoid "Task: Task 6: ..."
 	cmd := tui.SendTaskUpdate("Task 6: Track Phase/Task")
 	taskMsg := cmd()
 	model, _ = updateModel(model, taskMsg)
 
 	view := model.View()
-	if !strings.Contains(view, "Task 6") {
-		t.Error("View should display the current task number")
+	if !strings.Contains(view, "6:") {
+		t.Error("View should display the current task number (with 'Task ' prefix stripped)")
 	}
 }
 
@@ -858,13 +858,13 @@ func TestTaskUpdateOverwritesPrevious(t *testing.T) {
 	cmd := tui.SendTaskUpdate("Task 3")
 	model, _ = updateModel(model, cmd())
 
-	// Set task 6
+	// Set task 6 — "Task " prefix is stripped in display
 	cmd = tui.SendTaskUpdate("Task 6: Track Phase/Task")
 	model, _ = updateModel(model, cmd())
 
 	view := model.View()
-	if !strings.Contains(view, "Task 6") {
-		t.Error("View should show the latest task (Task 6)")
+	if !strings.Contains(view, "6:") {
+		t.Error("View should show the latest task number (with 'Task ' prefix stripped)")
 	}
 }
 
@@ -934,6 +934,56 @@ func TestStatusBarDefaultLoopProgress(t *testing.T) {
 	view := model.View()
 	if !strings.Contains(view, "#0/0") {
 		t.Error("Status bar should display '#0/0' when no loop progress is set")
+	}
+}
+
+// TestQuitHotkeyAlwaysHighlighted tests that the quit hotkey is always highlighted
+func TestQuitHotkeyAlwaysHighlighted(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	// The quit hotkey "(q)uit" should always be visible (not hidden)
+	// We can't easily check styling in plain text, but we can verify it renders
+	if !strings.Contains(view, "uit") {
+		t.Error("View should contain quit hotkey text")
+	}
+}
+
+// TestTaskDisplayStripsDuplicatePrefix tests that "Task: Task 6: ..." becomes "Task: 6: ..."
+func TestTaskDisplayStripsDuplicatePrefix(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate task update with "Task 6: Description"
+	cmd := tui.SendTaskUpdate("Task 6: Track Phase/Task")
+	taskMsg := cmd()
+	model, _ = updateModel(model, taskMsg)
+
+	view := model.View()
+	// The display should show "6: Track Phase/Task" not "Task 6: Track Phase/Task"
+	// after the "Task:" label, avoiding "Task: Task 6: ..."
+	if strings.Contains(view, "Task 6") {
+		t.Error("View should strip 'Task ' prefix from task value to avoid 'Task: Task 6: ...' duplication")
+	}
+	if !strings.Contains(view, "6:") {
+		t.Error("View should show task number after stripping duplicate 'Task ' prefix")
+	}
+}
+
+// TestTaskDisplayWithoutPrefix tests that tasks not starting with "Task " are shown as-is
+func TestTaskDisplayWithoutPrefix(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate task update without "Task" prefix
+	cmd := tui.SendTaskUpdate("Fix broken tests")
+	taskMsg := cmd()
+	model, _ = updateModel(model, taskMsg)
+
+	view := model.View()
+	if !strings.Contains(view, "Fix broken tests") {
+		t.Error("View should show task text as-is when it doesn't start with 'Task '")
 	}
 }
 

@@ -529,10 +529,11 @@ func (m Model) renderFooter() string {
 		agentStyle = valueStyle.Foreground(colorGreen)
 	}
 
-	// Task display
+	// Task display - strip leading "Task " to avoid "Task: Task 6: ..." duplication
 	taskDisplay := " -"
 	if m.currentTask != "" {
-		taskDisplay = fmt.Sprintf(" %s", m.currentTask)
+		task := strings.TrimPrefix(m.currentTask, "Task ")
+		taskDisplay = fmt.Sprintf(" %s", task)
 	}
 
 	loopDetailsContent := lipgloss.JoinVertical(
@@ -557,8 +558,8 @@ func (m Model) renderFooter() string {
 	dimStyle := lipgloss.NewStyle().Foreground(colorDimGray)
 	highlightStyle := lipgloss.NewStyle().Bold(true).Foreground(colorLightGray)
 
-	quitKey := dimStyle.Render("(q)")
-	quitLabel := dimStyle.Render("uit")
+	quitKey := highlightStyle.Render("(q)")
+	quitLabel := highlightStyle.Render("uit")
 	stopKey := dimStyle.Render("st(o)p")
 	startKey := dimStyle.Render("st(a)rt")
 

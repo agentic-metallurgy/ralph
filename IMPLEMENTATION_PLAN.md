@@ -41,26 +41,33 @@ Added a centered status bar between the footer panels and the hotkey bar showing
 - Added 4 tests: `TestStatusBarDisplayed`, `TestStatusBarShowsLoopProgress`, `TestStatusBarShowsTokenCount`, `TestStatusBarDefaultLoopProgress`
 
 ## TASK 7: Add `ralph plan` Subcommand [LOW PRIORITY]
-**Status: TODO**
-Add a `plan` subcommand/mode that uses `specs/PROMPT_plan.md` as the loop prompt instead of the build prompt. Requires:
-- Detect `plan` as a positional argument before flag parsing
-- Embed `PROMPT_plan.md` alongside `prompt.md` in the `internal/prompt/assets/` directory
-- When `ralph plan` is run, use the plan prompt instead of the build prompt
-- May need to restructure CLI argument parsing to support subcommands
+**Status: DONE**
+Added `plan` subcommand/mode that uses the embedded plan prompt (`specs/PROMPT_plan.md`) instead of the build prompt.
+- Added `DetectSubcommand()` in `internal/config/config.go` — scans `os.Args` for "plan" before flag parsing and strips it so flags parse correctly
+- Added `Subcommand` field to `Config` and `IsPlanMode()` accessor
+- Embedded `plan_prompt.md` alongside `prompt.md` in `internal/prompt/assets/`
+- Added `NewPlanLoader()`, `GetEmbeddedPlanPrompt()`, and `IsPlanMode()` to prompt package
+- Updated `main.go` to select plan or build prompt based on subcommand (both `--show-prompt` and normal run)
+- Updated usage message to show `[plan]` subcommand
+- Added 8 tests: `TestLoadEmbeddedPlanPrompt`, `TestGetEmbeddedPlanPrompt`, `TestNewPlanLoader`, `TestPlanLoaderWithOverride`, `TestBuildAndPlanPromptsAreDifferent`, `TestPromptIsPlanMode`, `TestIsPlanMode`, `TestSubcommandFieldDefault`
 
 ## TASK 8: Highlight Quit Hotkey [LOW PRIORITY]
-**Status: TODO**
-Spec says: "light up the 'quit' option, just like we light up start, when we stop (even though it's available during running, too)". This means the `(q)uit` hotkey should always be highlighted (bold, light gray) regardless of running/paused state, matching how `st(a)rt` is highlighted when paused. Currently `(q)uit` is always dim gray.
-- Single change in `renderFooter()`: set `quitKey` and `quitLabel` to use `highlightStyle` instead of `dimStyle`
+**Status: DONE**
+Changed `(q)uit` hotkey to always use `highlightStyle` (bold, light gray) instead of `dimStyle`, matching spec requirement.
+- Single change in `renderFooter()`: `quitKey` and `quitLabel` now use `highlightStyle`
+- Added test: `TestQuitHotkeyAlwaysHighlighted`
 
 ## TASK 9: Remove Duplicate "Task" in Task Display [LOW PRIORITY]
-**Status: TODO**
-Spec says: "Task: should remove 'Task' from the title of the task it's showing so it doesn't look like `Task: Task: 6`". When `currentTask` starts with "Task", the label already says "Task:" so it would display as `Task: Task 6: ...`. Should strip leading "Task" from the value.
-- Single change in `renderFooter()` task display section
+**Status: DONE**
+Strip leading "Task " from `currentTask` value in the footer to avoid "Task: Task 6: ..." display duplication.
+- Added `strings.TrimPrefix(m.currentTask, "Task ")` in `renderFooter()` task display section
+- Updated existing tests (`TestTaskUpdateDisplayed`, `TestTaskUpdateOverwritesPrevious`) to match new behavior
+- Added 2 tests: `TestTaskDisplayStripsDuplicatePrefix`, `TestTaskDisplayWithoutPrefix`
 
 ## Notes
-- All 116 tests pass (verified 2026-02-22)
+- All 128 tests pass (verified 2026-02-22)
 - Go 1.25.3, BubbleTea TUI framework
 - Build: `go build -o ralph ./cmd/ralph`
 - Test: `go test -v ./tests/`
 - `--version` outputs "ralph dev" in dev builds, version injected via goreleaser in releases
+- All tasks from `specs/default.md` are now complete
