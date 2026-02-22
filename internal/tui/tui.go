@@ -100,6 +100,7 @@ type Model struct {
 	currentLoop    int
 	totalLoops     int
 	activeAgents   int
+	currentTask    string // Current IMPLEMENTATION_PLAN.md task (e.g., "Task 6: Track Phase/Task")
 	startTime      time.Time
 	baseElapsed    time.Duration // elapsed time from previous sessions
 	timerPaused    bool          // whether elapsed time tracking is paused
@@ -126,7 +127,7 @@ func NewModel() Model {
 		totalLoops:     0,
 		startTime:      time.Now(),
 		activityHeight: 0,
-		footerHeight:   10,
+		footerHeight:   11,
 	}
 }
 
@@ -187,6 +188,11 @@ type statsUpdateMsg struct {
 // agentUpdateMsg is sent to update active agent count
 type agentUpdateMsg struct {
 	count int
+}
+
+// taskUpdateMsg is sent to update the current IMPLEMENTATION_PLAN.md task
+type taskUpdateMsg struct {
+	task string
 }
 
 // doneMsg is sent when processing is complete
@@ -335,6 +341,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentUpdateMsg:
 		m.activeAgents = msg.count
+		return m, nil
+
+	case taskUpdateMsg:
+		m.currentTask = msg.task
 		return m, nil
 
 	case doneMsg:
@@ -516,6 +526,12 @@ func (m Model) renderFooter() string {
 		agentStyle = valueStyle.Foreground(colorGreen)
 	}
 
+	// Task display
+	taskDisplay := " -"
+	if m.currentTask != "" {
+		taskDisplay = fmt.Sprintf(" %s", m.currentTask)
+	}
+
 	loopDetailsContent := lipgloss.JoinVertical(
 		lipgloss.Left,
 		titleStyle.Render("Loop Details"),
@@ -523,6 +539,7 @@ func (m Model) renderFooter() string {
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Elapsed:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Agents:"), agentStyle.Render(agentDisplay)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Task:"), valueStyle.Render(taskDisplay)),
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
 
@@ -585,6 +602,13 @@ func SendStatsUpdate(s *stats.TokenStats) tea.Cmd {
 func SendAgentUpdate(count int) tea.Cmd {
 	return func() tea.Msg {
 		return agentUpdateMsg{count: count}
+	}
+}
+
+// SendTaskUpdate is a helper command to update the current task
+func SendTaskUpdate(task string) tea.Cmd {
+	return func() tea.Msg {
+		return taskUpdateMsg{task: task}
 	}
 }
 

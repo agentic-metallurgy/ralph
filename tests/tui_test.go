@@ -822,6 +822,66 @@ func TestSendAgentUpdateCmd(t *testing.T) {
 	}
 }
 
+// TestTaskDisplayDefault tests that the task row shows "-" by default
+func TestTaskDisplayDefault(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "Task:") {
+		t.Error("View should contain 'Task:' label")
+	}
+}
+
+// TestTaskUpdateDisplayed tests that sending a task update shows the task
+func TestTaskUpdateDisplayed(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate task update
+	cmd := tui.SendTaskUpdate("Task 6: Track Phase/Task")
+	taskMsg := cmd()
+	model, _ = updateModel(model, taskMsg)
+
+	view := model.View()
+	if !strings.Contains(view, "Task 6") {
+		t.Error("View should display the current task number")
+	}
+}
+
+// TestTaskUpdateOverwritesPrevious tests that new task updates replace old ones
+func TestTaskUpdateOverwritesPrevious(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Set task 3
+	cmd := tui.SendTaskUpdate("Task 3")
+	model, _ = updateModel(model, cmd())
+
+	// Set task 6
+	cmd = tui.SendTaskUpdate("Task 6: Track Phase/Task")
+	model, _ = updateModel(model, cmd())
+
+	view := model.View()
+	if !strings.Contains(view, "Task 6") {
+		t.Error("View should show the latest task (Task 6)")
+	}
+}
+
+// TestSendTaskUpdateCmd tests the SendTaskUpdate helper command
+func TestSendTaskUpdateCmd(t *testing.T) {
+	cmd := tui.SendTaskUpdate("Task 5")
+
+	if cmd == nil {
+		t.Error("SendTaskUpdate should return a command")
+	}
+
+	result := cmd()
+	if result == nil {
+		t.Error("Command should return a task update message")
+	}
+}
+
 // TestResizeFromTinyToNormal tests transitioning from too-small to normal size
 func TestResizeFromTinyToNormal(t *testing.T) {
 	model := tui.NewModel()

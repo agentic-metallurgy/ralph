@@ -85,11 +85,19 @@ type ToolResult struct {
 	Content string // Truncated content
 }
 
+// TaskReference represents a detected IMPLEMENTATION_PLAN.md task reference
+type TaskReference struct {
+	Number      int
+	Description string // Optional description (e.g., "Track IMPLEMENTATION_PLAN.md Phase/Task")
+}
+
 // Parser handles parsing of Claude's stream-json output
 type Parser struct {
 	systemReminderRegex *regexp.Regexp
 	loopMarkerRegex     *regexp.Regexp
 	thinkingRegex       *regexp.Regexp
+	taskRegex           *regexp.Regexp
+	taskWithDescRegex   *regexp.Regexp
 }
 
 // NewParser creates a new Parser instance
@@ -98,6 +106,8 @@ func NewParser() *Parser {
 		systemReminderRegex: regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`),
 		loopMarkerRegex:     regexp.MustCompile(`LOOP (\d+)/(\d+)`),
 		thinkingRegex:       regexp.MustCompile(`(?s)<thinking>(.*?)</thinking>`),
+		taskRegex:           regexp.MustCompile(`(?i)TASK\s+(\d+)`),
+		taskWithDescRegex:   regexp.MustCompile(`(?i)TASK\s+(\d+)\s*:\s*([^\[\n]+)`),
 	}
 }
 
@@ -291,4 +301,36 @@ func (p *Parser) GetTaskToolUseIDs(msg *ParsedMessage) []string {
 		}
 	}
 	return ids
+}
+
+// ExtractTaskReference scans text for references to IMPLEMENTATION_PLAN.md tasks
+// (e.g., "TASK 6", "Task 3: Some Description"). Returns the last match found,
+// or nil if no task reference is detected.
+func (p *Parser) ExtractTaskReference(text string) *TaskReference {
+	// Try the more specific pattern first (TASK N: description)
+	descMatches := p.taskWithDescRegex.FindAllStringSubmatch(text, -1)
+	if len(descMatches) > 0 {
+		last := descMatches[len(descMatches)-1]
+		num := parseInt(last[1])
+		if num > 0 {
+			return &TaskReference{
+				Number:      num,
+				Description: strings.TrimSpace(last[2]),
+			}
+		}
+	}
+
+	// Fall back to simple pattern (TASK N)
+	matches := p.taskRegex.FindAllStringSubmatch(text, -1)
+	if len(matches) > 0 {
+		last := matches[len(matches)-1]
+		num := parseInt(last[1])
+		if num > 0 {
+			return &TaskReference{
+				Number: num,
+			}
+		}
+	}
+
+	return nil
 }

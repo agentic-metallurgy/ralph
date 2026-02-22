@@ -253,12 +253,20 @@ func handleParsedMessage(
 	case parser.MessageTypeAssistant:
 		content := jsonParser.ExtractContent(parsed)
 
-		// Display text content
+		// Display text content and scan for task references
 		for _, text := range content.TextContent {
 			if text != "" {
 				msgChan <- tui.Message{
 					Role:    tui.RoleAssistant,
 					Content: text,
+				}
+				// Detect IMPLEMENTATION_PLAN.md task references
+				if ref := jsonParser.ExtractTaskReference(text); ref != nil {
+					taskLabel := fmt.Sprintf("Task %d", ref.Number)
+					if ref.Description != "" {
+						taskLabel = fmt.Sprintf("Task %d: %s", ref.Number, ref.Description)
+					}
+					program.Send(tui.SendTaskUpdate(taskLabel)())
 				}
 			}
 		}
@@ -274,12 +282,20 @@ func handleParsedMessage(
 	case parser.MessageTypeUser:
 		content := jsonParser.ExtractContent(parsed)
 
-		// Display tool results
+		// Display tool results and scan for task references
 		for _, toolResult := range content.ToolResults {
 			if toolResult.Content != "" {
 				msgChan <- tui.Message{
 					Role:    tui.RoleUser,
 					Content: toolResult.Content,
+				}
+				// Detect IMPLEMENTATION_PLAN.md task references in tool results
+				if ref := jsonParser.ExtractTaskReference(toolResult.Content); ref != nil {
+					taskLabel := fmt.Sprintf("Task %d", ref.Number)
+					if ref.Description != "" {
+						taskLabel = fmt.Sprintf("Task %d: %s", ref.Number, ref.Description)
+					}
+					program.Send(tui.SendTaskUpdate(taskLabel)())
 				}
 			}
 		}

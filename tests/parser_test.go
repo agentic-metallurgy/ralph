@@ -812,3 +812,92 @@ func TestContentItemToolUseIDParsed(t *testing.T) {
 		t.Errorf("Expected ToolUseID 'toolu_abc123', got %q", msg.Message.Content[0].ToolUseID)
 	}
 }
+
+func TestExtractTaskReference(t *testing.T) {
+	p := parser.NewParser()
+
+	tests := []struct {
+		name       string
+		input      string
+		expectNil  bool
+		expectNum  int
+		expectDesc string
+	}{
+		{
+			"no task reference",
+			"Just a regular message about coding",
+			true, 0, "",
+		},
+		{
+			"empty string",
+			"",
+			true, 0, "",
+		},
+		{
+			"simple TASK N",
+			"I will implement TASK 6 now",
+			false, 6, "",
+		},
+		{
+			"lowercase task n",
+			"working on task 3 implementation",
+			false, 3, "",
+		},
+		{
+			"TASK with description",
+			"## TASK 6: Track IMPLEMENTATION_PLAN.md Phase/Task",
+			false, 6, "Track IMPLEMENTATION_PLAN.md Phase/Task",
+		},
+		{
+			"TASK with description and status bracket",
+			"## TASK 1: Replace Control Panel with Hotkey Bar [HIGH PRIORITY]",
+			false, 1, "Replace Control Panel with Hotkey Bar",
+		},
+		{
+			"multiple tasks picks last",
+			"After completing TASK 3, I will start TASK 5",
+			false, 5, "",
+		},
+		{
+			"IMPLEMENTATION_PLAN.md content with description",
+			"TASK 2: Fix Message Truncation (spec item 1)",
+			false, 2, "Fix Message Truncation (spec item 1)",
+		},
+		{
+			"task number zero ignored",
+			"TASK 0 should not match",
+			true, 0, "",
+		},
+		{
+			"mixed case",
+			"Let me work on Task 7 next",
+			false, 7, "",
+		},
+		{
+			"task in tool result content",
+			"Read IMPLEMENTATION_PLAN.md:\n## TASK 4: Fix Visual Artifacts [MEDIUM PRIORITY]\n**Status: DONE**",
+			false, 4, "Fix Visual Artifacts",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ref := p.ExtractTaskReference(tt.input)
+			if tt.expectNil {
+				if ref != nil {
+					t.Errorf("Expected nil, got Task %d (desc: %q)", ref.Number, ref.Description)
+				}
+				return
+			}
+			if ref == nil {
+				t.Fatal("Expected non-nil TaskReference")
+			}
+			if ref.Number != tt.expectNum {
+				t.Errorf("Expected number %d, got %d", tt.expectNum, ref.Number)
+			}
+			if ref.Description != tt.expectDesc {
+				t.Errorf("Expected description %q, got %q", tt.expectDesc, ref.Description)
+			}
+		})
+	}
+}
