@@ -187,11 +187,26 @@ Based on `specs/default.md`, the following tasks are needed:
 - Updated `TestLoopOutputMessages` assertion to match new mock output format
 - Validation: all 219 tests pass, `go vet ./...` clean, `go build` succeeds
 
-## TASK 10: Remove Old In-App Status Bar [MEDIUM PRIORITY]
-**Status: TODO**
-- Spec: "The old in-app status bar that was previously shown should be removed"
-- The `renderStatusBar()` in-app status bar duplicates the tmux status bar content
-- Should remove it when tmux bar is active, or remove entirely per spec
+## TASK 10: Remove Old In-App Status Bar + Full-Width Tmux Bar [MEDIUM PRIORITY]
+**Status: DONE**
+- Spec: "the status bar we had before should be removed"
+- Spec: "the status bar that we've moved into the tmux status bar should extend the full width and override the default tmux statusbar completely"
+- Changed `internal/tui/tui.go`:
+  - Removed `renderStatusBar()` method entirely (was rendering duplicate of tmux status bar content)
+  - Removed status bar call from `renderFooter()` — footer now only renders panels + hotkey bar
+  - Reduced `footerHeight` from 12 to 11 (one fewer row without status bar)
+  - Changed panel height formula from `footerHeight - 4` to `footerHeight - 3` (no longer accounting for status bar row)
+- Changed `internal/tmux/tmux.go`:
+  - `NewStatusBar()` now sets `status-left ""` and `status-left-length 0` to clear the left side of the tmux bar
+  - Increased `status-right-length` from 100 to 200 for full-width coverage
+  - `Restore()` now also unsets `status-left` and `status-left-length` session overrides on cleanup
+- Updated tests in `tests/tui_test.go`:
+  - Replaced `TestStatusBarDisplayed` with `TestInAppStatusBarRemoved` (verifies old labels are NOT present)
+  - Renamed `TestStatusBarShowsLoopProgress` → `TestFooterShowsLoopProgress`
+  - Renamed `TestStatusBarShowsTokenCount` → `TestFooterShowsTokenCount`
+  - Renamed `TestStatusBarDefaultLoopProgress` → `TestFooterDefaultLoopProgress`
+  - Updated comment in `TestTimerPausesOnCompletion`
+- Validation: all 219 tests pass, `go vet ./...` clean, `go build` succeeds
 
 ## TASK 11: Truncation Fix [MEDIUM PRIORITY]
 **Status: TODO**

@@ -637,7 +637,7 @@ func TestTimerPausesOnCompletion(t *testing.T) {
 	view2 := model.View()
 
 	// Both should contain the same elapsed time (frozen)
-	// Extract the elapsed time strings - they appear in both the footer panel and status bar
+	// Extract the elapsed time strings from the footer panel
 	// Since timer is frozen, subsequent renders should show the same time
 	if view1 != view2 {
 		// Views might differ due to tick, but elapsed time should be the same
@@ -963,37 +963,36 @@ func TestSendTaskUpdateCmd(t *testing.T) {
 	}
 }
 
-// TestStatusBarDisplayed tests that the status bar labels appear in the view
-func TestStatusBarDisplayed(t *testing.T) {
+// TestInAppStatusBarRemoved tests that the old in-app status bar is no longer rendered
+// (status bar content is now only in the tmux status-right bar)
+func TestInAppStatusBarRemoved(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	view := model.View()
-	if !strings.Contains(view, "current loop:") {
-		t.Error("View should contain 'current loop:' label in status bar")
+	// The old in-app status bar labels should NOT appear in the view
+	if strings.Contains(view, "current loop:") {
+		t.Error("View should NOT contain 'current loop:' label — in-app status bar was removed")
 	}
-	if !strings.Contains(view, "tokens:") {
-		t.Error("View should contain 'tokens:' label in status bar")
-	}
-	if !strings.Contains(view, "elapsed:") {
-		t.Error("View should contain 'elapsed:' label in status bar")
+	if strings.Contains(view, "elapsed:") {
+		t.Error("View should NOT contain 'elapsed:' label — in-app status bar was removed")
 	}
 }
 
-// TestStatusBarShowsLoopProgress tests that the status bar shows current loop progress
-func TestStatusBarShowsLoopProgress(t *testing.T) {
+// TestFooterShowsLoopProgress tests that the footer panel shows current loop progress
+func TestFooterShowsLoopProgress(t *testing.T) {
 	model := tui.NewModel()
 	model.SetLoopProgress(3, 5)
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	view := model.View()
 	if !strings.Contains(view, "#3/5") {
-		t.Error("Status bar should display loop progress as '#3/5'")
+		t.Error("Footer panel should display loop progress as '#3/5'")
 	}
 }
 
-// TestStatusBarShowsTokenCount tests that the status bar shows human-readable token count
-func TestStatusBarShowsTokenCount(t *testing.T) {
+// TestFooterShowsTokenCount tests that the footer panel shows human-readable token count
+func TestFooterShowsTokenCount(t *testing.T) {
 	model := tui.NewModel()
 	s := stats.NewTokenStats()
 	s.AddUsage(500000, 250000, 100000, 50000)
@@ -1001,20 +1000,20 @@ func TestStatusBarShowsTokenCount(t *testing.T) {
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	view := model.View()
-	// 900k total tokens should appear somewhere in the view
+	// 900k total tokens should appear in the footer panel
 	if !strings.Contains(view, "900k") {
-		t.Error("Status bar should display human-readable token count (expected '900k')")
+		t.Error("Footer panel should display human-readable token count (expected '900k')")
 	}
 }
 
-// TestStatusBarDefaultLoopProgress tests status bar with no loop progress set
-func TestStatusBarDefaultLoopProgress(t *testing.T) {
+// TestFooterDefaultLoopProgress tests footer panel with no loop progress set
+func TestFooterDefaultLoopProgress(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	view := model.View()
 	if !strings.Contains(view, "#0/0") {
-		t.Error("Status bar should display '#0/0' when no loop progress is set")
+		t.Error("Footer panel should display '#0/0' when no loop progress is set")
 	}
 }
 

@@ -21,9 +21,12 @@ func NewStatusBar() *StatusBar {
 		return &StatusBar{active: false}
 	}
 	sb := &StatusBar{active: true}
-	// Ensure status-right-length is large enough for our content
+	// Override the tmux status bar completely: clear the left side and extend
+	// status-right to full width so our content takes over the entire bar.
 	if path := FindBinary(); path != "" {
-		exec.Command(path, "set-option", "status-right-length", "100").Run()
+		exec.Command(path, "set-option", "status-left", "").Run()
+		exec.Command(path, "set-option", "status-left-length", "0").Run()
+		exec.Command(path, "set-option", "status-right-length", "200").Run()
 	}
 	return sb
 }
@@ -56,6 +59,8 @@ func (s *StatusBar) Restore() {
 	}
 	exec.Command(path, "set-option", "-u", "status-right").Run()
 	exec.Command(path, "set-option", "-u", "status-right-length").Run()
+	exec.Command(path, "set-option", "-u", "status-left").Run()
+	exec.Command(path, "set-option", "-u", "status-left-length").Run()
 }
 
 // FormatStatusRight builds the tmux status bar content string.
