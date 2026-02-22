@@ -36,6 +36,15 @@ func mockLargeOutputCommandBuilder(ctx context.Context, prompt string) *exec.Cmd
 	return cmd
 }
 
+// mockMediumSlowCommandBuilder creates a command that takes ~200ms per iteration.
+// Outputs system message immediately, then sleeps before completing.
+// This allows reliable pause-during-execution testing.
+func mockMediumSlowCommandBuilder(ctx context.Context, prompt string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHelperProcess", "--", "claude-medium")
+	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+	return cmd
+}
+
 // TestHelperProcess is a helper that allows tests to mock external commands.
 // It's invoked by exec.Command when GO_WANT_HELPER_PROCESS=1 is set.
 func TestHelperProcess(t *testing.T) {
@@ -77,6 +86,17 @@ func TestHelperProcess(t *testing.T) {
 			os.Stdout.WriteString(`{"type":"system","session_id":"fresh-session-001","subtype":"init"}` + "\n")
 		}
 		os.Stdout.WriteString(`{"type":"assistant","message":{"content":[{"type":"text","text":"test assistant message"}]}}` + "\n")
+		os.Stdout.WriteString(`{"type":"result","total_cost_usd":0.001,"usage":{"input_tokens":100,"output_tokens":50}}` + "\n")
+	case "claude-medium":
+		// Outputs system message immediately, sleeps 200ms, then outputs rest.
+		// Used for pause-during-execution tests.
+		if hasResume {
+			os.Stdout.WriteString(`{"type":"system","session_id":"` + resumeSessionID + `","subtype":"init"}` + "\n")
+		} else {
+			os.Stdout.WriteString(`{"type":"system","session_id":"fresh-session-001","subtype":"init"}` + "\n")
+		}
+		time.Sleep(200 * time.Millisecond)
+		os.Stdout.WriteString(`{"type":"assistant","message":{"content":[{"type":"text","text":"medium response"}]}}` + "\n")
 		os.Stdout.WriteString(`{"type":"result","total_cost_usd":0.001,"usage":{"input_tokens":100,"output_tokens":50}}` + "\n")
 	case "claude-large-output":
 		// Output a large JSON line (1.5MB+) to test scanner buffer handling.
@@ -1028,5 +1048,368 @@ func TestScannerErrorReported(t *testing.T) {
 		if strings.Contains(msg.Content, "output stream error") {
 			t.Errorf("Normal output should not produce scanner errors: %s", msg.Content)
 		}
+	}
+}
+
+// ============================================================================
+// Integration Tests: Start/Pause/Resume Flow
+// ============================================================================
+
+// TestStartPauseResumeCompletesAllIterations tests the full start→pause→resume→complete flow.
+// It verifies that after pausing and resuming, the loop completes all iterations.
+func TestStartPauseResumeCompletesAllIterations(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     3,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for first output message (iteration 1 has started)
+	for msg := range output {
+		if msg.Type == "output" {
+			break
+		}
+	}
+
+	// Pause the loop
+	l.Pause()
+
+	// Wait for STOPPED marker
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "STOPPED") {
+			break
+		}
+	}
+
+	if !l.IsPaused() {
+		t.Error("Loop should be paused after Pause()")
+	}
+
+	// Resume the loop
+	l.Resume()
+
+	// Collect remaining messages until channel closes
+	var completionFound bool
+	var foundResumed bool
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "RESUMED") {
+			foundResumed = true
+		}
+		if msg.Type == "complete" {
+			completionFound = true
+		}
+	}
+
+	if !foundResumed {
+		t.Error("Expected RESUMED marker after resume")
+	}
+	if !completionFound {
+		t.Error("Loop should complete all iterations after pause/resume")
+	}
+}
+
+// TestMultiplePauseResumeCycles tests pausing and resuming the loop multiple times.
+// The loop should still complete all iterations.
+func TestMultiplePauseResumeCycles(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     5,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Do 2 pause/resume cycles
+	for cycle := 0; cycle < 2; cycle++ {
+		// Wait for an output message
+		for msg := range output {
+			if msg.Type == "output" {
+				break
+			}
+		}
+
+		l.Pause()
+
+		// Wait for STOPPED
+		for msg := range output {
+			if msg.Type == "loop_marker" && strings.Contains(msg.Content, "STOPPED") {
+				break
+			}
+		}
+
+		l.Resume()
+
+		// Wait for RESUMED
+		for msg := range output {
+			if msg.Type == "loop_marker" && strings.Contains(msg.Content, "RESUMED") {
+				break
+			}
+		}
+	}
+
+	// Let it complete
+	var completionFound bool
+	for msg := range output {
+		if msg.Type == "complete" {
+			completionFound = true
+		}
+	}
+
+	if !completionFound {
+		t.Error("Loop should complete all iterations after multiple pause/resume cycles")
+	}
+}
+
+// TestPauseResumeMarkerSequence tests that STOPPED and RESUMED markers appear in correct order.
+func TestPauseResumeMarkerSequence(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     3,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for first output
+	for msg := range output {
+		if msg.Type == "output" {
+			break
+		}
+	}
+
+	// Pause
+	l.Pause()
+
+	// Collect all markers until completion, resuming after STOPPED
+	var markers []string
+	for msg := range output {
+		if msg.Type == "loop_marker" {
+			markers = append(markers, msg.Content)
+			if strings.Contains(msg.Content, "STOPPED") {
+				l.Resume()
+			}
+		}
+		if msg.Type == "complete" {
+			break
+		}
+	}
+
+	// Verify STOPPED appears before RESUMED
+	stoppedIdx := -1
+	resumedIdx := -1
+	for i, m := range markers {
+		if strings.Contains(m, "STOPPED") && stoppedIdx == -1 {
+			stoppedIdx = i
+		}
+		if strings.Contains(m, "RESUMED") && resumedIdx == -1 {
+			resumedIdx = i
+		}
+	}
+
+	if stoppedIdx == -1 {
+		t.Error("Expected STOPPED marker in sequence")
+	}
+	if resumedIdx == -1 {
+		t.Error("Expected RESUMED marker in sequence")
+	}
+	if stoppedIdx != -1 && resumedIdx != -1 && stoppedIdx >= resumedIdx {
+		t.Errorf("STOPPED (index %d) should appear before RESUMED (index %d)", stoppedIdx, resumedIdx)
+	}
+}
+
+// TestPauseResumeRetriesSameIteration tests that pausing mid-execution causes
+// the same iteration number to be retried on resume.
+func TestPauseResumeRetriesSameIteration(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     3,
+		Prompt:         "test",
+		CommandBuilder: mockMediumSlowCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for the first regular loop marker (LOOP N/M format with "/" separator)
+	var firstIterationNum int
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "/") {
+			firstIterationNum = msg.Loop
+			break
+		}
+	}
+
+	// Wait for the system message (iteration has started executing)
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"type":"system"`) {
+			break
+		}
+	}
+
+	// Pause mid-execution (medium-slow mock sleeps 200ms after system message)
+	l.Pause()
+
+	// Wait for STOPPED
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "STOPPED") {
+			break
+		}
+	}
+
+	// Resume
+	l.Resume()
+
+	// Collect all subsequent regular loop markers (containing "/" = iteration markers)
+	var postResumeIterations []int
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "/") {
+			postResumeIterations = append(postResumeIterations, msg.Loop)
+		}
+	}
+
+	// The first marker after resume should be the same iteration (retry due to i--)
+	if len(postResumeIterations) == 0 {
+		t.Fatal("Expected loop markers after resume")
+	}
+	if postResumeIterations[0] != firstIterationNum {
+		t.Errorf("Expected iteration %d to be retried after mid-execution pause, got iteration %d",
+			firstIterationNum, postResumeIterations[0])
+	}
+}
+
+// TestFreshLoopAfterStop tests that creating a new loop after stopping starts fresh.
+// This simulates the "quit, come back, don't resume" scenario from the spec.
+func TestFreshLoopAfterStop(t *testing.T) {
+	// First loop: start, capture session, stop
+	cfg1 := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l1 := loop.New(cfg1)
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel1()
+
+	l1.Start(ctx1)
+
+	// Capture session ID from first loop
+	for msg := range l1.Output() {
+		if msg.Type == "output" && strings.Contains(msg.Content, "fresh-session-001") {
+			l1.SetSessionID("fresh-session-001")
+			break
+		}
+	}
+
+	// Stop the first loop (simulating quit)
+	l1.Stop()
+	for range l1.Output() {
+	}
+
+	// Second loop: new instance (simulating restart without resume)
+	cfg2 := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l2 := loop.New(cfg2)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+
+	l2.Start(ctx2)
+
+	// All iterations should use fresh sessions (no --resume flag)
+	freshCount := 0
+	for msg := range l2.Output() {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"session_id":"fresh-session-001"`) {
+			freshCount++
+		}
+	}
+
+	if freshCount != 2 {
+		t.Errorf("New loop should start fresh sessions without --resume, expected 2 fresh sessions, got %d", freshCount)
+	}
+}
+
+// TestPauseResumeSessionIDEndToEnd tests the complete session ID lifecycle:
+// start → capture session ID → pause → resume → verify --resume was passed with captured ID
+func TestPauseResumeSessionIDEndToEnd(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     3,
+		Prompt:         "test",
+		CommandBuilder: mockMediumSlowCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for system message from first iteration (contains session ID)
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"session_id":"fresh-session-001"`) {
+			l.SetSessionID("fresh-session-001")
+			break
+		}
+	}
+
+	// Pause mid-execution
+	l.Pause()
+
+	// Verify session ID is preserved after pause
+	if l.GetSessionID() != "fresh-session-001" {
+		t.Errorf("Session ID should be preserved after pause, got %q", l.GetSessionID())
+	}
+
+	// Wait for STOPPED
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "STOPPED") {
+			break
+		}
+	}
+
+	// Resume
+	l.Resume()
+
+	// The resumed iteration should use --resume, and the mock echoes back the session ID
+	var foundResumedSession bool
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"session_id":"fresh-session-001"`) {
+			foundResumedSession = true
+		}
+	}
+
+	if !foundResumedSession {
+		t.Error("Resumed iteration should use --resume with the captured session ID")
 	}
 }

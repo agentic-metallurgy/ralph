@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -1357,5 +1358,135 @@ func TestMultipleAddLoopPresses(t *testing.T) {
 
 	if l.GetIterations() != 6 {
 		t.Errorf("Expected loop iterations to be 6 after 3 '+' presses, got %d", l.GetIterations())
+	}
+}
+
+// ============================================================================
+// Integration Tests: TUI + Loop Pause/Resume
+// ============================================================================
+
+// TestTUIPauseResumeTimerFreezes tests that pressing 'p' freezes the elapsed timer
+// and pressing 'r' resumes it.
+func TestTUIPauseResumeTimerFreezes(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press 'p' to pause (timer freezes even without loop running)
+	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+	model, _ = updateModel(model, keyP)
+
+	// When timer is paused, two renders separated by time should be identical
+	// because getElapsed() returns the frozen pausedElapsed value
+	view1 := model.View()
+	time.Sleep(50 * time.Millisecond)
+	view2 := model.View()
+
+	if view1 != view2 {
+		t.Error("With paused timer, two consecutive View() calls should produce identical output")
+	}
+
+	// Press 'r' to resume
+	keyR := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
+	model, _ = updateModel(model, keyR)
+
+	// After resume, view should still render without panic
+	view3 := model.View()
+	if view3 == "" {
+		t.Error("View should not be empty after resume")
+	}
+}
+
+// TestTUIPauseResumeWithRunningLoop tests the full TUI + loop integration:
+// pressing 'p' pauses a running loop, pressing 'r' resumes it.
+func TestTUIPauseResumeWithRunningLoop(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     100,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	model := tui.NewModel()
+	model.SetLoop(l)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	l.Start(ctx)
+
+	// Drain output to prevent channel blocking
+	go func() {
+		for range l.Output() {
+		}
+	}()
+
+	// Wait for loop to start running
+	time.Sleep(50 * time.Millisecond)
+
+	// Press 'p' to pause
+	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+	model, _ = updateModel(model, keyP)
+
+	// Give the loop time to process pause
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify loop is paused
+	if !l.IsPaused() {
+		t.Error("Loop should be paused after pressing 'p' in TUI")
+	}
+
+	// Verify TUI shows STOPPED status
+	view := model.View()
+	if !strings.Contains(view, "STOPPED") && !strings.Contains(view, "Stopped") {
+		t.Error("View should show STOPPED/Stopped status when loop is paused")
+	}
+
+	// Press 'r' to resume
+	keyR := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
+	model, _ = updateModel(model, keyR)
+
+	// Give the loop time to process resume
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify loop is no longer paused
+	if l.IsPaused() {
+		t.Error("Loop should not be paused after pressing 'r' in TUI")
+	}
+
+	// Verify TUI shows RUNNING status
+	view = model.View()
+	if !strings.Contains(view, "RUNNING") && !strings.Contains(view, "Running") {
+		t.Error("View should show RUNNING/Running status when loop is resumed")
+	}
+
+	cancel()
+}
+
+// TestTUIPauseResumeDoesNotQuit tests that pause/resume keys never trigger app quit.
+func TestTUIPauseResumeDoesNotQuit(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press 'p' then 'r' multiple times — should never quit
+	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+	keyR := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
+
+	for i := 0; i < 3; i++ {
+		model, _ = updateModel(model, keyP)
+		view := model.View()
+		if view == "Goodbye!\n" {
+			t.Fatalf("'p' key should never quit the application (iteration %d)", i)
+		}
+
+		model, _ = updateModel(model, keyR)
+		view = model.View()
+		if view == "Goodbye!\n" {
+			t.Fatalf("'r' key should never quit the application (iteration %d)", i)
+		}
 	}
 }

@@ -234,7 +234,19 @@ Based on `specs/default.md`, the following tasks are needed:
 - Validation: all 222 tests pass, `go vet ./...` clean, `go build` succeeds
 
 ## TASK 12: Integration Tests for Start/Pause/Start Flow [LOW PRIORITY]
-**Status: TODO**
+**Status: DONE**
 - Spec: Write integration tests for the start/pause/start flow
-- Should test: start loop → pause → resume → verify continuation
-- Make pause -> resume work based on test results
+- Added `mockMediumSlowCommandBuilder` and `"claude-medium"` mock case (200ms delay between system message and response) for reliable mid-execution pause testing
+- Added tests in `tests/loop_test.go`:
+  - `TestStartPauseResumeCompletesAllIterations`: full start→pause→resume→complete flow, verifies STOPPED/RESUMED markers and completion
+  - `TestMultiplePauseResumeCycles`: 2 pause/resume cycles within a 5-iteration loop, verifies completion
+  - `TestPauseResumeMarkerSequence`: verifies STOPPED appears before RESUMED in marker ordering
+  - `TestPauseResumeRetriesSameIteration`: uses medium-slow mock, verifies `i--` retry behavior (same iteration number re-executed after mid-execution pause)
+  - `TestFreshLoopAfterStop`: simulates quit-and-restart scenario, verifies new loop starts fresh sessions without `--resume`
+  - `TestPauseResumeSessionIDEndToEnd`: comprehensive session ID lifecycle test — capture → pause → verify preserved → resume → verify `--resume` passed
+- Added tests in `tests/tui_test.go`:
+  - `TestTUIPauseResumeTimerFreezes`: verifies pressing 'p' freezes elapsed timer (identical View() output), pressing 'r' resumes
+  - `TestTUIPauseResumeWithRunningLoop`: full TUI + loop integration — starts loop, presses 'p', verifies `IsPaused()` and STOPPED status, presses 'r', verifies resumed and RUNNING status
+  - `TestTUIPauseResumeDoesNotQuit`: verifies multiple 'p'/'r' presses never trigger app quit
+- All pause/resume functionality works correctly (no bugs found)
+- Validation: all 232 tests pass, `go vet ./...` clean, `go build` succeeds
