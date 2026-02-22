@@ -64,6 +64,14 @@ Strip leading "Task " from `currentTask` value in the footer to avoid "Task: Tas
 - Updated existing tests (`TestTaskUpdateDisplayed`, `TestTaskUpdateOverwritesPrevious`) to match new behavior
 - Added 2 tests: `TestTaskDisplayStripsDuplicatePrefix`, `TestTaskDisplayWithoutPrefix`
 
+## TASK 10: Fix Ralph Details Spec Conformance [HIGH PRIORITY]
+**Status: DONE**
+Fixed two mismatches between `specs/default.md` and the Ralph Details panel in `internal/tui/tui.go`:
+1. **Loop display missing `#` prefix**: Spec says `Loop: #3/5` but code rendered `Loop: 3/5`. Changed `loopDisplay` from `"0/0"`/`"%d/%d"` to `"#0/0"`/`"#%d/%d"`.
+2. **Wrong label for time field**: Spec says `Total Time: hh:mm:ss` but code used `Elapsed:`. Changed label from `"Elapsed:"` to `"Total Time:"`.
+- All 128 tests pass, build succeeds
+- No test changes needed (no tests checked for these exact label strings)
+
 ## Notes
 - All 128 tests pass (verified 2026-02-22)
 - Go 1.25.3, BubbleTea TUI framework

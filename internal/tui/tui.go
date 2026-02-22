@@ -502,9 +502,9 @@ func (m Model) renderFooter() string {
 	usageCostPanel := panelStyle.Render(usageCostContent)
 
 	// Loop Details panel
-	loopDisplay := "0/0"
+	loopDisplay := "#0/0"
 	if m.totalLoops > 0 {
-		loopDisplay = fmt.Sprintf("%d/%d", m.currentLoop, m.totalLoops)
+		loopDisplay = fmt.Sprintf("#%d/%d", m.currentLoop, m.totalLoops)
 	}
 
 	elapsed := m.getElapsed()
@@ -540,7 +540,7 @@ func (m Model) renderFooter() string {
 		lipgloss.Left,
 		titleStyle.Render("Ralph Details"),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Loop:"), valueStyle.Render(fmt.Sprintf(" %s", loopDisplay))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Elapsed:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Time:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Agents:"), agentStyle.Render(agentDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Task:"), valueStyle.Render(taskDisplay)),
