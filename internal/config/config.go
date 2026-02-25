@@ -9,8 +9,9 @@ import (
 
 // Default values for configuration
 const (
-	DefaultIterations = 5
-	DefaultSpecFolder = "specs/"
+	DefaultIterations     = 5
+	DefaultPlanIterations = 1
+	DefaultSpecFolder     = "specs/"
 )
 
 // Version is set at build time via -ldflags
@@ -67,7 +68,7 @@ func ParseFlags() *Config {
 	flag.StringVar(&cfg.SpecFile, "spec-file", "", "Specific spec file to use (overrides spec-folder)")
 	flag.StringVar(&cfg.SpecFolder, "spec-folder", DefaultSpecFolder, "Folder containing spec files")
 	flag.StringVar(&cfg.LoopPrompt, "loop-prompt", "", "Path to loop prompt override (defaults to embedded prompt.md)")
-	flag.StringVar(&cfg.Goal, "goal", "", "Ultimate goal sentence for plan mode (used in plan prompt)")
+	flag.StringVar(&cfg.Goal, "goal", "", "Ultimate goal sentence to guide the agent")
 	flag.BoolVar(&cfg.ShowPrompt, "show-prompt", false, "Print the embedded loop prompt and exit")
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
 	flag.BoolVar(&cfg.NoTmux, "no-tmux", false, "Run without tmux wrapper")
@@ -97,6 +98,19 @@ func ParseFlags() *Config {
 	}
 
 	flag.Parse()
+
+	// In plan mode, default to 1 iteration unless the user explicitly set --iterations
+	if cfg.IsPlanMode() {
+		iterationsExplicit := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "iterations" {
+				iterationsExplicit = true
+			}
+		})
+		if !iterationsExplicit {
+			cfg.Iterations = DefaultPlanIterations
+		}
+	}
 
 	return cfg
 }
