@@ -7,6 +7,8 @@
 4. use `git add -A` and `git commit -m "..."` to commit your changes - do not include any claude attribution
 5. If the implemented features don't match IMPLEMENTATION_PLAN.md, correct the plan.
 
+ULTIMATE GOAL: $ultimate_goal_placeholder_sentence. Keep this goal in mind throughout implementation.
+
 99. You may use up to 10 parallel Sonnet subagents for searches/reads, and only 1 Opus subagent for build/tests.
 999. Single sources of truth, no migrations/adapters. If tests unrelated to your work fail, resolve them as part of the increment.
 9999. You may add extra logging if required to debug issues.

@@ -11,20 +11,20 @@ import (
 
 func TestNewLoader(t *testing.T) {
 	// Test creating loader without override
-	loader := prompt.NewLoader("")
+	loader := prompt.NewLoader("", "")
 	if loader.IsUsingOverride() {
 		t.Error("Expected IsUsingOverride() to be false for empty path")
 	}
 
 	// Test creating loader with override
-	loaderWithOverride := prompt.NewLoader("/some/path.md")
+	loaderWithOverride := prompt.NewLoader("/some/path.md", "")
 	if !loaderWithOverride.IsUsingOverride() {
 		t.Error("Expected IsUsingOverride() to be true for non-empty path")
 	}
 }
 
 func TestLoadEmbedded(t *testing.T) {
-	loader := prompt.NewLoader("")
+	loader := prompt.NewLoader("", "")
 	content, err := loader.Load()
 
 	if err != nil {
@@ -64,7 +64,7 @@ func TestLoadFromFile(t *testing.T) {
 	}
 	tmpFile.Close()
 
-	loader := prompt.NewLoader(tmpFile.Name())
+	loader := prompt.NewLoader(tmpFile.Name(), "")
 	content, err := loader.Load()
 
 	if err != nil {
@@ -77,7 +77,7 @@ func TestLoadFromFile(t *testing.T) {
 }
 
 func TestLoadFromFile_NotExists(t *testing.T) {
-	loader := prompt.NewLoader("/nonexistent/path/to/prompt.md")
+	loader := prompt.NewLoader("/nonexistent/path/to/prompt.md", "")
 	_, err := loader.Load()
 
 	if err == nil {
@@ -99,7 +99,7 @@ func TestLoadFromFile_RelativePath(t *testing.T) {
 		t.Fatalf("Failed to write temp file: %v", err)
 	}
 
-	loader := prompt.NewLoader(tmpFile)
+	loader := prompt.NewLoader(tmpFile, "")
 	content, err := loader.Load()
 
 	if err != nil {
@@ -123,7 +123,7 @@ func TestGetEmbeddedPrompt(t *testing.T) {
 	}
 
 	// Should be same as loading via Loader
-	loader := prompt.NewLoader("")
+	loader := prompt.NewLoader("", "")
 	loaderContent, _ := loader.Load()
 
 	if content != loaderContent {
@@ -144,7 +144,7 @@ func TestIsUsingOverride(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			loader := prompt.NewLoader(tt.overridePath)
+			loader := prompt.NewLoader(tt.overridePath, "")
 			result := loader.IsUsingOverride()
 			if result != tt.expected {
 				t.Errorf("IsUsingOverride() = %v, expected %v", result, tt.expected)
@@ -278,7 +278,7 @@ func TestBuildAndPlanPromptsAreDifferent(t *testing.T) {
 }
 
 func TestPromptIsPlanMode(t *testing.T) {
-	buildLoader := prompt.NewLoader("")
+	buildLoader := prompt.NewLoader("", "")
 	if buildLoader.IsPlanMode() {
 		t.Error("Build loader should not be in plan mode")
 	}
@@ -342,19 +342,56 @@ func TestPlanPromptGoalWithTrailingPeriod(t *testing.T) {
 	}
 }
 
-func TestPlanPromptGoalDoesNotAffectBuildPrompt(t *testing.T) {
-	// Build mode prompt should not be affected by goal substitution
-	buildLoader := prompt.NewLoader("")
-	content, err := buildLoader.Load()
+func TestBuildPromptGoalSubstitution(t *testing.T) {
+	// With a goal provided, $ultimate_goal_placeholder_sentence should be replaced in build prompt
+	loader := prompt.NewLoader("", "Ship the MVP by Friday")
+	content, err := loader.Load()
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
 	if strings.Contains(content, "$ultimate_goal_placeholder_sentence") {
-		t.Error("Build prompt should not contain goal placeholder")
+		t.Error("Expected $ultimate_goal_placeholder_sentence placeholder to be substituted")
 	}
-	if strings.Contains(content, "ULTIMATE GOAL") {
-		t.Error("Build prompt should not contain ULTIMATE GOAL")
+	if !strings.Contains(content, "ULTIMATE GOAL: Ship the MVP by Friday.") {
+		t.Error("Expected goal text to appear in ULTIMATE GOAL line")
+	}
+	if !strings.Contains(content, "Keep this goal in mind throughout implementation.") {
+		t.Error("Expected continuation text to remain after goal")
+	}
+}
+
+func TestBuildPromptGoalEmpty(t *testing.T) {
+	// With empty goal, placeholder and trailing ". " should be removed
+	loader := prompt.NewLoader("", "")
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if strings.Contains(content, "$ultimate_goal_placeholder_sentence") {
+		t.Error("Expected $ultimate_goal_placeholder_sentence placeholder to be removed")
+	}
+	// Should read "ULTIMATE GOAL: Keep this goal in mind throughout implementation."
+	if !strings.Contains(content, "ULTIMATE GOAL: Keep this goal in mind throughout implementation.") {
+		t.Errorf("Expected clean ULTIMATE GOAL line without placeholder, got content:\n%s", content)
+	}
+}
+
+func TestBuildPromptGoalWithTrailingPeriod(t *testing.T) {
+	// Goal with trailing period should not produce double period in build prompt
+	loader := prompt.NewLoader("", "Ship the MVP.")
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if !strings.Contains(content, "ULTIMATE GOAL: Ship the MVP.") {
+		t.Error("Expected goal text with single period")
+	}
+	// Ensure no double period in the ULTIMATE GOAL line specifically
+	if strings.Contains(content, "ULTIMATE GOAL: Ship the MVP..") {
+		t.Error("Expected no double period in ULTIMATE GOAL line")
 	}
 }
 
@@ -367,7 +404,7 @@ func TestLoadEmptyFile(t *testing.T) {
 	tmpFile.Close()
 	defer os.Remove(tmpFile.Name())
 
-	loader := prompt.NewLoader(tmpFile.Name())
+	loader := prompt.NewLoader(tmpFile.Name(), "")
 	content, err := loader.Load()
 
 	if err != nil {

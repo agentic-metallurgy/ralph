@@ -25,9 +25,11 @@ type Loader struct {
 // NewLoader creates a new prompt Loader.
 // If overridePath is empty, the embedded prompt will be used.
 // If overridePath is provided, it will load from that file instead.
-func NewLoader(overridePath string) *Loader {
+// The goal parameter specifies the ultimate goal sentence for the prompt.
+func NewLoader(overridePath string, goal string) *Loader {
 	return &Loader{
 		overridePath: overridePath,
+		goal:         goal,
 	}
 }
 
@@ -45,7 +47,7 @@ func NewPlanLoader(overridePath string, goal string) *Loader {
 // Load returns the prompt content.
 // If an override path was configured, it loads from that file.
 // Otherwise, it returns the embedded default prompt (build or plan based on mode).
-// In plan mode, the $ultimate_goal_placeholder_sentence placeholder is substituted with the goal.
+// The $ultimate_goal_placeholder_sentence placeholder is substituted with the goal in both modes.
 func (l *Loader) Load() (string, error) {
 	var content string
 	var err error
@@ -62,9 +64,7 @@ func (l *Loader) Load() (string, error) {
 		return "", err
 	}
 
-	if l.planMode {
-		content = substituteGoal(content, l.goal)
-	}
+	content = substituteGoal(content, l.goal)
 
 	return content, nil
 }
@@ -125,7 +125,7 @@ func (l *Loader) IsPlanMode() bool {
 
 // GetEmbeddedPrompt is a convenience function to get the embedded prompt directly
 func GetEmbeddedPrompt() (string, error) {
-	loader := NewLoader("")
+	loader := NewLoader("", "")
 	return loader.Load()
 }
 

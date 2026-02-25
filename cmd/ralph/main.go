@@ -38,7 +38,7 @@ func main() {
 		if cfg.IsPlanMode() {
 			showLoader = prompt.NewPlanLoader("", cfg.Goal)
 		} else {
-			showLoader = prompt.NewLoader("")
+			showLoader = prompt.NewLoader("", cfg.Goal)
 		}
 		content, err := showLoader.Load()
 		if err != nil {
@@ -68,7 +68,7 @@ func main() {
 	if cfg.IsPlanMode() {
 		promptLoader = prompt.NewPlanLoader(cfg.LoopPrompt, cfg.Goal)
 	} else {
-		promptLoader = prompt.NewLoader(cfg.LoopPrompt)
+		promptLoader = prompt.NewLoader(cfg.LoopPrompt, cfg.Goal)
 	}
 	promptContent, err := promptLoader.Load()
 	if err != nil {
