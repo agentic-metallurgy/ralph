@@ -26,7 +26,8 @@ type Config struct {
 	ShowPrompt  bool
 	ShowVersion bool
 	NoTmux      bool
-	Subcommand  string // "plan" or "" (default: build mode)
+	Daemon      bool
+	Subcommand  string // "plan", "build", or "" (default: build mode)
 }
 
 // NewConfig returns a new Config with default values
@@ -39,13 +40,17 @@ func NewConfig() *Config {
 	}
 }
 
-// DetectSubcommand checks os.Args for a subcommand ("plan") before flag parsing.
+// DetectSubcommand checks os.Args for a subcommand ("plan" or "build") before flag parsing.
 // If found, it removes the subcommand from os.Args so flag.Parse() works correctly.
 // Returns the detected subcommand or "".
 func DetectSubcommand() string {
-	if len(os.Args) > 1 && os.Args[1] == "plan" {
-		os.Args = append(os.Args[:1], os.Args[2:]...)
-		return "plan"
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "plan", "build":
+			sub := os.Args[1]
+			os.Args = append(os.Args[:1], os.Args[2:]...)
+			return sub
+		}
 	}
 	return ""
 }
@@ -66,10 +71,12 @@ func ParseFlags() *Config {
 	flag.BoolVar(&cfg.ShowPrompt, "show-prompt", false, "Print the embedded loop prompt and exit")
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
 	flag.BoolVar(&cfg.NoTmux, "no-tmux", false, "Run without tmux wrapper")
+	flag.BoolVar(&cfg.Daemon, "daemon", false, "Run without TUI, exit when all loops complete")
+	flag.BoolVar(&cfg.Daemon, "d", false, "Run without TUI, exit when all loops complete (shorthand)")
 
 	// Custom usage function to display flags with -- prefix
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [plan] [flags]\n\nSubcommands:\n  plan\tRun in planning mode (uses plan prompt instead of build prompt)\n\nFlags:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [plan|build] [flags]\n\nSubcommands:\n  plan\tRun in planning mode (uses plan prompt instead of build prompt)\n  build\tRun in build mode (default if no subcommand specified)\n\nFlags:\n", os.Args[0])
 		flag.VisitAll(func(f *flag.Flag) {
 			// Format: --flag-name type
 			//     description (default: value)
@@ -117,7 +124,7 @@ func (c *Config) Validate() error {
 	} else if c.SpecFolder != "" && c.LoopPrompt == "" {
 		// Only validate spec-folder when using the default embedded prompt.
 		// Custom prompts may not need specs at all.
-		if err := c.validateDirExists(c.SpecFolder, "--spec-folder"); err != nil {
+		if err := c.validateSpecsAvailable(c.SpecFolder); err != nil {
 			return err
 		}
 	}
@@ -152,22 +159,31 @@ func (c *Config) validateFileExists(path, flagName string) error {
 	return nil
 }
 
-// validateDirExists checks if a directory exists at the given path
-func (c *Config) validateDirExists(path, flagName string) error {
+// validateSpecsAvailable checks that a spec folder exists, is a directory, and contains at least one file.
+// Returns user-friendly error messages with guidance on how to fix the issue.
+func (c *Config) validateSpecsAvailable(path string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return fmt.Errorf("%s: invalid path %q: %w", flagName, path, err)
+		return fmt.Errorf("invalid spec folder path %q: %w", path, err)
 	}
 
 	info, err := os.Stat(absPath)
 	if os.IsNotExist(err) {
-		return fmt.Errorf("%s: directory does not exist: %s", flagName, path)
+		return fmt.Errorf("no spec files found: %s does not exist\nCreate a specs/ directory with spec files, or use --spec-file or --spec-folder to specify a custom location", path)
 	}
 	if err != nil {
-		return fmt.Errorf("%s: cannot access %q: %w", flagName, path, err)
+		return fmt.Errorf("cannot access spec folder %q: %w", path, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("%s: expected directory but got file: %s", flagName, path)
+		return fmt.Errorf("--spec-folder: expected directory but got file: %s", path)
+	}
+
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		return fmt.Errorf("cannot read spec folder %q: %w", path, err)
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("no spec files found: %s is empty\nAdd spec files to the directory, or use --spec-file or --spec-folder to specify a custom location", path)
 	}
 
 	return nil

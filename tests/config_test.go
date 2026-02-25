@@ -26,12 +26,17 @@ func TestNewConfig(t *testing.T) {
 }
 
 func TestValidate_ValidConfig(t *testing.T) {
-	// Create a temporary directory for spec folder
+	// Create a temporary directory for spec folder with a spec file
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
+
+	// Spec folder must contain at least one file
+	if err := os.WriteFile(filepath.Join(tmpDir, "spec.md"), []byte("test spec"), 0644); err != nil {
+		t.Fatalf("Failed to create spec file: %v", err)
+	}
 
 	cfg := &config.Config{
 		Iterations: 10,
@@ -123,12 +128,17 @@ func TestValidate_SpecFileIsDirectory(t *testing.T) {
 }
 
 func TestValidate_SpecFolderExists(t *testing.T) {
-	// Create a temporary directory
+	// Create a temporary directory with a spec file
 	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
+
+	// Spec folder must contain at least one file
+	if err := os.WriteFile(filepath.Join(tmpDir, "spec.md"), []byte("test spec"), 0644); err != nil {
+		t.Fatalf("Failed to create spec file: %v", err)
+	}
 
 	cfg := &config.Config{
 		Iterations: 1,
@@ -360,6 +370,102 @@ func TestValidate_EmptySpecFolder(t *testing.T) {
 	}
 }
 
+func TestValidate_SpecFolderExistsButEmpty(t *testing.T) {
+	// An existing but empty spec folder should fail validation
+	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Iterations: 1,
+		SpecFile:   "",
+		SpecFolder: tmpDir,
+	}
+
+	err = cfg.Validate()
+	if err == nil {
+		t.Error("Expected error for empty spec folder, got nil")
+	}
+	// Error should mention "empty" and provide guidance
+	errMsg := err.Error()
+	if !contains(errMsg, "empty") {
+		t.Errorf("Expected error to mention 'empty', got: %s", errMsg)
+	}
+	if !contains(errMsg, "--spec-file") {
+		t.Errorf("Expected error to mention '--spec-file' for guidance, got: %s", errMsg)
+	}
+}
+
+func TestValidate_SpecFolderMissingGuidance(t *testing.T) {
+	// When spec folder doesn't exist, error should include guidance
+	cfg := &config.Config{
+		Iterations: 1,
+		SpecFile:   "",
+		SpecFolder: "/nonexistent/path/to/specs/",
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Expected error for missing spec folder, got nil")
+	}
+	errMsg := err.Error()
+	if !contains(errMsg, "--spec-file") {
+		t.Errorf("Expected error to mention '--spec-file' for guidance, got: %s", errMsg)
+	}
+	if !contains(errMsg, "--spec-folder") {
+		t.Errorf("Expected error to mention '--spec-folder' for guidance, got: %s", errMsg)
+	}
+}
+
+func TestValidate_CustomLoopPromptSkipsEmptySpecFolder(t *testing.T) {
+	// When a custom loop prompt is provided, empty spec folder should not cause an error
+	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpFile, err := os.CreateTemp("", "ralph-prompt-*.md")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	cfg := &config.Config{
+		Iterations: 1,
+		SpecFile:   "",
+		SpecFolder: tmpDir, // empty dir
+		LoopPrompt: tmpFile.Name(),
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Expected custom loop prompt to skip spec folder validation, got error: %v", err)
+	}
+}
+
+func TestValidate_SpecFileBypassesEmptyFolderCheck(t *testing.T) {
+	// When spec-file is provided, empty spec folder should not cause an error
+	tmpFile, err := os.CreateTemp("", "ralph-spec-*.md")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	cfg := &config.Config{
+		Iterations: 1,
+		SpecFile:   tmpFile.Name(),
+		SpecFolder: "/nonexistent/empty/specs/", // should be ignored
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Expected spec-file to bypass spec folder validation, got error: %v", err)
+	}
+}
+
 func TestValidate_RelativePaths(t *testing.T) {
 	// Create a temporary directory structure in current working dir
 	tmpDir, err := os.MkdirTemp(".", "ralph-test-*")
@@ -453,6 +559,44 @@ func TestGoalFieldSet(t *testing.T) {
 	}
 	if cfg.Goal != "Build a world-class trading platform" {
 		t.Errorf("Expected Goal to be set, got %q", cfg.Goal)
+	}
+}
+
+func TestBuildSubcommandDetected(t *testing.T) {
+	cfg := &config.Config{Subcommand: "build"}
+	if cfg.IsPlanMode() {
+		t.Error("Expected IsPlanMode() to be false for build subcommand")
+	}
+	if cfg.Subcommand != "build" {
+		t.Errorf("Expected Subcommand to be 'build', got %q", cfg.Subcommand)
+	}
+}
+
+func TestBuildSubcommandBehavesLikeDefault(t *testing.T) {
+	// Build subcommand should behave identically to default (no subcommand) mode
+	defaultCfg := &config.Config{Subcommand: ""}
+	buildCfg := &config.Config{Subcommand: "build"}
+
+	// Both should return false for IsPlanMode
+	if defaultCfg.IsPlanMode() != buildCfg.IsPlanMode() {
+		t.Error("Expected build subcommand IsPlanMode() to match default mode")
+	}
+}
+
+func TestDaemonFieldDefault(t *testing.T) {
+	cfg := config.NewConfig()
+	if cfg.Daemon {
+		t.Error("Expected Daemon to be false by default")
+	}
+}
+
+func TestDaemonFieldSet(t *testing.T) {
+	cfg := &config.Config{
+		Iterations: 1,
+		Daemon:     true,
+	}
+	if !cfg.Daemon {
+		t.Error("Expected Daemon to be true when set")
 	}
 }
 

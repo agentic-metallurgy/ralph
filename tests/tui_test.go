@@ -1254,8 +1254,9 @@ func TestAddLoopNoopWithoutLoop(t *testing.T) {
 	}
 }
 
-// TestAddSubtractLoopNoopWhenCompleted tests that '+'/'-' are no-ops when completed
-func TestAddSubtractLoopNoopWhenCompleted(t *testing.T) {
+// TestAddLoopWorksWhenCompleted tests that '+' adds loops after completion (spec #6)
+// and '-' is a no-op when totalLoops == currentLoop
+func TestAddLoopWorksWhenCompleted(t *testing.T) {
 	model := tui.NewModel()
 	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
 	model.SetLoop(l)
@@ -1267,34 +1268,135 @@ func TestAddSubtractLoopNoopWhenCompleted(t *testing.T) {
 	doneMsg := cmd()
 	model, _ = updateModel(model, doneMsg)
 
-	// Press '+' — should be a no-op because completed
+	// Press '+' — should add a loop even after completion (spec #6)
 	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
 	model, _ = updateModel(model, keyMsg)
 
-	if l.GetIterations() != 5 {
-		t.Errorf("Expected loop iterations to remain 5 after '+' when completed, got %d", l.GetIterations())
+	if l.GetIterations() != 6 {
+		t.Errorf("Expected loop iterations to be 6 after '+' when completed, got %d", l.GetIterations())
 	}
 
-	// Press '-' — should also be a no-op because completed
+	// Press '-' — should work now since totalLoops (6) > currentLoop (5)
 	keyMsg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'-'}}
 	model, _ = updateModel(model, keyMsg)
 
 	if l.GetIterations() != 5 {
-		t.Errorf("Expected loop iterations to remain 5 after '-' when completed, got %d", l.GetIterations())
+		t.Errorf("Expected loop iterations to be 5 after '-', got %d", l.GetIterations())
+	}
+
+	// Press '-' again — should be a no-op since totalLoops == currentLoop
+	keyMsg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'-'}}
+	model, _ = updateModel(model, keyMsg)
+
+	if l.GetIterations() != 5 {
+		t.Errorf("Expected loop iterations to remain 5 after '-' at floor, got %d", l.GetIterations())
 	}
 }
 
-// TestHotkeyBarShowsAddSubtract tests that the hotkey bar includes (+)add and (-)subtract
-func TestHotkeyBarShowsAddSubtract(t *testing.T) {
+// TestHotkeyBarShowsLoopControls tests that the hotkey bar shows (+)/(-) # of loops
+func TestHotkeyBarShowsLoopControls(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	view := model.View()
-	if !strings.Contains(view, "add") {
-		t.Error("Hotkey bar should contain 'add' label")
+	if !strings.Contains(view, "(+)/(-)") {
+		t.Error("Hotkey bar should contain '(+)/(-)' label")
 	}
-	if !strings.Contains(view, "subtract") {
-		t.Error("Hotkey bar should contain 'subtract' label")
+	if !strings.Contains(view, "# of loops") {
+		t.Error("Hotkey bar should contain '# of loops' label")
+	}
+}
+
+// TestHotkeyBarShowsStartWhenCompletedWithPendingLoops tests that after completion
+// with pending loops added via '+', the hotkey bar shows '(s)tart' instead of '(r)esume'
+func TestHotkeyBarShowsStartWhenCompletedWithPendingLoops(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(5, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate completion
+	cmd := tui.SendDone()
+	doneMsg := cmd()
+	model, _ = updateModel(model, doneMsg)
+
+	// Press '+' to add a loop
+	keyPlus := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
+	model, _ = updateModel(model, keyPlus)
+
+	view := model.View()
+	if !strings.Contains(view, "(s)tart") {
+		t.Error("Hotkey bar should show '(s)tart' when completed with pending loops")
+	}
+}
+
+// TestHotkeyBarShowsResumeWhenPaused tests that when paused, the hotkey bar shows '(r)esume'
+func TestHotkeyBarShowsResumeWhenPaused(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(2, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press 'p' to pause
+	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+	model, _ = updateModel(model, keyP)
+
+	view := model.View()
+	if !strings.Contains(view, "(r)esume") {
+		t.Error("Hotkey bar should show '(r)esume' when paused")
+	}
+}
+
+// TestStartKeyResumesAfterCompletion tests that pressing 's' starts new loops after completion
+func TestStartKeyResumesAfterCompletion(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(5, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate completion
+	cmd := tui.SendDone()
+	doneMsg := cmd()
+	model, _ = updateModel(model, doneMsg)
+
+	// Press '+' to add a loop
+	keyPlus := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
+	model, _ = updateModel(model, keyPlus)
+
+	// Press 's' to start — should clear completed state
+	keyS := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}
+	model, _ = updateModel(model, keyS)
+
+	view := model.View()
+	// After pressing 's', completed state should be cleared — view should show RUNNING not COMPLETED
+	if strings.Contains(view, "COMPLETED") {
+		t.Error("After pressing 's' with pending loops, should no longer show COMPLETED")
+	}
+}
+
+// TestStartKeyNoopWithoutPendingLoops tests that 's' does nothing when completed without pending loops
+func TestStartKeyNoopWithoutPendingLoops(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model.SetLoopProgress(5, 5)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Simulate completion
+	cmd := tui.SendDone()
+	doneMsg := cmd()
+	model, _ = updateModel(model, doneMsg)
+
+	// Press 's' without adding loops — should be a no-op, still completed
+	keyS := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}
+	model, _ = updateModel(model, keyS)
+
+	view := model.View()
+	if !strings.Contains(view, "COMPLETED") {
+		t.Error("Pressing 's' without pending loops should keep COMPLETED state")
 	}
 }
 
@@ -1621,6 +1723,50 @@ func TestCompletedTasksAboveCurrentTask(t *testing.T) {
 	if completedIdx >= currentIdx {
 		t.Errorf("'Completed Tasks:' (pos %d) should appear before 'Current Task:' (pos %d)",
 			completedIdx, currentIdx)
+	}
+}
+
+// ============================================================================
+// Tests: Plan Mode Display (Spec #9)
+// ============================================================================
+
+// TestPlanModeDisplaysPlanning tests that plan mode shows "Planning" as default task
+func TestPlanModeDisplaysPlanning(t *testing.T) {
+	model := tui.NewModel()
+	model.SetPlanMode(true)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "Planning") {
+		t.Error("Plan mode should display 'Planning' as current task")
+	}
+}
+
+// TestPlanModeOverriddenByTaskUpdate tests that task updates override plan mode default
+func TestPlanModeOverriddenByTaskUpdate(t *testing.T) {
+	model := tui.NewModel()
+	model.SetPlanMode(true)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Send a task update — should override "Planning"
+	cmd := tui.SendTaskUpdate("#3 Research specs")
+	model, _ = updateModel(model, cmd())
+
+	view := model.View()
+	if !strings.Contains(view, "#3 Research specs") {
+		t.Error("Task update should override plan mode 'Planning' display")
+	}
+}
+
+// TestMissingPlanFileDisplaysCreating tests that SetCurrentTask shows initial task
+func TestMissingPlanFileDisplaysCreating(t *testing.T) {
+	model := tui.NewModel()
+	model.SetCurrentTask("Creating IMPLEMENTATION_PLAN.md")
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "Creating IMPLEMENTATION_PLAN.md") {
+		t.Error("When plan file is missing, should display 'Creating IMPLEMENTATION_PLAN.md'")
 	}
 }
 

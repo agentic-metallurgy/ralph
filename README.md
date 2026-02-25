@@ -32,10 +32,18 @@ Ralph is continuously looping on a given prompt with the ability to pause/edit/r
    ralph
    ```
 
+### Subcommands
+
+```bash
+ralph              # Build mode (default)
+ralph build        # Explicit build mode (same as default)
+ralph plan         # Planning mode (uses plan prompt)
+```
+
 ### CLI Options
 
 ```bash
-# Run with defaults (20 iterations, specs/ folder)
+# Run with defaults (5 iterations, specs/ folder)
 ralph
 
 # Custom number of iterations
@@ -49,14 +57,26 @@ ralph --spec-folder /path/to/specs/
 
 # Use a custom loop prompt instead of the embedded default
 ralph --loop-prompt /path/to/custom_prompt.md
+
+# Run in daemon mode (no TUI, exits on completion)
+ralph --daemon
+ralph -d
+
+# Chain plan and build in daemon mode
+ralph plan --iterations 2 -d; ralph build --iterations 4
 ```
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--iterations` | int | 20 | Number of loop iterations to run |
+| `--iterations` | int | 5 | Number of loop iterations to run |
 | `--spec-file` | string | - | Override with a specific spec file |
 | `--spec-folder` | string | `specs/` | Directory containing spec files |
 | `--loop-prompt` | string | - | Override the embedded prompt with a custom file |
+| `--goal` | string | - | Ultimate goal sentence (plan mode) |
+| `--daemon` / `-d` | bool | false | Run without TUI, exit on completion |
+| `--no-tmux` | bool | false | Skip automatic tmux wrapping |
+| `--show-prompt` | bool | false | Print the embedded prompt and exit |
+| `--version` | bool | false | Print version and exit |
 
 ## Development
 

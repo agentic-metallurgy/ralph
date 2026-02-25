@@ -49,8 +49,8 @@ func main() {
 		return
 	}
 
-	// Wrap in tmux if not already inside one
-	if tmux.ShouldWrap(cfg.NoTmux) {
+	// Wrap in tmux if not already inside one (skip in daemon mode)
+	if !cfg.Daemon && tmux.ShouldWrap(cfg.NoTmux) {
 		if err := tmux.Wrap(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not wrap in tmux: %v\n", err)
 			// Continue without tmux
@@ -83,6 +83,15 @@ func main() {
 		tokenStats = stats.NewTokenStats()
 	}
 
+	// Daemon mode: run without TUI, exit when all loops complete
+	if cfg.Daemon {
+		exitCode := runDaemon(cfg, promptContent, tokenStats)
+		if err := tokenStats.Save(statsFilePath); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
+		}
+		os.Exit(exitCode)
+	}
+
 	// Set up channels for TUI communication
 	msgChan := make(chan tui.Message, 100)
 	doneChan := make(chan struct{})
@@ -110,6 +119,14 @@ func main() {
 	// Parse implementation plan for task counts
 	completedTasks, totalTasks := parseTaskCounts(planFilePath)
 	model.SetCompletedTasks(completedTasks, totalTasks)
+
+	// Set plan mode for TUI display
+	if cfg.IsPlanMode() {
+		model.SetPlanMode(true)
+	} else if _, err := os.Stat(planFilePath); os.IsNotExist(err) {
+		// When IMPLEMENTATION_PLAN.md doesn't exist, show as initial task
+		model.SetCurrentTask("Creating IMPLEMENTATION_PLAN.md")
+	}
 
 	// Create the Bubble Tea program (must be after SetLoop so the model copy has the loop reference)
 	program := tea.NewProgram(model, tea.WithAltScreen())
@@ -247,6 +264,10 @@ func processMessage(
 			Role:    tui.RoleSystem,
 			Content: msg.Content,
 		}
+		// Signal TUI that the loop has completed its current iterations.
+		// The loop stays alive waiting for more iterations (post-completion extension),
+		// so we send doneMsg explicitly rather than relying on channel closure.
+		program.Send(tui.SendDone()())
 	}
 }
 
@@ -369,6 +390,112 @@ func handleParsedMessage(
 	}
 }
 
+// runDaemon runs ralph in daemon mode: no TUI, output to stdout, exit on completion.
+func runDaemon(cfg *config.Config, promptContent string, tokenStats *stats.TokenStats) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle OS signals for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		cancel()
+	}()
+
+	// Create and start the loop
+	claudeLoop := loop.New(loop.Config{
+		Iterations: cfg.Iterations,
+		Prompt:     promptContent,
+	})
+	claudeLoop.Start(ctx)
+
+	jsonParser := parser.NewParser()
+	activeAgentIDs := make(map[string]bool)
+
+	mode := "build"
+	if cfg.IsPlanMode() {
+		mode = "plan"
+	}
+	fmt.Printf("ralph daemon: starting %s mode with %d iterations\n", mode, cfg.Iterations)
+
+	for msg := range claudeLoop.Output() {
+		select {
+		case <-ctx.Done():
+			return 1
+		default:
+		}
+
+		switch msg.Type {
+		case "loop_marker":
+			fmt.Printf("[loop] %s\n", msg.Content)
+
+		case "output":
+			parsed := jsonParser.ParseLine(msg.Content)
+			if parsed != nil {
+				// Capture session ID
+				if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
+					claudeLoop.SetSessionID(sessionID)
+				}
+				// Track stats
+				if usage := jsonParser.GetUsage(parsed); usage != nil {
+					tokenStats.AddUsage(
+						usage.InputTokens,
+						usage.OutputTokens,
+						usage.CacheCreationInputTokens,
+						usage.CacheReadInputTokens,
+					)
+				}
+				if cost := jsonParser.GetCost(parsed); cost > 0 {
+					tokenStats.AddCost(cost)
+				}
+				// Track agents
+				prevCount := len(activeAgentIDs)
+				if jsonParser.IsSubagentMessage(parsed) {
+					parentID := *parsed.ParentToolUseID
+					if parsed.Type == parser.MessageTypeResult {
+						delete(activeAgentIDs, parentID)
+					} else {
+						activeAgentIDs[parentID] = true
+					}
+				}
+				for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
+					activeAgentIDs[taskID] = true
+				}
+				if newCount := len(activeAgentIDs); newCount != prevCount {
+					fmt.Printf("[agents] %d active\n", newCount)
+				}
+				// Print assistant text and tool use
+				if parsed.Type == parser.MessageTypeAssistant {
+					content := jsonParser.ExtractContent(parsed)
+					for _, text := range content.TextContent {
+						if text != "" {
+							fmt.Printf("[assistant] %s\n", text)
+						}
+					}
+					for _, toolUse := range content.ToolUses {
+						fmt.Printf("[tool] %s\n", toolUse.Name)
+					}
+				}
+				if parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 {
+					fmt.Printf("[cost] Iteration cost: $%.6f\n", parsed.TotalCostUSD)
+				}
+			}
+
+		case "error":
+			fmt.Fprintf(os.Stderr, "[error] %s\n", msg.Content)
+
+		case "complete":
+			fmt.Printf("[complete] %s\n", msg.Content)
+			// In daemon mode, exit on completion instead of waiting
+			cancel()
+			return 0
+		}
+	}
+
+	return 0
+}
+
 // parseTaskCounts reads an IMPLEMENTATION_PLAN.md file and returns the number of
 // completed (DONE) tasks and the total number of tasks.
 func parseTaskCounts(filepath string) (completed, total int) {
@@ -382,7 +509,7 @@ func parseTaskCounts(filepath string) (completed, total int) {
 		if strings.HasPrefix(trimmed, "## TASK ") {
 			total++
 		}
-		if strings.Contains(trimmed, "**Status: DONE**") {
+		if strings.Contains(trimmed, "**Status: DONE**") || strings.Contains(trimmed, "**Status: NOT NEEDED**") {
 			completed++
 		}
 	}

@@ -209,8 +209,8 @@ func TestGetEmbeddedPlanPrompt(t *testing.T) {
 	}
 
 	// GetEmbeddedPlanPrompt returns the raw template with placeholder
-	if !strings.Contains(content, "$ultimate_goal_sentence") {
-		t.Error("Expected raw template to contain $ultimate_goal_sentence placeholder")
+	if !strings.Contains(content, "$ultimate_goal_placeholder_sentence") {
+		t.Error("Expected raw template to contain $ultimate_goal_placeholder_sentence placeholder")
 	}
 }
 
@@ -242,7 +242,7 @@ func TestPlanLoaderWithOverride(t *testing.T) {
 	}
 	defer os.Remove(tmpFile.Name())
 
-	customContent := "# Custom Plan Prompt\n\nULTIMATE GOAL: $ultimate_goal_sentence. Custom planning instructions.\n"
+	customContent := "# Custom Plan Prompt\n\nULTIMATE GOAL: $ultimate_goal_placeholder_sentence. Custom planning instructions.\n"
 	if _, err := tmpFile.WriteString(customContent); err != nil {
 		t.Fatalf("Failed to write to temp file: %v", err)
 	}
@@ -290,15 +290,15 @@ func TestPromptIsPlanMode(t *testing.T) {
 }
 
 func TestPlanPromptGoalSubstitution(t *testing.T) {
-	// With a goal provided, $ultimate_goal_sentence should be replaced
+	// With a goal provided, $ultimate_goal_placeholder_sentence should be replaced
 	loader := prompt.NewPlanLoader("", "Build a world-class trading platform")
 	content, err := loader.Load()
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	if strings.Contains(content, "$ultimate_goal_sentence") {
-		t.Error("Expected $ultimate_goal_sentence placeholder to be substituted")
+	if strings.Contains(content, "$ultimate_goal_placeholder_sentence") {
+		t.Error("Expected $ultimate_goal_placeholder_sentence placeholder to be substituted")
 	}
 	if !strings.Contains(content, "ULTIMATE GOAL: Build a world-class trading platform.") {
 		t.Error("Expected goal text to appear in ULTIMATE GOAL line")
@@ -317,8 +317,8 @@ func TestPlanPromptGoalEmpty(t *testing.T) {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	if strings.Contains(content, "$ultimate_goal_sentence") {
-		t.Error("Expected $ultimate_goal_sentence placeholder to be removed")
+	if strings.Contains(content, "$ultimate_goal_placeholder_sentence") {
+		t.Error("Expected $ultimate_goal_placeholder_sentence placeholder to be removed")
 	}
 	// Should read "ULTIMATE GOAL: Consider missing elements..."
 	if !strings.Contains(content, "ULTIMATE GOAL: Consider missing elements and plan accordingly.") {
@@ -350,7 +350,7 @@ func TestPlanPromptGoalDoesNotAffectBuildPrompt(t *testing.T) {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	if strings.Contains(content, "$ultimate_goal_sentence") {
+	if strings.Contains(content, "$ultimate_goal_placeholder_sentence") {
 		t.Error("Build prompt should not contain goal placeholder")
 	}
 	if strings.Contains(content, "ULTIMATE GOAL") {

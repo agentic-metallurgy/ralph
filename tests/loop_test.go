@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -214,34 +213,20 @@ func TestLoopEmitsLoopMarkers(t *testing.T) {
 	}
 
 	l := loop.New(cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	l.Start(ctx)
 
+	// Collect messages, cancel context after "complete" to let channel close
+	// (the loop stays alive in completedWaiting state until context is cancelled)
 	var messages []loop.Message
-	var mu sync.Mutex
-
-	// Collect messages in a goroutine
-	done := make(chan bool)
-	go func() {
-		for msg := range l.Output() {
-			mu.Lock()
-			messages = append(messages, msg)
-			mu.Unlock()
+	for msg := range l.Output() {
+		messages = append(messages, msg)
+		if msg.Type == "complete" {
+			cancel()
 		}
-		done <- true
-	}()
-
-	// Wait for completion or timeout
-	select {
-	case <-done:
-	case <-ctx.Done():
-		t.Fatal("Test timed out")
 	}
-
-	mu.Lock()
-	defer mu.Unlock()
 
 	// Check that we got loop markers
 	loopMarkers := 0
@@ -286,6 +271,7 @@ func TestLoopEmitsCompleteMessage(t *testing.T) {
 			if !strings.Contains(msg.Content, "COMPLETED") {
 				t.Errorf("Complete message should contain 'COMPLETED': %s", msg.Content)
 			}
+			cancel()
 		}
 	}
 
@@ -353,14 +339,19 @@ func TestLoopChannelCloses(t *testing.T) {
 	}
 
 	l := loop.New(cfg)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	l.Start(ctx)
 
-	// Drain the channel
+	// Drain the channel — cancel context after "complete" so the loop exits
+	// (the loop stays alive in completedWaiting state until context is cancelled)
 	count := 0
-	for range l.Output() {
+	for msg := range l.Output() {
 		count++
+		if msg.Type == "complete" {
+			cancel()
+		}
 		if count > 1000 {
 			t.Fatal("Channel should close after loop completes")
 		}
@@ -387,6 +378,9 @@ func TestLoopHandlesErrorGracefully(t *testing.T) {
 	for msg := range l.Output() {
 		if msg.Type == "error" {
 			errorFound = true
+		}
+		if msg.Type == "complete" {
+			cancel()
 		}
 	}
 
@@ -442,7 +436,8 @@ func TestLoopIsRunningStateTransitions(t *testing.T) {
 		t.Error("New loop should not be running")
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	l.Start(ctx)
 
 	// Should be running after start
@@ -450,8 +445,11 @@ func TestLoopIsRunningStateTransitions(t *testing.T) {
 		t.Error("Loop should be running after Start()")
 	}
 
-	// Wait for completion
-	for range l.Output() {
+	// Wait for completion — cancel context after "complete" so channel closes
+	for msg := range l.Output() {
+		if msg.Type == "complete" {
+			cancel()
+		}
 	}
 
 	// Should not be running after completion
@@ -488,6 +486,9 @@ func TestLoopMarkerFormat(t *testing.T) {
 		if msg.Type == "loop_marker" {
 			markers = append(markers, msg.Content)
 		}
+		if msg.Type == "complete" {
+			cancel()
+		}
 	}
 
 	if len(markers) != len(expectedMarkers) {
@@ -519,6 +520,7 @@ func TestLoopCompletionMarkerFormat(t *testing.T) {
 	for msg := range l.Output() {
 		if msg.Type == "complete" {
 			completionMsg = msg
+			cancel()
 		}
 	}
 
@@ -569,14 +571,18 @@ func TestNewLoopWithZeroIterations(t *testing.T) {
 	}
 
 	l := loop.New(cfg)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	l.Start(ctx)
 
-	// Should immediately complete
+	// Should immediately complete — cancel context after "complete" so channel closes
 	var msgs []loop.Message
 	for msg := range l.Output() {
 		msgs = append(msgs, msg)
+		if msg.Type == "complete" {
+			cancel()
+		}
 	}
 
 	// With 0 iterations, should just get the complete message
@@ -606,6 +612,9 @@ func TestLoopOutputMessages(t *testing.T) {
 	for msg := range l.Output() {
 		if msg.Type == "output" {
 			outputMessages = append(outputMessages, msg)
+		}
+		if msg.Type == "complete" {
+			cancel()
 		}
 	}
 
@@ -662,6 +671,9 @@ func TestLoopIterationTracking(t *testing.T) {
 	for msg := range l.Output() {
 		if msg.Type == "loop_marker" {
 			seenIterations[msg.Loop] = true
+		}
+		if msg.Type == "complete" {
+			cancel()
 		}
 	}
 
@@ -764,6 +776,9 @@ func TestSetIterationsDuringRun(t *testing.T) {
 		if msg.Type == "loop_marker" {
 			markers = append(markers, msg)
 		}
+		if msg.Type == "complete" {
+			cancel()
+		}
 	}
 
 	// Should have run more than 2 iterations since we increased to 4
@@ -799,6 +814,7 @@ func TestLoopMultipleIterationsWithOutput(t *testing.T) {
 			outputMsgs++
 		case "complete":
 			completeMsg = true
+			cancel()
 		}
 	}
 
@@ -904,6 +920,9 @@ func TestResumeUsesSessionID(t *testing.T) {
 		if msg.Type == "output" && strings.Contains(msg.Content, `"session_id":"fresh-session-001"`) {
 			foundResumedSession = true
 		}
+		if msg.Type == "complete" {
+			cancel()
+		}
 	}
 
 	if !foundResumedSession {
@@ -931,6 +950,9 @@ func TestFreshIterationNoResume(t *testing.T) {
 	for msg := range l.Output() {
 		if msg.Type == "output" && strings.Contains(msg.Content, "fresh-session-001") {
 			freshCount++
+		}
+		if msg.Type == "complete" {
+			cancel()
 		}
 	}
 
@@ -993,6 +1015,9 @@ func TestLargeOutputNotTruncated(t *testing.T) {
 	var outputMessages []loop.Message
 	for msg := range l.Output() {
 		outputMessages = append(outputMessages, msg)
+		if msg.Type == "complete" {
+			cancel()
+		}
 	}
 
 	// Should have received the large output line (> 1.5MB) without truncation
@@ -1040,6 +1065,9 @@ func TestScannerErrorReported(t *testing.T) {
 	for msg := range l.Output() {
 		if msg.Type == "error" {
 			errorMessages = append(errorMessages, msg)
+		}
+		if msg.Type == "complete" {
+			cancel()
 		}
 	}
 
@@ -1105,6 +1133,7 @@ func TestStartPauseResumeCompletesAllIterations(t *testing.T) {
 		}
 		if msg.Type == "complete" {
 			completionFound = true
+			cancel()
 		}
 	}
 
@@ -1166,6 +1195,7 @@ func TestMultiplePauseResumeCycles(t *testing.T) {
 	for msg := range output {
 		if msg.Type == "complete" {
 			completionFound = true
+			cancel()
 		}
 	}
 
@@ -1210,6 +1240,7 @@ func TestPauseResumeMarkerSequence(t *testing.T) {
 			}
 		}
 		if msg.Type == "complete" {
+			cancel()
 			break
 		}
 	}
@@ -1289,6 +1320,9 @@ func TestPauseResumeRetriesSameIteration(t *testing.T) {
 		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "/") {
 			postResumeIterations = append(postResumeIterations, msg.Loop)
 		}
+		if msg.Type == "complete" {
+			cancel()
+		}
 	}
 
 	// The first marker after resume should be the same iteration (retry due to i--)
@@ -1351,6 +1385,9 @@ func TestFreshLoopAfterStop(t *testing.T) {
 		if msg.Type == "output" && strings.Contains(msg.Content, `"session_id":"fresh-session-001"`) {
 			freshCount++
 		}
+		if msg.Type == "complete" {
+			cancel2()
+		}
 	}
 
 	if freshCount != 2 {
@@ -1406,6 +1443,9 @@ func TestPauseResumeSessionIDEndToEnd(t *testing.T) {
 	for msg := range output {
 		if msg.Type == "output" && strings.Contains(msg.Content, `"session_id":"fresh-session-001"`) {
 			foundResumedSession = true
+		}
+		if msg.Type == "complete" {
+			cancel()
 		}
 	}
 

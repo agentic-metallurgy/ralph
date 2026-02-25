@@ -105,6 +105,7 @@ type Model struct {
 	currentTask    string // Current task (e.g., "#6 Change the lib/gold into lib/silver")
 	completedTasks int    // Number of completed tasks from plan
 	totalTasks     int    // Total number of tasks from plan
+	planMode       bool   // Whether ralph is in plan mode (shows "Planning" as default task)
 	startTime      time.Time
 	baseElapsed    time.Duration // elapsed time from previous sessions
 	timerPaused    bool          // whether elapsed time tracking is paused
@@ -182,6 +183,16 @@ func (m *Model) SetTmuxStatusBar(sb *tmux.StatusBar) {
 func (m *Model) SetCompletedTasks(completed, total int) {
 	m.completedTasks = completed
 	m.totalTasks = total
+}
+
+// SetPlanMode sets whether the TUI is in plan mode (shows "Planning" as default task)
+func (m *Model) SetPlanMode(planMode bool) {
+	m.planMode = planMode
+}
+
+// SetCurrentTask sets the initial current task display value
+func (m *Model) SetCurrentTask(task string) {
+	m.currentTask = task
 }
 
 // getElapsed returns the current total elapsed time
@@ -359,8 +370,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loop.Pause()
 			}
 			return m, nil
-		case "r":
+		case "r", "s":
 			// Resume the loop - resume elapsed time from where we paused (both total and per-loop)
+			// Also handles resuming after completion when new loops were added via '+'
+			// 's' key is the "start" shortcut shown when completed with pending loops
 			if m.loop != nil {
 				if m.timerPaused {
 					m.baseElapsed = m.pausedElapsed
@@ -372,19 +385,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.loopStartTime = time.Now()
 					m.loopTimerPaused = false
 				}
+				// Clear completed state when resuming with pending loops
+				if m.completed && m.totalLoops > m.currentLoop {
+					m.completed = false
+				}
 				m.loop.Resume()
 			}
 			return m, nil
 		case "+":
-			// Add a loop iteration
-			if m.loop != nil && !m.completed {
+			// Add a loop iteration (works even after completion to enable extending loops)
+			if m.loop != nil {
 				m.totalLoops++
 				m.loop.SetIterations(m.totalLoops)
 			}
 			return m, nil
 		case "-":
 			// Subtract a loop iteration (floor: can't go below current loop)
-			if m.loop != nil && !m.completed && m.totalLoops > m.currentLoop {
+			if m.loop != nil && m.totalLoops > m.currentLoop {
 				m.totalLoops--
 				m.loop.SetIterations(m.totalLoops)
 			}
@@ -642,6 +659,8 @@ func (m Model) renderFooter() string {
 	taskDisplay := " -"
 	if m.currentTask != "" {
 		taskDisplay = fmt.Sprintf(" %s", m.currentTask)
+	} else if m.planMode {
+		taskDisplay = " Planning"
 	}
 
 	// Completed Tasks display
@@ -674,14 +693,16 @@ func (m Model) renderFooter() string {
 	quitLabel := highlightStyle.Render("uit")
 	pauseKey := dimStyle.Render("(p)ause")
 	resumeKey := dimStyle.Render("(r)esume")
-	addKey := highlightStyle.Render("(+)")
-	addLabel := highlightStyle.Render(" add loop")
-	subKey := highlightStyle.Render("(-)")
-	subLabel := highlightStyle.Render(" subtract loop")
+	loopsKey := highlightStyle.Render("(+)/(-)")
+	loopsLabel := highlightStyle.Render(" # of loops")
 
-	if isPaused {
+	// Illuminate resume/start depending on state
+	hasPendingLoops := m.completed && m.totalLoops > m.currentLoop
+	if hasPendingLoops {
+		resumeKey = highlightStyle.Render("(s)tart")
+	} else if isPaused {
 		resumeKey = highlightStyle.Render("(r)esume")
-	} else {
+	} else if !m.completed {
 		pauseKey = highlightStyle.Render("(p)ause")
 	}
 
@@ -689,7 +710,7 @@ func (m Model) renderFooter() string {
 		Width(m.width - 2).
 		Align(lipgloss.Left).
 		PaddingLeft(1).
-		Render(fmt.Sprintf("%s%s   %s   %s   %s%s   %s%s", quitKey, quitLabel, resumeKey, pauseKey, addKey, addLabel, subKey, subLabel))
+		Render(fmt.Sprintf("%s%s   %s   %s   %s%s", quitKey, quitLabel, resumeKey, pauseKey, loopsKey, loopsLabel))
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
