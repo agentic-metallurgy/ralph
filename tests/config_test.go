@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"testing"
@@ -597,6 +598,100 @@ func TestDaemonFieldSet(t *testing.T) {
 	}
 	if !cfg.Daemon {
 		t.Error("Expected Daemon to be true when set")
+	}
+}
+
+func TestDefaultPlanIterationsConstant(t *testing.T) {
+	if config.DefaultPlanIterations != 1 {
+		t.Errorf("Expected DefaultPlanIterations = 1, got %d", config.DefaultPlanIterations)
+	}
+	if config.DefaultPlanIterations >= config.DefaultIterations {
+		t.Errorf("Expected DefaultPlanIterations (%d) < DefaultIterations (%d)",
+			config.DefaultPlanIterations, config.DefaultIterations)
+	}
+}
+
+func TestParseFlagsPlanModeDefaultsTo1Iteration(t *testing.T) {
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"ralph", "plan"}
+
+	cfg := config.ParseFlags()
+
+	if !cfg.IsPlanMode() {
+		t.Fatal("Expected plan mode to be detected")
+	}
+	if cfg.Iterations != config.DefaultPlanIterations {
+		t.Errorf("Expected plan mode iterations = %d, got %d", config.DefaultPlanIterations, cfg.Iterations)
+	}
+}
+
+func TestParseFlagsPlanModeExplicitIterationsHonored(t *testing.T) {
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"ralph", "plan", "--iterations", "10"}
+
+	cfg := config.ParseFlags()
+
+	if !cfg.IsPlanMode() {
+		t.Fatal("Expected plan mode to be detected")
+	}
+	if cfg.Iterations != 10 {
+		t.Errorf("Expected explicit iterations = 10, got %d", cfg.Iterations)
+	}
+}
+
+func TestParseFlagsBuildModeKeepsDefaultIterations(t *testing.T) {
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"ralph", "build"}
+
+	cfg := config.ParseFlags()
+
+	if cfg.IsPlanMode() {
+		t.Error("Expected build mode, not plan mode")
+	}
+	if cfg.Iterations != config.DefaultIterations {
+		t.Errorf("Expected build mode iterations = %d, got %d", config.DefaultIterations, cfg.Iterations)
+	}
+}
+
+func TestParseFlagsDefaultModeKeepsDefaultIterations(t *testing.T) {
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"ralph"}
+
+	cfg := config.ParseFlags()
+
+	if cfg.IsPlanMode() {
+		t.Error("Expected default mode, not plan mode")
+	}
+	if cfg.Iterations != config.DefaultIterations {
+		t.Errorf("Expected default mode iterations = %d, got %d", config.DefaultIterations, cfg.Iterations)
 	}
 }
 

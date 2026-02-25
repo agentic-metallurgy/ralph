@@ -38,7 +38,7 @@ func main() {
 		if cfg.IsPlanMode() {
 			showLoader = prompt.NewPlanLoader("", cfg.Goal)
 		} else {
-			showLoader = prompt.NewLoader("")
+			showLoader = prompt.NewLoader("", cfg.Goal)
 		}
 		content, err := showLoader.Load()
 		if err != nil {
@@ -51,7 +51,7 @@ func main() {
 
 	// Wrap in tmux if not already inside one (skip in daemon mode)
 	if !cfg.Daemon && tmux.ShouldWrap(cfg.NoTmux) {
-		if err := tmux.Wrap(); err != nil {
+		if err := tmux.Wrap(cfg.Subcommand); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not wrap in tmux: %v\n", err)
 			// Continue without tmux
 		}
@@ -68,7 +68,7 @@ func main() {
 	if cfg.IsPlanMode() {
 		promptLoader = prompt.NewPlanLoader(cfg.LoopPrompt, cfg.Goal)
 	} else {
-		promptLoader = prompt.NewLoader(cfg.LoopPrompt)
+		promptLoader = prompt.NewLoader(cfg.LoopPrompt, cfg.Goal)
 	}
 	promptContent, err := promptLoader.Load()
 	if err != nil {
