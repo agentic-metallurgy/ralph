@@ -51,7 +51,7 @@ func main() {
 
 	// Wrap in tmux if not already inside one (skip in daemon mode)
 	if !cfg.Daemon && tmux.ShouldWrap(cfg.NoTmux) {
-		if err := tmux.Wrap(); err != nil {
+		if err := tmux.Wrap(cfg.Subcommand); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not wrap in tmux: %v\n", err)
 			// Continue without tmux
 		}

@@ -134,7 +134,9 @@ func pickSessionName(tmuxPath string) string {
 // Wrap re-execs the current process inside a new tmux session.
 // It replaces the current process via syscall.Exec, so this function
 // does not return on success.
-func Wrap() error {
+// subcommand is prepended to the args if non-empty (to restore a subcommand
+// that was stripped from os.Args during flag parsing).
+func Wrap(subcommand string) error {
 	tmuxPath := FindBinary()
 	if tmuxPath == "" {
 		return fmt.Errorf("tmux not found in PATH")
@@ -147,8 +149,12 @@ func Wrap() error {
 
 	sessionName := pickSessionName(tmuxPath)
 
-	// Reconstruct args with --no-tmux added to prevent recursive wrapping
-	ralphArgs := make([]string, 0, len(os.Args))
+	// Reconstruct args with --no-tmux added to prevent recursive wrapping.
+	// Prepend the subcommand if one was stripped from os.Args by DetectSubcommand().
+	ralphArgs := make([]string, 0, len(os.Args)+1)
+	if subcommand != "" {
+		ralphArgs = append(ralphArgs, subcommand)
+	}
 	ralphArgs = append(ralphArgs, os.Args[1:]...)
 	ralphArgs = append(ralphArgs, "--no-tmux")
 
