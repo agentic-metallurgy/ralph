@@ -26,9 +26,9 @@ type Config struct {
 	Goal        string
 	ShowPrompt  bool
 	ShowVersion bool
-	NoTmux      bool
-	Daemon      bool
-	Subcommand  string // "plan", "build", or "" (default: build mode)
+	NoTmux     bool
+	CLI        bool
+	Subcommand string // "plan", "build", or "" (default: build mode)
 }
 
 // NewConfig returns a new Config with default values
@@ -72,8 +72,8 @@ func ParseFlags() *Config {
 	flag.BoolVar(&cfg.ShowPrompt, "show-prompt", false, "Print the embedded loop prompt and exit")
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
 	flag.BoolVar(&cfg.NoTmux, "no-tmux", false, "Run without tmux wrapper")
-	flag.BoolVar(&cfg.Daemon, "daemon", false, "Run without TUI, exit when all loops complete")
-	flag.BoolVar(&cfg.Daemon, "d", false, "Run without TUI, exit when all loops complete (shorthand)")
+	flag.BoolVar(&cfg.CLI, "cli", false, "Run without TUI, output to stdout/stderr, exit when complete")
+	flag.BoolVar(&cfg.CLI, "c", false, "Run without TUI, output to stdout/stderr, exit when complete (shorthand)")
 
 	// Custom usage function to display flags with -- prefix
 	flag.Usage = func() {

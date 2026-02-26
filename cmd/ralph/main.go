@@ -49,8 +49,8 @@ func main() {
 		return
 	}
 
-	// Wrap in tmux if not already inside one (skip in daemon mode)
-	if !cfg.Daemon && tmux.ShouldWrap(cfg.NoTmux) {
+	// Wrap in tmux if not already inside one (skip in CLI mode)
+	if !cfg.CLI && tmux.ShouldWrap(cfg.NoTmux) {
 		if err := tmux.Wrap(cfg.Subcommand); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not wrap in tmux: %v\n", err)
 			// Continue without tmux
@@ -83,9 +83,9 @@ func main() {
 		tokenStats = stats.NewTokenStats()
 	}
 
-	// Daemon mode: run without TUI, exit when all loops complete
-	if cfg.Daemon {
-		exitCode := runDaemon(cfg, promptContent, tokenStats)
+	// CLI mode: run without TUI, output to stdout/stderr, exit when complete
+	if cfg.CLI {
+		exitCode := runCLI(cfg, promptContent, tokenStats)
 		if err := tokenStats.Save(statsFilePath); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
 		}
@@ -390,8 +390,8 @@ func handleParsedMessage(
 	}
 }
 
-// runDaemon runs ralph in daemon mode: no TUI, output to stdout, exit on completion.
-func runDaemon(cfg *config.Config, promptContent string, tokenStats *stats.TokenStats) int {
+// runCLI runs ralph in CLI mode: no TUI, output to stdout/stderr, exit on completion.
+func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenStats) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -417,7 +417,7 @@ func runDaemon(cfg *config.Config, promptContent string, tokenStats *stats.Token
 	if cfg.IsPlanMode() {
 		mode = "plan"
 	}
-	fmt.Printf("ralph daemon: starting %s mode with %d iterations\n", mode, cfg.Iterations)
+	fmt.Printf("ralph cli: starting %s mode with %d iterations\n", mode, cfg.Iterations)
 
 	for msg := range claudeLoop.Output() {
 		select {
@@ -487,7 +487,7 @@ func runDaemon(cfg *config.Config, promptContent string, tokenStats *stats.Token
 
 		case "complete":
 			fmt.Printf("[complete] %s\n", msg.Content)
-			// In daemon mode, exit on completion instead of waiting
+			// In CLI mode, exit on completion instead of waiting
 			cancel()
 			return 0
 		}
