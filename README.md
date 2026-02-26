@@ -58,12 +58,12 @@ ralph --spec-folder /path/to/specs/
 # Use a custom loop prompt instead of the embedded default
 ralph --loop-prompt /path/to/custom_prompt.md
 
-# Run in daemon mode (no TUI, exits on completion)
-ralph --daemon
-ralph -d
+# Run in CLI mode (no TUI, outputs to stdout/stderr, exits on completion)
+ralph --cli
+ralph -c
 
-# Chain plan and build in daemon mode
-ralph plan --iterations 2 -d; ralph build --iterations 4
+# Chain plan and build in CLI mode
+ralph plan --iterations 2 -c; ralph build --iterations 4
 ```
 
 | Flag | Type | Default | Description |
@@ -73,7 +73,7 @@ ralph plan --iterations 2 -d; ralph build --iterations 4
 | `--spec-folder` | string | `specs/` | Directory containing spec files |
 | `--loop-prompt` | string | - | Override the embedded prompt with a custom file |
 | `--goal` | string | - | Ultimate goal sentence (plan mode) |
-| `--daemon` / `-d` | bool | false | Run without TUI, exit on completion |
+| `--cli` / `-c` | bool | false | Run without TUI, output to stdout/stderr, exit on completion |
 | `--no-tmux` | bool | false | Skip automatic tmux wrapping |
 | `--show-prompt` | bool | false | Print the embedded prompt and exit |
 | `--version` | bool | false | Print version and exit |
