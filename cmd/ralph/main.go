@@ -473,8 +473,15 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 							fmt.Printf("[assistant] %s\n", text)
 						}
 					}
-					for _, toolUse := range content.ToolUses {
-						fmt.Printf("[tool] %s\n", toolUse.Name)
+					for _, item := range parsed.Message.Content {
+						if item.Type == parser.ContentTypeToolUse {
+							filePath := parser.ExtractFilePathFromInput(item.Input)
+							if filePath != "" {
+								fmt.Printf("[tool] %s: %s\n", item.Name, filePath)
+							} else {
+								fmt.Printf("[tool] %s\n", item.Name)
+							}
+						}
 					}
 				}
 				if parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 {

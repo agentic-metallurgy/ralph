@@ -311,6 +311,36 @@ func (p *Parser) GetTaskToolUseIDs(msg *ParsedMessage) []string {
 	return ids
 }
 
+// ExtractFilePathFromInput extracts a file path or pattern from a tool input map.
+// Returns the first match from: file_path, path, pattern, command (truncated), description.
+// Returns empty string if no relevant field is found.
+func ExtractFilePathFromInput(input map[string]interface{}) string {
+	// Try file_path first (Read, Write, Edit)
+	if path, ok := input["file_path"].(string); ok && path != "" {
+		return path
+	}
+	// Try path (some tools use this)
+	if path, ok := input["path"].(string); ok && path != "" {
+		return path
+	}
+	// Try pattern (Glob, Grep)
+	if pattern, ok := input["pattern"].(string); ok && pattern != "" {
+		return pattern
+	}
+	// Try command (Bash) - truncate to first 50 chars
+	if cmd, ok := input["command"].(string); ok && cmd != "" {
+		if len(cmd) > 50 {
+			return cmd[:50] + "..."
+		}
+		return cmd
+	}
+	// Try description (Task)
+	if desc, ok := input["description"].(string); ok && desc != "" {
+		return desc
+	}
+	return ""
+}
+
 // ExtractTaskReference scans text for references to IMPLEMENTATION_PLAN.md tasks
 // (e.g., "TASK 6", "Task 3: Some Description"). Returns the last match found,
 // or nil if no task reference is detected.
