@@ -2,6 +2,7 @@
 /ralph
 /ralph-test
 *.exe
+/bin/
 
 # IDE
 .idea/
