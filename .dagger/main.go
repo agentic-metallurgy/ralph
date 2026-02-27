@@ -34,6 +34,7 @@ func (m *RalphCi) TestWithCoverage(ctx context.Context, source *dagger.Directory
 			"go", "test", "-v",
 			"-coverprofile=coverage.out",
 			"-covermode=atomic",
+			"-coverpkg=./internal/...,./cmd/...",
 			"./tests",
 		}).
 		WithExec([]string{"go", "tool", "cover", "-func=coverage.out"}).
