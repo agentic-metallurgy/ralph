@@ -41,6 +41,8 @@ changelog:
 
 brews:
   - name: ralph
+    ids:
+      - ralph
     skip_upload: false
     repository:
       owner: agentic-metallurgy
