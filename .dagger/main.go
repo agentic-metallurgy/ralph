@@ -1,16 +1,7 @@
-// A generated module for RalphCi functions
+// CI module for ralph-go that runs tests and generates coverage reports
 //
-// This module has been generated via dagger init and serves as a reference to
-// basic module structure as you get started with Dagger.
-//
-// Two functions have been pre-created. You can modify, delete, or add to them,
-// as needed. They demonstrate usage of arguments and return types using simple
-// echo and grep commands. The functions can be called from the dagger CLI or
-// from one of the SDKs.
-//
-// The first line in this comment block is a short description line and the
-// rest is a long description with more detail on the module's purpose or usage,
-// if appropriate. All modules should have a short description.
+// This module provides functions to run Go tests and generate coverage reports
+// for the ralph-go project using Dagger.
 
 package main
 
@@ -21,17 +12,30 @@ import (
 
 type RalphCi struct{}
 
-// Returns a container that echoes whatever string argument is provided
-func (m *RalphCi) ContainerEcho(stringArg string) *dagger.Container {
-	return dag.Container().From("alpine:latest").WithExec([]string{"echo", stringArg})
+// goContainer returns a Go container with the source code mounted and ready for testing
+func (m *RalphCi) goContainer(source *dagger.Directory) *dagger.Container {
+	return dag.Container().
+		From("golang:1.25.3-alpine").
+		WithMountedDirectory("/src", source).
+		WithWorkdir("/src")
 }
 
-// Returns lines that match a pattern in the files of the provided Directory
-func (m *RalphCi) GrepDir(ctx context.Context, directoryArg *dagger.Directory, pattern string) (string, error) {
-	return dag.Container().
-		From("alpine:latest").
-		WithMountedDirectory("/mnt", directoryArg).
-		WithWorkdir("/mnt").
-		WithExec([]string{"grep", "-R", pattern, "."}).
+// Test runs all tests in verbose mode
+func (m *RalphCi) Test(ctx context.Context, source *dagger.Directory) (string, error) {
+	return m.goContainer(source).
+		WithExec([]string{"go", "test", "-v", "./tests"}).
+		Stdout(ctx)
+}
+
+// TestWithCoverage runs all tests with coverage profiling and displays a coverage summary
+func (m *RalphCi) TestWithCoverage(ctx context.Context, source *dagger.Directory) (string, error) {
+	return m.goContainer(source).
+		WithExec([]string{
+			"go", "test", "-v",
+			"-coverprofile=coverage.out",
+			"-covermode=atomic",
+			"./tests",
+		}).
+		WithExec([]string{"go", "tool", "cover", "-func=coverage.out"}).
 		Stdout(ctx)
 }
