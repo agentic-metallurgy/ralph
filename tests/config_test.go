@@ -584,20 +584,20 @@ func TestBuildSubcommandBehavesLikeDefault(t *testing.T) {
 	}
 }
 
-func TestDaemonFieldDefault(t *testing.T) {
+func TestCLIFieldDefault(t *testing.T) {
 	cfg := config.NewConfig()
-	if cfg.Daemon {
-		t.Error("Expected Daemon to be false by default")
+	if cfg.CLI {
+		t.Error("Expected CLI to be false by default")
 	}
 }
 
-func TestDaemonFieldSet(t *testing.T) {
+func TestCLIFieldSet(t *testing.T) {
 	cfg := &config.Config{
 		Iterations: 1,
-		Daemon:     true,
+		CLI:        true,
 	}
-	if !cfg.Daemon {
-		t.Error("Expected Daemon to be true when set")
+	if !cfg.CLI {
+		t.Error("Expected CLI to be true when set")
 	}
 }
 
