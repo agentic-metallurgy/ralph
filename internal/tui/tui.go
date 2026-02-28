@@ -19,6 +19,19 @@ const (
 	minHeight = 15
 )
 
+// timeNow is the time source used for seasonal checks (overridable in tests)
+var timeNow = time.Now
+
+// SetTimeNowForTest overrides the time source for testing seasonal behavior
+func SetTimeNowForTest(fn func() time.Time) {
+	timeNow = fn
+}
+
+// isOctober returns true if the current month is October
+func isOctober() bool {
+	return timeNow().Month() == time.October
+}
+
 // Color palette matching Python visualizer (Tokyo Night theme)
 var (
 	colorBlue      = lipgloss.Color("#7AA2F7")
@@ -52,6 +65,9 @@ type Message struct {
 func (m Message) GetIcon() string {
 	switch m.Role {
 	case RoleAssistant:
+		if isOctober() {
+			return "👻"
+		}
 		return "🤖"
 	case RoleTool:
 		return "🔧"

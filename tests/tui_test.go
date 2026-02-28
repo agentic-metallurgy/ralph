@@ -46,8 +46,14 @@ func TestNewModelWithChannels(t *testing.T) {
 	}
 }
 
-// TestMessageRoles tests that all message roles have correct icons
+// TestMessageRoles tests that all message roles have correct icons (non-October)
 func TestMessageRoles(t *testing.T) {
+	// Explicitly set non-October time so this test is stable year-round
+	tui.SetTimeNowForTest(func() time.Time {
+		return time.Date(2024, time.February, 15, 12, 0, 0, 0, time.UTC)
+	})
+	defer tui.SetTimeNowForTest(time.Now)
+
 	tests := []struct {
 		role         tui.MessageRole
 		expectedIcon string
@@ -1773,6 +1779,96 @@ func TestMissingPlanFileDisplaysCreating(t *testing.T) {
 // ============================================================================
 // Integration Tests: TUI + Loop Pause/Resume
 // ============================================================================
+
+// ============================================================================
+// Tests: October Theme — Ghost Emoji (TASK 2)
+// ============================================================================
+
+// TestAssistantIconOctober tests that assistant icon is ghost emoji in October
+func TestAssistantIconOctober(t *testing.T) {
+	tui.SetTimeNowForTest(func() time.Time {
+		return time.Date(2024, time.October, 15, 12, 0, 0, 0, time.UTC)
+	})
+	defer tui.SetTimeNowForTest(time.Now)
+
+	msg := tui.Message{Role: tui.RoleAssistant, Content: "test"}
+	icon := msg.GetIcon()
+	if icon != "👻" {
+		t.Errorf("Expected ghost emoji 👻 for assistant in October, got %s", icon)
+	}
+}
+
+// TestAssistantIconNonOctober tests that assistant icon is robot emoji outside October
+func TestAssistantIconNonOctober(t *testing.T) {
+	months := []time.Month{
+		time.January, time.February, time.March, time.April,
+		time.May, time.June, time.July, time.August,
+		time.September, time.November, time.December,
+	}
+	for _, month := range months {
+		t.Run(month.String(), func(t *testing.T) {
+			tui.SetTimeNowForTest(func() time.Time {
+				return time.Date(2024, month, 15, 12, 0, 0, 0, time.UTC)
+			})
+			defer tui.SetTimeNowForTest(time.Now)
+
+			msg := tui.Message{Role: tui.RoleAssistant, Content: "test"}
+			icon := msg.GetIcon()
+			if icon != "🤖" {
+				t.Errorf("Expected robot emoji 🤖 for assistant in %s, got %s", month, icon)
+			}
+		})
+	}
+}
+
+// TestOctoberOtherRolesUnchanged tests that non-assistant roles are unaffected in October
+func TestOctoberOtherRolesUnchanged(t *testing.T) {
+	tui.SetTimeNowForTest(func() time.Time {
+		return time.Date(2024, time.October, 31, 23, 59, 0, 0, time.UTC)
+	})
+	defer tui.SetTimeNowForTest(time.Now)
+
+	tests := []struct {
+		role         tui.MessageRole
+		expectedIcon string
+	}{
+		{tui.RoleTool, "🔧"},
+		{tui.RoleUser, "📝"},
+		{tui.RoleSystem, "💰"},
+		{tui.RoleLoop, "🚀"},
+		{tui.RoleLoopStopped, "🛑"},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.role), func(t *testing.T) {
+			msg := tui.Message{Role: tc.role, Content: "test"}
+			icon := msg.GetIcon()
+			if icon != tc.expectedIcon {
+				t.Errorf("Expected icon %s for role %s in October, got %s", tc.expectedIcon, tc.role, icon)
+			}
+		})
+	}
+}
+
+// TestOctoberGhostInActivityFeed tests that the ghost emoji renders in the activity feed during October
+func TestOctoberGhostInActivityFeed(t *testing.T) {
+	tui.SetTimeNowForTest(func() time.Time {
+		return time.Date(2024, time.October, 1, 0, 0, 0, 0, time.UTC)
+	})
+	defer tui.SetTimeNowForTest(time.Now)
+
+	model := tui.NewModel()
+	model.AddMessage(tui.Message{Role: tui.RoleAssistant, Content: "Hello from October"})
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "👻") {
+		t.Error("Activity feed should show ghost emoji for assistant messages in October")
+	}
+	if strings.Contains(view, "🤖") {
+		t.Error("Activity feed should NOT show robot emoji for assistant messages in October")
+	}
+}
 
 // TestTUIPauseResumeDoesNotQuit tests that pause/resume keys never trigger app quit.
 func TestTUIPauseResumeDoesNotQuit(t *testing.T) {
