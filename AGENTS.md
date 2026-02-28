@@ -29,4 +29,4 @@
 - `--loop-prompt` — custom prompt override
 - `--show-prompt` — print embedded prompt (respects plan mode)
 - `--no-tmux` — skip tmux wrapping
-- `--cli` / `-c` — run without TUI, output to stdout/stderr, exit on completion
+- `--cli` — run without TUI, output to stdout/stderr, exit on completion
