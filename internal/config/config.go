@@ -73,7 +73,6 @@ func ParseFlags() *Config {
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
 	flag.BoolVar(&cfg.NoTmux, "no-tmux", false, "Run without tmux wrapper")
 	flag.BoolVar(&cfg.CLI, "cli", false, "Run without TUI, output to stdout/stderr, exit when complete")
-	flag.BoolVar(&cfg.CLI, "c", false, "Run without TUI, output to stdout/stderr, exit when complete (shorthand)")
 
 	// Custom usage function to display flags with -- prefix
 	flag.Usage = func() {
