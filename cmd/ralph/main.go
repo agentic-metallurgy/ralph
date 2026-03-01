@@ -303,18 +303,15 @@ func handleParsedMessage(
 	}
 
 	// Track parallel subagents
+	// Agents are added when Task tool_use items are detected (below)
+	// and removed when result messages with parent_tool_use_id arrive.
 	prevCount := len(activeAgentIDs)
-	if jsonParser.IsSubagentMessage(parsed) {
+	if jsonParser.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
+		// Subagent finished - remove from tracking
 		parentID := *parsed.ParentToolUseID
-		if parsed.Type == parser.MessageTypeResult {
-			// Subagent finished
-			delete(activeAgentIDs, parentID)
-		} else {
-			// Subagent is active
-			activeAgentIDs[parentID] = true
-		}
+		delete(activeAgentIDs, parentID)
 	}
-	// Also track "Task" tool_use items as pending agents
+	// Track "Task" tool_use items as pending agents (single add path)
 	for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
 		activeAgentIDs[taskID] = true
 	}
@@ -449,16 +446,16 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 				if cost := jsonParser.GetCost(parsed); cost > 0 {
 					tokenStats.AddCost(cost)
 				}
-				// Track agents
+				// Track parallel subagents
+				// Agents are added when Task tool_use items are detected (below)
+				// and removed when result messages with parent_tool_use_id arrive.
 				prevCount := len(activeAgentIDs)
-				if jsonParser.IsSubagentMessage(parsed) {
+				if jsonParser.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
+					// Subagent finished - remove from tracking
 					parentID := *parsed.ParentToolUseID
-					if parsed.Type == parser.MessageTypeResult {
-						delete(activeAgentIDs, parentID)
-					} else {
-						activeAgentIDs[parentID] = true
-					}
+					delete(activeAgentIDs, parentID)
 				}
+				// Track "Task" tool_use items as pending agents (single add path)
 				for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
 					activeAgentIDs[taskID] = true
 				}
