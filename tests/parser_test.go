@@ -967,3 +967,184 @@ func TestExtractTaskReference(t *testing.T) {
 		})
 	}
 }
+
+// simulateAgentTracking processes a sequence of JSON lines and returns the final agent count.
+// This mirrors the tracking logic in cmd/ralph/main.go for both TUI and CLI modes.
+func simulateAgentTracking(p *parser.Parser, lines []string) int {
+	activeAgentIDs := make(map[string]bool)
+
+	for _, line := range lines {
+		parsed := p.ParseLine(line)
+		if parsed == nil {
+			continue
+		}
+
+		// Remove agents when result messages with parent_tool_use_id arrive
+		if p.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
+			parentID := *parsed.ParentToolUseID
+			delete(activeAgentIDs, parentID)
+		}
+
+		// Add agents when Task tool_use items are detected
+		for _, taskID := range p.GetTaskToolUseIDs(parsed) {
+			activeAgentIDs[taskID] = true
+		}
+	}
+
+	return len(activeAgentIDs)
+}
+
+// TestAgentLifecycleSingleAgent tests that a single agent start -> complete -> count returns to 0
+func TestAgentLifecycleSingleAgent(t *testing.T) {
+	p := parser.NewParser()
+
+	lines := []string{
+		// Agent starts: Task tool_use message
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_agent1","name":"Task","input":{"prompt":"do something"}}]}}`,
+		// Some intermediate messages (not affecting count)
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Working on the task..."}]},"parent_tool_use_id":"toolu_agent1"}`,
+		// Agent completes: result message with parent_tool_use_id
+		`{"type":"result","total_cost_usd":0.01,"parent_tool_use_id":"toolu_agent1"}`,
+	}
+
+	// After processing all messages, count should be 0
+	finalCount := simulateAgentTracking(p, lines)
+	if finalCount != 0 {
+		t.Errorf("Expected final agent count of 0, got %d", finalCount)
+	}
+}
+
+// TestAgentLifecycleMultipleParallel tests that multiple parallel agents -> all complete -> count returns to 0
+func TestAgentLifecycleMultipleParallel(t *testing.T) {
+	p := parser.NewParser()
+
+	lines := []string{
+		// Two agents start in parallel (single message with multiple Task tool_use items)
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_agent1","name":"Task","input":{"prompt":"task 1"}},{"type":"tool_use","id":"toolu_agent2","name":"Task","input":{"prompt":"task 2"}}]}}`,
+		// First agent completes
+		`{"type":"result","total_cost_usd":0.01,"parent_tool_use_id":"toolu_agent1"}`,
+		// Second agent completes
+		`{"type":"result","total_cost_usd":0.02,"parent_tool_use_id":"toolu_agent2"}`,
+	}
+
+	finalCount := simulateAgentTracking(p, lines)
+	if finalCount != 0 {
+		t.Errorf("Expected final agent count of 0, got %d", finalCount)
+	}
+}
+
+// TestAgentLifecycleMultipleSequential tests agents started sequentially all complete
+func TestAgentLifecycleMultipleSequential(t *testing.T) {
+	p := parser.NewParser()
+
+	lines := []string{
+		// First agent starts
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_agent1","name":"Task","input":{"prompt":"task 1"}}]}}`,
+		// Second agent starts
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_agent2","name":"Task","input":{"prompt":"task 2"}}]}}`,
+		// Third agent starts
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_agent3","name":"Task","input":{"prompt":"task 3"}}]}}`,
+		// All agents complete (in different order than they started)
+		`{"type":"result","total_cost_usd":0.02,"parent_tool_use_id":"toolu_agent2"}`,
+		`{"type":"result","total_cost_usd":0.01,"parent_tool_use_id":"toolu_agent1"}`,
+		`{"type":"result","total_cost_usd":0.03,"parent_tool_use_id":"toolu_agent3"}`,
+	}
+
+	finalCount := simulateAgentTracking(p, lines)
+	if finalCount != 0 {
+		t.Errorf("Expected final agent count of 0, got %d", finalCount)
+	}
+}
+
+// TestAgentLifecycleNestedAgents tests that nested agents are tracked correctly
+func TestAgentLifecycleNestedAgents(t *testing.T) {
+	p := parser.NewParser()
+
+	lines := []string{
+		// Parent agent starts
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_parent","name":"Task","input":{"prompt":"parent task"}}]}}`,
+		// Child agent starts (launched by parent, has parent_tool_use_id)
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_child","name":"Task","input":{"prompt":"child task"}}]},"parent_tool_use_id":"toolu_parent"}`,
+		// Child agent completes
+		`{"type":"result","total_cost_usd":0.01,"parent_tool_use_id":"toolu_child"}`,
+		// Parent agent completes
+		`{"type":"result","total_cost_usd":0.02,"parent_tool_use_id":"toolu_parent"}`,
+	}
+
+	finalCount := simulateAgentTracking(p, lines)
+	if finalCount != 0 {
+		t.Errorf("Expected final agent count of 0, got %d", finalCount)
+	}
+}
+
+// TestAgentLifecycleIntermediateCount verifies counts are correct at each step
+func TestAgentLifecycleIntermediateCount(t *testing.T) {
+	p := parser.NewParser()
+	activeAgentIDs := make(map[string]bool)
+
+	// Helper to process a line and return current count
+	processLine := func(line string) int {
+		parsed := p.ParseLine(line)
+		if parsed == nil {
+			return len(activeAgentIDs)
+		}
+
+		if p.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
+			parentID := *parsed.ParentToolUseID
+			delete(activeAgentIDs, parentID)
+		}
+
+		for _, taskID := range p.GetTaskToolUseIDs(parsed) {
+			activeAgentIDs[taskID] = true
+		}
+
+		return len(activeAgentIDs)
+	}
+
+	// Start agent 1
+	count := processLine(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_a1","name":"Task","input":{"prompt":"a"}}]}}`)
+	if count != 1 {
+		t.Errorf("After starting agent 1, expected count 1, got %d", count)
+	}
+
+	// Start agent 2
+	count = processLine(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_a2","name":"Task","input":{"prompt":"b"}}]}}`)
+	if count != 2 {
+		t.Errorf("After starting agent 2, expected count 2, got %d", count)
+	}
+
+	// Agent 1 completes
+	count = processLine(`{"type":"result","total_cost_usd":0.01,"parent_tool_use_id":"toolu_a1"}`)
+	if count != 1 {
+		t.Errorf("After agent 1 completes, expected count 1, got %d", count)
+	}
+
+	// Agent 2 completes
+	count = processLine(`{"type":"result","total_cost_usd":0.02,"parent_tool_use_id":"toolu_a2"}`)
+	if count != 0 {
+		t.Errorf("After agent 2 completes, expected count 0, got %d", count)
+	}
+}
+
+// TestAgentLifecycleDeeplyNested tests deeply nested agent hierarchies
+func TestAgentLifecycleDeeplyNested(t *testing.T) {
+	p := parser.NewParser()
+
+	lines := []string{
+		// Level 0: Root agent starts
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_l0","name":"Task","input":{"prompt":"level 0"}}]}}`,
+		// Level 1: Child of root
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_l1","name":"Task","input":{"prompt":"level 1"}}]},"parent_tool_use_id":"toolu_l0"}`,
+		// Level 2: Grandchild
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_l2","name":"Task","input":{"prompt":"level 2"}}]},"parent_tool_use_id":"toolu_l1"}`,
+		// All complete in reverse order (deepest first)
+		`{"type":"result","total_cost_usd":0.01,"parent_tool_use_id":"toolu_l2"}`,
+		`{"type":"result","total_cost_usd":0.02,"parent_tool_use_id":"toolu_l1"}`,
+		`{"type":"result","total_cost_usd":0.03,"parent_tool_use_id":"toolu_l0"}`,
+	}
+
+	finalCount := simulateAgentTracking(p, lines)
+	if finalCount != 0 {
+		t.Errorf("Expected final agent count of 0, got %d", finalCount)
+	}
+}
