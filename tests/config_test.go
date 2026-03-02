@@ -695,6 +695,109 @@ func TestParseFlagsDefaultModeKeepsDefaultIterations(t *testing.T) {
 	}
 }
 
+func TestIsPlanAndBuildMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		subcommand string
+		expected   bool
+	}{
+		{"empty subcommand", "", false},
+		{"plan subcommand", "plan", false},
+		{"build subcommand", "build", false},
+		{"plan-and-build subcommand", "plan-and-build", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Subcommand: tt.subcommand}
+			result := cfg.IsPlanAndBuildMode()
+			if result != tt.expected {
+				t.Errorf("IsPlanAndBuildMode() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestPlanAndBuildSubcommandDetected(t *testing.T) {
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"ralph", "plan-and-build"}
+
+	cfg := config.ParseFlags()
+
+	if !cfg.IsPlanAndBuildMode() {
+		t.Fatal("Expected plan-and-build mode to be detected")
+	}
+	if cfg.Subcommand != "plan-and-build" {
+		t.Errorf("Expected Subcommand = 'plan-and-build', got %q", cfg.Subcommand)
+	}
+}
+
+func TestPlanAndBuildIterationDefaults(t *testing.T) {
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"ralph", "plan-and-build"}
+
+	cfg := config.ParseFlags()
+
+	if !cfg.IsPlanAndBuildMode() {
+		t.Fatal("Expected plan-and-build mode to be detected")
+	}
+	// Plan phase should always be 1 iteration
+	if cfg.Iterations != config.DefaultPlanIterations {
+		t.Errorf("Expected Iterations = %d (plan phase), got %d", config.DefaultPlanIterations, cfg.Iterations)
+	}
+	// Build phase should default to 5 iterations
+	if cfg.BuildIterations != config.DefaultIterations {
+		t.Errorf("Expected BuildIterations = %d, got %d", config.DefaultIterations, cfg.BuildIterations)
+	}
+}
+
+func TestPlanAndBuildExplicitIterations(t *testing.T) {
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"ralph", "plan-and-build", "--iterations", "10"}
+
+	cfg := config.ParseFlags()
+
+	if !cfg.IsPlanAndBuildMode() {
+		t.Fatal("Expected plan-and-build mode to be detected")
+	}
+	// Plan phase should always be 1 iteration regardless of --iterations
+	if cfg.Iterations != config.DefaultPlanIterations {
+		t.Errorf("Expected Iterations = %d (plan phase fixed), got %d", config.DefaultPlanIterations, cfg.Iterations)
+	}
+	// --iterations should apply to BuildIterations
+	if cfg.BuildIterations != 10 {
+		t.Errorf("Expected BuildIterations = 10, got %d", cfg.BuildIterations)
+	}
+}
+
+func TestBuildIterationsFieldDefault(t *testing.T) {
+	cfg := config.NewConfig()
+	if cfg.BuildIterations != 0 {
+		t.Errorf("Expected BuildIterations = 0 by default, got %d", cfg.BuildIterations)
+	}
+}
+
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))

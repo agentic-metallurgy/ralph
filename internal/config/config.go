@@ -19,16 +19,17 @@ var Version = "dev"
 
 // Config holds the configuration for the ralph-go application
 type Config struct {
-	Iterations  int
-	SpecFile    string
-	SpecFolder  string
-	LoopPrompt  string
-	Goal        string
-	ShowPrompt  bool
-	ShowVersion bool
-	NoTmux      bool
-	CLI         bool
-	Subcommand  string // "plan", "build", or "" (default: build mode)
+	Iterations      int
+	BuildIterations int // iterations for build phase in plan-and-build mode
+	SpecFile        string
+	SpecFolder      string
+	LoopPrompt      string
+	Goal            string
+	ShowPrompt      bool
+	ShowVersion     bool
+	NoTmux          bool
+	CLI             bool
+	Subcommand      string // "plan", "build", "plan-and-build", or "" (default: build mode)
 }
 
 // NewConfig returns a new Config with default values
@@ -47,7 +48,7 @@ func NewConfig() *Config {
 func DetectSubcommand() string {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "plan", "build":
+		case "plan", "build", "plan-and-build":
 			sub := os.Args[1]
 			os.Args = append(os.Args[:1], os.Args[2:]...)
 			return sub
@@ -76,7 +77,7 @@ func ParseFlags() *Config {
 
 	// Custom usage function to display flags with -- prefix
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [plan|build] [flags]\n\nSubcommands:\n  plan\tRun in planning mode (uses plan prompt instead of build prompt)\n  build\tRun in build mode (default if no subcommand specified)\n\nFlags:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [plan|build|plan-and-build] [flags]\n\nSubcommands:\n  plan\t\t\tRun in planning mode (uses plan prompt instead of build prompt)\n  build\t\t\tRun in build mode (default if no subcommand specified)\n  plan-and-build\tRun planning (1 iter) then building (default 5 iters)\n\nFlags:\n", os.Args[0])
 		flag.VisitAll(func(f *flag.Flag) {
 			// Format: --flag-name type
 			//     description (default: value)
@@ -98,17 +99,29 @@ func ParseFlags() *Config {
 
 	flag.Parse()
 
+	// Check if --iterations was explicitly set
+	iterationsExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "iterations" {
+			iterationsExplicit = true
+		}
+	})
+
 	// In plan mode, default to 1 iteration unless the user explicitly set --iterations
 	if cfg.IsPlanMode() {
-		iterationsExplicit := false
-		flag.Visit(func(f *flag.Flag) {
-			if f.Name == "iterations" {
-				iterationsExplicit = true
-			}
-		})
 		if !iterationsExplicit {
 			cfg.Iterations = DefaultPlanIterations
 		}
+	}
+
+	// In plan-and-build mode, plan is always 1 iteration, --iterations applies to build phase
+	if cfg.IsPlanAndBuildMode() {
+		if iterationsExplicit {
+			cfg.BuildIterations = cfg.Iterations
+		} else {
+			cfg.BuildIterations = DefaultIterations
+		}
+		cfg.Iterations = DefaultPlanIterations // Plan phase is always 1
 	}
 
 	return cfg
@@ -117,6 +130,11 @@ func ParseFlags() *Config {
 // IsPlanMode returns true if the "plan" subcommand was specified
 func (c *Config) IsPlanMode() bool {
 	return c.Subcommand == "plan"
+}
+
+// IsPlanAndBuildMode returns true if the "plan-and-build" subcommand was specified
+func (c *Config) IsPlanAndBuildMode() bool {
+	return c.Subcommand == "plan-and-build"
 }
 
 // Validate checks if the configuration is valid.

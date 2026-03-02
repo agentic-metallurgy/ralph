@@ -910,63 +910,66 @@ func TestSendAgentUpdateCmd(t *testing.T) {
 	}
 }
 
-// TestTaskDisplayDefault tests that the task row shows "-" by default
-func TestTaskDisplayDefault(t *testing.T) {
+// TestModeDisplayDefault tests that the mode row shows "-" by default
+func TestModeDisplayDefault(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	view := model.View()
-	if !strings.Contains(view, "Current Task:") {
-		t.Error("View should contain 'Current Task:' label")
+	if !strings.Contains(view, "Current Mode:") {
+		t.Error("View should contain 'Current Mode:' label")
 	}
 }
 
-// TestTaskUpdateDisplayed tests that sending a task update shows the task
-func TestTaskUpdateDisplayed(t *testing.T) {
+// TestModeUpdateDisplayed tests that sending a mode update shows the mode
+func TestModeUpdateDisplayed(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Simulate task update with new "#N Description" format
-	cmd := tui.SendTaskUpdate("#6 Track Phase/Task")
-	taskMsg := cmd()
-	model, _ = updateModel(model, taskMsg)
+	// Simulate mode update
+	cmd := tui.SendModeUpdate("Building")
+	modeMsg := cmd()
+	model, _ = updateModel(model, modeMsg)
 
 	view := model.View()
-	if !strings.Contains(view, "#6 Track Phase/Task") {
-		t.Error("View should display the current task in '#N Description' format")
+	if !strings.Contains(view, "Building") {
+		t.Error("View should display the current mode")
 	}
 }
 
-// TestTaskUpdateOverwritesPrevious tests that new task updates replace old ones
-func TestTaskUpdateOverwritesPrevious(t *testing.T) {
+// TestModeUpdateOverwritesPrevious tests that new mode updates replace old ones
+func TestModeUpdateOverwritesPrevious(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Set task 3
-	cmd := tui.SendTaskUpdate("#3")
+	// Set mode to Planning
+	cmd := tui.SendModeUpdate("Planning")
 	model, _ = updateModel(model, cmd())
 
-	// Set task 6
-	cmd = tui.SendTaskUpdate("#6 Track Phase/Task")
+	// Set mode to Building
+	cmd = tui.SendModeUpdate("Building")
 	model, _ = updateModel(model, cmd())
 
 	view := model.View()
-	if !strings.Contains(view, "#6 Track Phase/Task") {
-		t.Error("View should show the latest task in '#N Description' format")
+	if !strings.Contains(view, "Building") {
+		t.Error("View should show the latest mode")
+	}
+	if strings.Contains(view, "Planning") {
+		t.Error("View should not show old mode after update")
 	}
 }
 
-// TestSendTaskUpdateCmd tests the SendTaskUpdate helper command
-func TestSendTaskUpdateCmd(t *testing.T) {
-	cmd := tui.SendTaskUpdate("Task 5")
+// TestSendModeUpdateCmd tests the SendModeUpdate helper command
+func TestSendModeUpdateCmd(t *testing.T) {
+	cmd := tui.SendModeUpdate("Building")
 
 	if cmd == nil {
-		t.Error("SendTaskUpdate should return a command")
+		t.Error("SendModeUpdate should return a command")
 	}
 
 	result := cmd()
 	if result == nil {
-		t.Error("Command should return a task update message")
+		t.Error("Command should return a mode update message")
 	}
 }
 
@@ -1037,38 +1040,38 @@ func TestQuitHotkeyAlwaysHighlighted(t *testing.T) {
 	}
 }
 
-// TestCurrentTaskDisplayFormat tests the "Current Task: #N Description" format
-func TestCurrentTaskDisplayFormat(t *testing.T) {
+// TestCurrentModeDisplayFormat tests the "Current Mode:" display format
+func TestCurrentModeDisplayFormat(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Simulate task update with "#N Description" format (keep short to fit panel width)
-	cmd := tui.SendTaskUpdate("#6 Change lib/gold")
-	taskMsg := cmd()
-	model, _ = updateModel(model, taskMsg)
+	// Simulate mode update
+	cmd := tui.SendModeUpdate("Planning")
+	modeMsg := cmd()
+	model, _ = updateModel(model, modeMsg)
 
 	view := model.View()
-	if !strings.Contains(view, "Current Task:") {
-		t.Error("View should contain 'Current Task:' label")
+	if !strings.Contains(view, "Current Mode:") {
+		t.Error("View should contain 'Current Mode:' label")
 	}
-	if !strings.Contains(view, "#6 Change lib/gold") {
-		t.Error("View should display task in '#N Description' format")
+	if !strings.Contains(view, "Planning") {
+		t.Error("View should display the mode")
 	}
 }
 
-// TestTaskDisplayWithoutDescription tests task display with number only
-func TestTaskDisplayWithoutDescription(t *testing.T) {
+// TestModeDisplayBuilding tests mode display with "Building" mode
+func TestModeDisplayBuilding(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Simulate task update with number only
-	cmd := tui.SendTaskUpdate("#5")
-	taskMsg := cmd()
-	model, _ = updateModel(model, taskMsg)
+	// Simulate mode update with Building
+	cmd := tui.SendModeUpdate("Building")
+	modeMsg := cmd()
+	model, _ = updateModel(model, modeMsg)
 
 	view := model.View()
-	if !strings.Contains(view, "#5") {
-		t.Error("View should show task number when no description is present")
+	if !strings.Contains(view, "Building") {
+		t.Error("View should show 'Building' mode")
 	}
 }
 
@@ -1704,75 +1707,75 @@ func TestRalphLoopDetailsTitle(t *testing.T) {
 	}
 }
 
-// TestCompletedTasksAboveCurrentTask tests that "Completed Tasks:" appears above "Current Task:"
-func TestCompletedTasksAboveCurrentTask(t *testing.T) {
+// TestCompletedTasksAboveCurrentMode tests that "Completed Tasks:" appears above "Current Mode:"
+func TestCompletedTasksAboveCurrentMode(t *testing.T) {
 	model := tui.NewModel()
 	model.SetCompletedTasks(4, 7)
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Set a current task
-	cmd := tui.SendTaskUpdate("#6 Change lib/gold")
+	// Set a current mode
+	cmd := tui.SendModeUpdate("Building")
 	model, _ = updateModel(model, cmd())
 
 	view := model.View()
 
 	// Find positions of both labels
 	completedIdx := strings.Index(view, "Completed Tasks:")
-	currentIdx := strings.Index(view, "Current Task:")
+	currentIdx := strings.Index(view, "Current Mode:")
 
 	if completedIdx == -1 {
 		t.Fatal("View should contain 'Completed Tasks:' label")
 	}
 	if currentIdx == -1 {
-		t.Fatal("View should contain 'Current Task:' label")
+		t.Fatal("View should contain 'Current Mode:' label")
 	}
 	if completedIdx >= currentIdx {
-		t.Errorf("'Completed Tasks:' (pos %d) should appear before 'Current Task:' (pos %d)",
+		t.Errorf("'Completed Tasks:' (pos %d) should appear before 'Current Mode:' (pos %d)",
 			completedIdx, currentIdx)
 	}
 }
 
 // ============================================================================
-// Tests: Plan Mode Display (Spec #9)
+// Tests: Mode Display (Spec #9)
 // ============================================================================
 
-// TestPlanModeDisplaysPlanning tests that plan mode shows "Planning" as default task
-func TestPlanModeDisplaysPlanning(t *testing.T) {
+// TestSetCurrentModeDisplaysPlanning tests that SetCurrentMode shows "Planning" mode
+func TestSetCurrentModeDisplaysPlanning(t *testing.T) {
 	model := tui.NewModel()
-	model.SetPlanMode(true)
+	model.SetCurrentMode("Planning")
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	view := model.View()
 	if !strings.Contains(view, "Planning") {
-		t.Error("Plan mode should display 'Planning' as current task")
+		t.Error("SetCurrentMode should display 'Planning' mode")
 	}
 }
 
-// TestPlanModeOverriddenByTaskUpdate tests that task updates override plan mode default
-func TestPlanModeOverriddenByTaskUpdate(t *testing.T) {
+// TestSetCurrentModeDisplaysBuilding tests that SetCurrentMode shows "Building" mode
+func TestSetCurrentModeDisplaysBuilding(t *testing.T) {
 	model := tui.NewModel()
-	model.SetPlanMode(true)
+	model.SetCurrentMode("Building")
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Send a task update — should override "Planning"
-	cmd := tui.SendTaskUpdate("#3 Research specs")
+	view := model.View()
+	if !strings.Contains(view, "Building") {
+		t.Error("SetCurrentMode should display 'Building' mode")
+	}
+}
+
+// TestModeUpdateOverridesSetCurrentMode tests that mode updates override initial mode
+func TestModeUpdateOverridesSetCurrentMode(t *testing.T) {
+	model := tui.NewModel()
+	model.SetCurrentMode("Planning")
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Send a mode update — should change to "Building"
+	cmd := tui.SendModeUpdate("Building")
 	model, _ = updateModel(model, cmd())
 
 	view := model.View()
-	if !strings.Contains(view, "#3 Research specs") {
-		t.Error("Task update should override plan mode 'Planning' display")
-	}
-}
-
-// TestMissingPlanFileDisplaysCreating tests that SetCurrentTask shows initial task
-func TestMissingPlanFileDisplaysCreating(t *testing.T) {
-	model := tui.NewModel()
-	model.SetCurrentTask("Creating IMPLEMENTATION_PLAN.md")
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "Creating IMPLEMENTATION_PLAN.md") {
-		t.Error("When plan file is missing, should display 'Creating IMPLEMENTATION_PLAN.md'")
+	if !strings.Contains(view, "Building") {
+		t.Error("Mode update should change 'Planning' to 'Building'")
 	}
 }
 

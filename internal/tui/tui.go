@@ -127,7 +127,7 @@ type Model struct {
 	currentTask    string // Current task (e.g., "#6 Change the lib/gold into lib/silver")
 	completedTasks int    // Number of completed tasks from plan
 	totalTasks     int    // Total number of tasks from plan
-	planMode       bool   // Whether ralph is in plan mode (shows "Planning" as default task)
+	currentMode    string // Current mode display ("Planning", "Building", or "")
 	startTime      time.Time
 	baseElapsed    time.Duration // elapsed time from previous sessions
 	timerPaused    bool          // whether elapsed time tracking is paused
@@ -209,9 +209,9 @@ func (m *Model) SetCompletedTasks(completed, total int) {
 	m.totalTasks = total
 }
 
-// SetPlanMode sets whether the TUI is in plan mode (shows "Planning" as default task)
-func (m *Model) SetPlanMode(planMode bool) {
-	m.planMode = planMode
+// SetCurrentMode sets the current mode display ("Planning", "Building", or "")
+func (m *Model) SetCurrentMode(mode string) {
+	m.currentMode = mode
 }
 
 // SetCurrentTask sets the initial current task display value
@@ -268,6 +268,11 @@ type agentUpdateMsg struct {
 // taskUpdateMsg is sent to update the current IMPLEMENTATION_PLAN.md task
 type taskUpdateMsg struct {
 	task string
+}
+
+// modeUpdateMsg is sent to update the current mode display
+type modeUpdateMsg struct {
+	mode string
 }
 
 // completedTasksUpdateMsg is sent to update the completed/total task counts
@@ -493,6 +498,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case taskUpdateMsg:
 		m.currentTask = msg.task
+		return m, nil
+
+	case modeUpdateMsg:
+		m.currentMode = msg.mode
 		return m, nil
 
 	case completedTasksUpdateMsg:
@@ -722,12 +731,10 @@ func (m Model) renderFooter() string {
 		agentStyle = valueStyle.Foreground(colorGreen)
 	}
 
-	// Current Task display
-	taskDisplay := " -"
-	if m.currentTask != "" {
-		taskDisplay = fmt.Sprintf(" %s", m.currentTask)
-	} else if m.planMode {
-		taskDisplay = " Planning"
+	// Current Mode display
+	modeDisplay := " -"
+	if m.currentMode != "" {
+		modeDisplay = fmt.Sprintf(" %s", m.currentMode)
 	}
 
 	// Completed Tasks display
@@ -741,7 +748,7 @@ func (m Model) renderFooter() string {
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Active Agents:"), agentStyle.Render(agentDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Completed Tasks:"), valueStyle.Render(completedDisplay)),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Task:"), valueStyle.Render(taskDisplay)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Mode:"), valueStyle.Render(modeDisplay)),
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
 
@@ -858,6 +865,13 @@ func SendAgentUpdate(count int) tea.Cmd {
 func SendTaskUpdate(task string) tea.Cmd {
 	return func() tea.Msg {
 		return taskUpdateMsg{task: task}
+	}
+}
+
+// SendModeUpdate is a helper command to update the current mode display
+func SendModeUpdate(mode string) tea.Cmd {
+	return func() tea.Msg {
+		return modeUpdateMsg{mode: mode}
 	}
 }
 

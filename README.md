@@ -38,6 +38,7 @@ Ralph is continuously looping on a given prompt with the ability to pause/edit/r
 ralph              # Build mode (default)
 ralph build        # Explicit build mode (same as default)
 ralph plan         # Planning mode (uses plan prompt)
+ralph plan-and-build  # Run planning (1 iter) then building (default 5 iters)
 ```
 
 ### CLI Options
@@ -64,6 +65,10 @@ ralph -c
 
 # Chain plan and build in CLI mode
 ralph plan --iterations 2 -c; ralph build --iterations 4
+
+# Run plan-and-build (planning then building in one session)
+ralph plan-and-build              # 1 plan iteration + 5 build iterations
+ralph plan-and-build --iterations 10  # 1 plan iteration + 10 build iterations
 ```
 
 | Flag | Type | Default | Description |
