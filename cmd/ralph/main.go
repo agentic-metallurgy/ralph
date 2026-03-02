@@ -85,7 +85,12 @@ func main() {
 
 	// CLI mode: run without TUI, output to stdout/stderr, exit when complete
 	if cfg.CLI {
-		exitCode := runCLI(cfg, promptContent, tokenStats)
+		var exitCode int
+		if cfg.IsPlanAndBuildMode() {
+			exitCode = runPlanAndBuildCLI(cfg, tokenStats)
+		} else {
+			exitCode = runCLI(cfg, promptContent, tokenStats)
+		}
 		if err := tokenStats.Save(statsFilePath); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
 		}
@@ -502,6 +507,233 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 		case "complete":
 			fmt.Printf("[complete] %s\n", msg.Content)
 			// In CLI mode, exit on completion instead of waiting
+			cancel()
+			return 0
+		}
+	}
+
+	return 0
+}
+
+// runPlanAndBuildCLI runs plan-and-build mode in CLI: planning (1 iteration) then building (N iterations)
+// with output to stdout/stderr and no TUI.
+func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle OS signals for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		cancel()
+	}()
+
+	jsonParser := parser.NewParser()
+	activeAgentIDs := make(map[string]bool)
+
+	fmt.Println("ralph cli: starting plan-and-build mode")
+
+	// Phase 1: Planning
+	fmt.Printf("[phase] Planning (%d iteration)\n", cfg.Iterations)
+
+	planPromptLoader := prompt.NewPlanLoader(cfg.LoopPrompt, cfg.Goal)
+	planPromptContent, err := planPromptLoader.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[error] Failed to load plan prompt: %v\n", err)
+		return 1
+	}
+
+	planLoop := loop.New(loop.Config{
+		Iterations: cfg.Iterations, // Always 1 for plan phase
+		Prompt:     planPromptContent,
+	})
+	planLoop.Start(ctx)
+
+	var sessionID string
+
+	// Process plan loop output
+	for msg := range planLoop.Output() {
+		select {
+		case <-ctx.Done():
+			return 1
+		default:
+		}
+
+		switch msg.Type {
+		case "loop_marker":
+			fmt.Printf("[loop] %s\n", msg.Content)
+
+		case "output":
+			parsed := jsonParser.ParseLine(msg.Content)
+			if parsed != nil {
+				// Capture session ID
+				if sid := jsonParser.GetSessionID(parsed); sid != "" {
+					planLoop.SetSessionID(sid)
+					sessionID = sid
+				}
+				// Track stats
+				if usage := jsonParser.GetUsage(parsed); usage != nil {
+					tokenStats.AddUsage(
+						usage.InputTokens,
+						usage.OutputTokens,
+						usage.CacheCreationInputTokens,
+						usage.CacheReadInputTokens,
+					)
+				}
+				if cost := jsonParser.GetCost(parsed); cost > 0 {
+					tokenStats.AddCost(cost)
+				}
+				// Track parallel subagents
+				prevCount := len(activeAgentIDs)
+				if jsonParser.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
+					parentID := *parsed.ParentToolUseID
+					delete(activeAgentIDs, parentID)
+				}
+				for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
+					activeAgentIDs[taskID] = true
+				}
+				if newCount := len(activeAgentIDs); newCount != prevCount {
+					fmt.Printf("[agents] %d active\n", newCount)
+				}
+				// Print assistant text and tool use
+				if parsed.Type == parser.MessageTypeAssistant {
+					content := jsonParser.ExtractContent(parsed)
+					for _, text := range content.TextContent {
+						if text != "" {
+							fmt.Printf("[assistant] %s\n", text)
+						}
+					}
+					for _, item := range parsed.Message.Content {
+						if item.Type == parser.ContentTypeToolUse {
+							filePath := parser.ExtractFilePathFromInput(item.Input)
+							if filePath != "" {
+								fmt.Printf("[tool] %s: %s\n", item.Name, filePath)
+							} else {
+								fmt.Printf("[tool] %s\n", item.Name)
+							}
+						}
+					}
+				}
+				if parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 {
+					fmt.Printf("[cost] Iteration cost: $%.6f\n", parsed.TotalCostUSD)
+				}
+			}
+
+		case "error":
+			fmt.Fprintf(os.Stderr, "[error] %s\n", msg.Content)
+
+		case "complete":
+			fmt.Printf("[complete] %s\n", msg.Content)
+			// Get final session ID
+			sessionID = planLoop.GetSessionID()
+		}
+	}
+
+	// Check if context was cancelled
+	select {
+	case <-ctx.Done():
+		return 1
+	default:
+	}
+
+	// Phase 2: Building
+	fmt.Printf("[phase] Building (%d iterations)\n", cfg.BuildIterations)
+
+	buildPromptLoader := prompt.NewLoader(cfg.LoopPrompt, cfg.Goal)
+	buildPromptContent, err := buildPromptLoader.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[error] Failed to load build prompt: %v\n", err)
+		return 1
+	}
+
+	buildLoop := loop.New(loop.Config{
+		Iterations: cfg.BuildIterations,
+		Prompt:     buildPromptContent,
+	})
+
+	// Set the resume session ID from the plan phase
+	if sessionID != "" {
+		buildLoop.SetResumeSessionID(sessionID)
+	}
+
+	buildLoop.Start(ctx)
+
+	// Reset agent tracking for build phase
+	activeAgentIDs = make(map[string]bool)
+
+	// Process build loop output
+	for msg := range buildLoop.Output() {
+		select {
+		case <-ctx.Done():
+			return 1
+		default:
+		}
+
+		switch msg.Type {
+		case "loop_marker":
+			fmt.Printf("[loop] %s\n", msg.Content)
+
+		case "output":
+			parsed := jsonParser.ParseLine(msg.Content)
+			if parsed != nil {
+				// Capture session ID
+				if sid := jsonParser.GetSessionID(parsed); sid != "" {
+					buildLoop.SetSessionID(sid)
+				}
+				// Track stats
+				if usage := jsonParser.GetUsage(parsed); usage != nil {
+					tokenStats.AddUsage(
+						usage.InputTokens,
+						usage.OutputTokens,
+						usage.CacheCreationInputTokens,
+						usage.CacheReadInputTokens,
+					)
+				}
+				if cost := jsonParser.GetCost(parsed); cost > 0 {
+					tokenStats.AddCost(cost)
+				}
+				// Track parallel subagents
+				prevCount := len(activeAgentIDs)
+				if jsonParser.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
+					parentID := *parsed.ParentToolUseID
+					delete(activeAgentIDs, parentID)
+				}
+				for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
+					activeAgentIDs[taskID] = true
+				}
+				if newCount := len(activeAgentIDs); newCount != prevCount {
+					fmt.Printf("[agents] %d active\n", newCount)
+				}
+				// Print assistant text and tool use
+				if parsed.Type == parser.MessageTypeAssistant {
+					content := jsonParser.ExtractContent(parsed)
+					for _, text := range content.TextContent {
+						if text != "" {
+							fmt.Printf("[assistant] %s\n", text)
+						}
+					}
+					for _, item := range parsed.Message.Content {
+						if item.Type == parser.ContentTypeToolUse {
+							filePath := parser.ExtractFilePathFromInput(item.Input)
+							if filePath != "" {
+								fmt.Printf("[tool] %s: %s\n", item.Name, filePath)
+							} else {
+								fmt.Printf("[tool] %s\n", item.Name)
+							}
+						}
+					}
+				}
+				if parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 {
+					fmt.Printf("[cost] Iteration cost: $%.6f\n", parsed.TotalCostUSD)
+				}
+			}
+
+		case "error":
+			fmt.Fprintf(os.Stderr, "[error] %s\n", msg.Content)
+
+		case "complete":
+			fmt.Printf("[complete] %s\n", msg.Content)
 			cancel()
 			return 0
 		}
