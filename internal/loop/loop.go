@@ -44,7 +44,7 @@ type Message struct {
 // Loop manages the Claude CLI execution loop.
 type Loop struct {
 	config           Config
-	mu               sync.Mutex // protects config.Iterations, sessionID, resumeSessionID, completedWaiting
+	mu               sync.Mutex // protects config.Iterations, sessionID, resumeSessionID, completedWaiting, hibernate state
 	output           chan Message
 	cancel           context.CancelFunc
 	running          bool
@@ -54,6 +54,9 @@ type Loop struct {
 	iterationCancel  context.CancelFunc // cancels current iteration only
 	sessionID        string             // latest session ID from Claude CLI output
 	resumeSessionID  string             // session ID to use with --resume on next iteration
+	hibernating      bool               // whether loop is hibernating due to rate limit
+	hibernateUntil   time.Time          // when rate limit resets
+	hibernateCh      chan struct{}      // channel to signal manual wake
 }
 
 // New creates a new Loop with the given configuration.
@@ -66,9 +69,10 @@ func New(cfg Config) *Loop {
 		cfg.SleepDuration = 1 * time.Second
 	}
 	return &Loop{
-		config:   cfg,
-		output:   make(chan Message, 100),
-		resumeCh: make(chan struct{}, 1),
+		config:      cfg,
+		output:      make(chan Message, 100),
+		resumeCh:    make(chan struct{}, 1),
+		hibernateCh: make(chan struct{}, 1),
 	}
 }
 
@@ -132,6 +136,51 @@ func (l *Loop) Resume() {
 			l.resumeCh <- struct{}{}
 		}
 	}
+}
+
+// Hibernate enters hibernate state and waits until the specified time.
+// If already hibernating, only extends if new time is later.
+// Cancels the current iteration to interrupt it immediately.
+func (l *Loop) Hibernate(until time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// If already hibernating, only extend if new time is later
+	if l.hibernating && until.Before(l.hibernateUntil) {
+		return
+	}
+	l.hibernating = true
+	l.hibernateUntil = until
+	// Cancel current iteration to stop processing
+	if l.iterationCancel != nil {
+		l.iterationCancel()
+	}
+}
+
+// Wake manually wakes from hibernate (e.g., user pressed 'r').
+func (l *Loop) Wake() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.hibernating {
+		l.hibernating = false
+		select {
+		case l.hibernateCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// IsHibernating returns whether the loop is currently hibernating due to rate limit.
+func (l *Loop) IsHibernating() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.hibernating
+}
+
+// GetHibernateUntil returns the time when the hibernate period ends.
+func (l *Loop) GetHibernateUntil() time.Time {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.hibernateUntil
 }
 
 // IsCompletedWaiting returns whether the loop has completed all iterations
@@ -253,6 +302,39 @@ func (l *Loop) run(ctx context.Context) {
 						Loop:    i,
 						Total:   total,
 					}
+				}
+				// Retry this iteration
+				i--
+				continue
+			}
+
+			// Check if hibernating (rate limited) and wait for auto-resume or manual wake
+			if l.IsHibernating() {
+				total := l.GetIterations()
+				l.output <- Message{
+					Type:    "loop_marker",
+					Content: "======= HIBERNATING =======",
+					Loop:    i,
+					Total:   total,
+				}
+				hibernateUntil := l.GetHibernateUntil()
+				select {
+				case <-ctx.Done():
+					return
+				case <-l.hibernateCh:
+					// Manual wake
+				case <-time.After(time.Until(hibernateUntil)):
+					// Auto-wake when rate limit resets
+					l.mu.Lock()
+					l.hibernating = false
+					l.mu.Unlock()
+				}
+				total = l.GetIterations()
+				l.output <- Message{
+					Type:    "loop_marker",
+					Content: "======= WAKING =======",
+					Loop:    i,
+					Total:   total,
 				}
 				// Retry this iteration
 				i--

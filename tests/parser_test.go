@@ -2,6 +2,7 @@ package tests
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cloudosai/ralph-go/internal/parser"
 )
@@ -1146,5 +1147,139 @@ func TestAgentLifecycleDeeplyNested(t *testing.T) {
 	finalCount := simulateAgentTracking(p, lines)
 	if finalCount != 0 {
 		t.Errorf("Expected final agent count of 0, got %d", finalCount)
+	}
+}
+
+// ========== Rate Limit Tests ==========
+
+// TestIsRateLimitRejectedPattern1 tests Pattern 1: rate_limit_event with status rejected
+func TestIsRateLimitRejectedPattern1(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1709500000,"rateLimitType":"token"}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	rejected, resetTime := p.IsRateLimitRejected(msg)
+	if !rejected {
+		t.Error("Expected rejected=true for status rejected")
+	}
+	expected := time.Unix(1709500000, 0)
+	if !resetTime.Equal(expected) {
+		t.Errorf("Expected resetTime %v, got %v", expected, resetTime)
+	}
+}
+
+// TestIsRateLimitRejectedPattern2 tests Pattern 2: is_error with error rate_limit
+func TestIsRateLimitRejectedPattern2(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"assistant","is_error":true,"error":"rate_limit","rate_limit_info":{"status":"rejected","resetsAt":1709500000}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	// Verify is_error and error fields are parsed
+	if !msg.IsError {
+		t.Error("Expected IsError=true")
+	}
+	if msg.Error != "rate_limit" {
+		t.Errorf("Expected Error='rate_limit', got %q", msg.Error)
+	}
+
+	rejected, resetTime := p.IsRateLimitRejected(msg)
+	if !rejected {
+		t.Error("Expected rejected=true for status rejected")
+	}
+	expected := time.Unix(1709500000, 0)
+	if !resetTime.Equal(expected) {
+		t.Errorf("Expected resetTime %v, got %v", expected, resetTime)
+	}
+}
+
+// TestIsRateLimitRejectedNotRejected tests status != rejected returns false
+func TestIsRateLimitRejectedNotRejected(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"rate_limit_event","rate_limit_info":{"status":"warning","resetsAt":1709500000}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	rejected, _ := p.IsRateLimitRejected(msg)
+	if rejected {
+		t.Error("Expected rejected=false for status warning")
+	}
+}
+
+// TestIsRateLimitRejectedNilMessage tests nil message returns false
+func TestIsRateLimitRejectedNilMessage(t *testing.T) {
+	p := parser.NewParser()
+	rejected, resetTime := p.IsRateLimitRejected(nil)
+	if rejected {
+		t.Error("Expected rejected=false for nil message")
+	}
+	if !resetTime.IsZero() {
+		t.Error("Expected zero time for nil message")
+	}
+}
+
+// TestIsRateLimitRejectedNoRateLimitInfo tests message without rate_limit_info returns false
+func TestIsRateLimitRejectedNoRateLimitInfo(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	rejected, resetTime := p.IsRateLimitRejected(msg)
+	if rejected {
+		t.Error("Expected rejected=false for message without rate_limit_info")
+	}
+	if !resetTime.IsZero() {
+		t.Error("Expected zero time for message without rate_limit_info")
+	}
+}
+
+// TestRateLimitInfoParsing tests that RateLimitInfo struct is parsed correctly
+func TestRateLimitInfoParsing(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1709500000,"rateLimitType":"token"}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+	if msg.RateLimitInfo == nil {
+		t.Fatal("Expected non-nil RateLimitInfo")
+	}
+	if msg.RateLimitInfo.Status != "rejected" {
+		t.Errorf("Expected Status 'rejected', got %q", msg.RateLimitInfo.Status)
+	}
+	if msg.RateLimitInfo.ResetsAt != 1709500000 {
+		t.Errorf("Expected ResetsAt 1709500000, got %d", msg.RateLimitInfo.ResetsAt)
+	}
+	if msg.RateLimitInfo.RateLimitType != "token" {
+		t.Errorf("Expected RateLimitType 'token', got %q", msg.RateLimitInfo.RateLimitType)
+	}
+}
+
+// TestMessageTypeRateLimit tests the new MessageTypeRateLimit constant
+func TestMessageTypeRateLimit(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1709500000}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+	if msg.Type != parser.MessageTypeRateLimit {
+		t.Errorf("Expected type %q, got %q", parser.MessageTypeRateLimit, msg.Type)
 	}
 }

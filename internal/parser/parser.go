@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // MessageType represents the type of Claude message
@@ -14,6 +15,7 @@ const (
 	MessageTypeAssistant MessageType = "assistant"
 	MessageTypeUser      MessageType = "user"
 	MessageTypeResult    MessageType = "result"
+	MessageTypeRateLimit MessageType = "rate_limit_event"
 	MessageTypeUnknown   MessageType = "unknown"
 )
 
@@ -32,6 +34,13 @@ type Usage struct {
 	OutputTokens             int64 `json:"output_tokens"`
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+}
+
+// RateLimitInfo holds rate limit event data from Claude CLI
+type RateLimitInfo struct {
+	Status        string `json:"status"`                  // "rejected" means blocked
+	ResetsAt      int64  `json:"resetsAt"`                // Unix timestamp when limit resets
+	RateLimitType string `json:"rateLimitType,omitempty"` // Type of rate limit (e.g., "token")
 }
 
 // ContentItem represents a single content item in a message
@@ -53,12 +62,15 @@ type InnerMessage struct {
 
 // ParsedMessage represents a parsed Claude message
 type ParsedMessage struct {
-	Type            MessageType   `json:"type"`
-	SessionID       string        `json:"session_id,omitempty"`
-	Message         *InnerMessage `json:"message,omitempty"`
-	TotalCostUSD    float64       `json:"total_cost_usd,omitempty"`
-	ParentToolUseID *string       `json:"parent_tool_use_id,omitempty"`
-	RawJSON         string        `json:"-"` // Original JSON for debugging
+	Type            MessageType    `json:"type"`
+	SessionID       string         `json:"session_id,omitempty"`
+	Message         *InnerMessage  `json:"message,omitempty"`
+	TotalCostUSD    float64        `json:"total_cost_usd,omitempty"`
+	ParentToolUseID *string        `json:"parent_tool_use_id,omitempty"`
+	IsError         bool           `json:"is_error,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	RateLimitInfo   *RateLimitInfo `json:"rate_limit_info,omitempty"`
+	RawJSON         string         `json:"-"` // Original JSON for debugging
 }
 
 // LoopMarker represents a loop marker extracted from output
@@ -285,6 +297,21 @@ func (p *Parser) GetSessionID(msg *ParsedMessage) string {
 		return ""
 	}
 	return msg.SessionID
+}
+
+// IsRateLimitRejected checks if message is a rate limit rejection.
+// Returns (true, resetTime) if rejected, (false, zero) otherwise.
+// Handles two patterns:
+// - Pattern 1: type: "rate_limit_event" with rate_limit_info.status == "rejected"
+// - Pattern 2: is_error: true with error: "rate_limit"
+func (p *Parser) IsRateLimitRejected(msg *ParsedMessage) (bool, time.Time) {
+	if msg == nil || msg.RateLimitInfo == nil {
+		return false, time.Time{}
+	}
+	if msg.RateLimitInfo.Status != "rejected" {
+		return false, time.Time{}
+	}
+	return true, time.Unix(msg.RateLimitInfo.ResetsAt, 0)
 }
 
 // IsSubagentMessage returns true if the message originates from a subagent
