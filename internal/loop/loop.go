@@ -174,6 +174,15 @@ func (l *Loop) GetSessionID() string {
 	return l.sessionID
 }
 
+// SetResumeSessionID sets the session ID to use with --resume on the next iteration.
+// This enables plan-and-build mode where the build loop resumes from the plan session.
+// Thread-safe: can be called from any goroutine.
+func (l *Loop) SetResumeSessionID(id string) {
+	l.mu.Lock()
+	l.resumeSessionID = id
+	l.mu.Unlock()
+}
+
 // run executes the main loop logic.
 // After completing all iterations, the goroutine stays alive waiting for more
 // iterations to be added (via SetIterations + Resume). This enables the
