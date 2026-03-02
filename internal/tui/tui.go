@@ -41,6 +41,7 @@ var (
 	colorLightGray = lipgloss.Color("#C0CAF5")
 	colorBg        = lipgloss.Color("#1A1B26")
 	colorRed       = lipgloss.Color("#F7768E")
+	colorOrange    = lipgloss.Color("#FF9E64")
 )
 
 // MessageRole represents the type of message sender
@@ -53,6 +54,7 @@ const (
 	RoleSystem      MessageRole = "system"
 	RoleLoop        MessageRole = "loop"
 	RoleLoopStopped MessageRole = "loop_stopped"
+	RoleHibernate   MessageRole = "hibernate"
 )
 
 // Message represents a single activity message in the feed
@@ -79,6 +81,8 @@ func (m Message) GetIcon() string {
 		return "🚀"
 	case RoleLoopStopped:
 		return "🛑"
+	case RoleHibernate:
+		return "💤"
 	default:
 		return "📝"
 	}
@@ -99,6 +103,8 @@ func (m Message) GetStyle() lipgloss.Style {
 		return lipgloss.NewStyle().Bold(true).Foreground(colorPurple)
 	case RoleLoopStopped:
 		return lipgloss.NewStyle().Bold(true).Foreground(colorRed)
+	case RoleHibernate:
+		return lipgloss.NewStyle().Bold(true).Foreground(colorOrange)
 	default:
 		return lipgloss.NewStyle().Foreground(colorDimGray)
 	}
@@ -139,6 +145,8 @@ type Model struct {
 	doneChan          <-chan struct{}
 	loop              *loop.Loop
 	tmuxBar           *tmux.StatusBar
+	hibernating       bool      // whether loop is hibernating due to rate limit
+	hibernateUntil    time.Time // when rate limit resets
 }
 
 // NewModel creates and returns a new initialized Model
@@ -278,6 +286,11 @@ type loopStatsUpdateMsg struct {
 
 // doneMsg is sent when processing is complete
 type doneMsg struct{}
+
+// hibernateMsg is sent when rate limit is detected
+type hibernateMsg struct {
+	until time.Time
+}
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
@@ -493,6 +506,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loopPausedElapsed = m.loopBaseElapsed + time.Since(m.loopStartTime)
 			m.loopTimerPaused = true
 		}
+		return m, nil
+
+	case hibernateMsg:
+		m.hibernating = true
+		m.hibernateUntil = msg.until
 		return m, nil
 	}
 
@@ -819,6 +837,13 @@ func SendLoopStatsUpdate(totalTokens int64) tea.Cmd {
 func SendDone() tea.Cmd {
 	return func() tea.Msg {
 		return doneMsg{}
+	}
+}
+
+// SendHibernate is a helper command to signal rate limit hibernate state
+func SendHibernate(until time.Time) tea.Cmd {
+	return func() tea.Msg {
+		return hibernateMsg{until: until}
 	}
 }
 
