@@ -120,12 +120,13 @@ func main() {
 	completedTasks, totalTasks := parseTaskCounts(planFilePath)
 	model.SetCompletedTasks(completedTasks, totalTasks)
 
-	// Set plan mode for TUI display
+	// Set current mode for TUI display
 	if cfg.IsPlanMode() {
-		model.SetPlanMode(true)
-	} else if _, err := os.Stat(planFilePath); os.IsNotExist(err) {
-		// When IMPLEMENTATION_PLAN.md doesn't exist, show as initial task
-		model.SetCurrentTask("Creating IMPLEMENTATION_PLAN.md")
+		model.SetCurrentMode("Planning")
+	} else if cfg.IsPlanAndBuildMode() {
+		model.SetCurrentMode("Planning")
+	} else {
+		model.SetCurrentMode("Building")
 	}
 
 	// Create the Bubble Tea program (must be after SetLoop so the model copy has the loop reference)
