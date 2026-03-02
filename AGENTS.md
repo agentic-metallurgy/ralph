@@ -21,6 +21,7 @@
 - `ralph` — default build mode (uses embedded build prompt)
 - `ralph build` — explicit build mode (identical to default)
 - `ralph plan` — planning mode (uses embedded plan prompt)
+- `ralph plan-and-build` — runs planning (1 iter) then building (default 5 iters) in one session
 
 ## Key Flags
 - `--iterations N` — loop count (default: 5)
