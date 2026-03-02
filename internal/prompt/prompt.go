@@ -12,7 +12,7 @@ import (
 //go:embed assets/prompt.md assets/plan_prompt.md
 var embeddedFS embed.FS
 
-const embeddedPromptPath     = "assets/prompt.md"
+const embeddedPromptPath = "assets/prompt.md"
 const embeddedPlanPromptPath = "assets/plan_prompt.md"
 
 // Loader provides methods for loading the loop prompt

@@ -83,26 +83,10 @@ ralph plan-and-build --iterations 10  # 1 plan iteration + 10 build iterations
 | `--show-prompt` | bool | false | Print the embedded prompt and exit |
 | `--version` | bool | false | Print version and exit |
 
-## Development
-
-### Requirements
+## Requirements
 
 - **Go 1.25.3** or compatible version
 - **Claude CLI** installed and accessible in your PATH
-
-### Building
-
-```bash
-git clone https://github.com/cloudosai/ralph-go.git
-cd ralph-go
-go build -o ralph ./cmd/ralph
-```
-
-### Running Tests
-
-```bash
-go test ./tests/...
-```
 
 ## Credits & Inspiration
 

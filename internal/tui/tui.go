@@ -41,6 +41,7 @@ var (
 	colorLightGray = lipgloss.Color("#C0CAF5")
 	colorBg        = lipgloss.Color("#1A1B26")
 	colorRed       = lipgloss.Color("#F7768E")
+	colorOrange    = lipgloss.Color("#FF9E64")
 )
 
 // MessageRole represents the type of message sender
@@ -53,6 +54,7 @@ const (
 	RoleSystem      MessageRole = "system"
 	RoleLoop        MessageRole = "loop"
 	RoleLoopStopped MessageRole = "loop_stopped"
+	RoleHibernate   MessageRole = "hibernate"
 )
 
 // Message represents a single activity message in the feed
@@ -79,6 +81,8 @@ func (m Message) GetIcon() string {
 		return "🚀"
 	case RoleLoopStopped:
 		return "🛑"
+	case RoleHibernate:
+		return "💤"
 	default:
 		return "📝"
 	}
@@ -99,6 +103,8 @@ func (m Message) GetStyle() lipgloss.Style {
 		return lipgloss.NewStyle().Bold(true).Foreground(colorPurple)
 	case RoleLoopStopped:
 		return lipgloss.NewStyle().Bold(true).Foreground(colorRed)
+	case RoleHibernate:
+		return lipgloss.NewStyle().Bold(true).Foreground(colorOrange)
 	default:
 		return lipgloss.NewStyle().Foreground(colorDimGray)
 	}
@@ -139,6 +145,8 @@ type Model struct {
 	doneChan          <-chan struct{}
 	loop              *loop.Loop
 	tmuxBar           *tmux.StatusBar
+	hibernating       bool      // whether loop is hibernating due to rate limit
+	hibernateUntil    time.Time // when rate limit resets
 }
 
 // NewModel creates and returns a new initialized Model
@@ -284,6 +292,11 @@ type loopStatsUpdateMsg struct {
 // doneMsg is sent when processing is complete
 type doneMsg struct{}
 
+// hibernateMsg is sent when rate limit is detected
+type hibernateMsg struct {
+	until time.Time
+}
+
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{tea.ClearScreen, tickCmd()}
@@ -395,7 +408,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Resume the loop - resume elapsed time from where we paused (both total and per-loop)
 			// Also handles resuming after completion when new loops were added via '+'
 			// 's' key is the "start" shortcut shown when completed with pending loops
+			// When hibernating, 'r' wakes from hibernate early
 			if m.loop != nil {
+				// Handle hibernate wake first
+				if m.loop.IsHibernating() {
+					m.loop.Wake()
+					m.hibernating = false
+					// Resume timers when waking from hibernate
+					if m.timerPaused {
+						m.baseElapsed = m.pausedElapsed
+						m.startTime = time.Now()
+						m.timerPaused = false
+					}
+					if m.loopTimerPaused {
+						m.loopBaseElapsed = m.loopPausedElapsed
+						m.loopStartTime = time.Now()
+						m.loopTimerPaused = false
+					}
+					return m, nil
+				}
 				if m.timerPaused {
 					m.baseElapsed = m.pausedElapsed
 					m.startTime = time.Now()
@@ -503,6 +534,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loopTimerPaused = true
 		}
 		return m, nil
+
+	case hibernateMsg:
+		m.hibernating = true
+		m.hibernateUntil = msg.until
+		return m, nil
 	}
 
 	// Handle viewport scrolling
@@ -559,6 +595,7 @@ func (m Model) View() string {
 func (m Model) renderLayout() string {
 	// Check if loop is paused or completed
 	isPaused := m.loop != nil && m.loop.IsPaused()
+	isHibernating := m.loop != nil && m.loop.IsHibernating()
 
 	// Choose colors based on state
 	borderColor := colorBlue
@@ -566,6 +603,9 @@ func (m Model) renderLayout() string {
 	if m.completed {
 		borderColor = colorGreen
 		statusText = "COMPLETED"
+	} else if isHibernating {
+		borderColor = colorOrange
+		statusText = "RATE LIMITED"
 	} else if isPaused {
 		borderColor = colorRed
 		statusText = "STOPPED"
@@ -663,11 +703,22 @@ func (m Model) renderFooter() string {
 
 	// Status display
 	isPaused := m.loop != nil && m.loop.IsPaused()
+	isHibernating := m.loop != nil && m.loop.IsHibernating()
 	statusText := "Running"
 	statusStyle := valueStyle.Foreground(colorGreen)
 	if m.completed {
 		statusText = "Completed"
 		statusStyle = valueStyle.Foreground(colorGreen)
+	} else if isHibernating {
+		// Show countdown timer when hibernating
+		remaining := time.Until(m.hibernateUntil)
+		if remaining < 0 {
+			remaining = 0
+		}
+		mins := int(remaining.Minutes())
+		secs := int(remaining.Seconds()) % 60
+		statusText = fmt.Sprintf("Rate Limited 💤 %02d:%02d", mins, secs)
+		statusStyle = valueStyle.Foreground(colorOrange)
 	} else if isPaused {
 		statusText = "Stopped"
 		statusStyle = valueStyle.Foreground(colorRed)
@@ -721,7 +772,10 @@ func (m Model) renderFooter() string {
 
 	// Illuminate resume/start depending on state
 	hasPendingLoops := m.completed && m.totalLoops > m.currentLoop
-	if hasPendingLoops {
+	if isHibernating {
+		resumeKey = highlightStyle.Render("(r) wake")
+		pauseKey = dimStyle.Render("(p)ause")
+	} else if hasPendingLoops {
 		resumeKey = highlightStyle.Render("(s)tart")
 	} else if isPaused {
 		resumeKey = highlightStyle.Render("(r)esume")
@@ -746,6 +800,19 @@ func (m Model) renderFooter() string {
 // (spec: stats should be about the current loop, not cumulative)
 func (m Model) updateTmuxStatusBar() {
 	if m.tmuxBar == nil || !m.tmuxBar.IsActive() {
+		return
+	}
+
+	// If hibernating, show countdown instead of normal stats
+	if m.hibernating {
+		remaining := time.Until(m.hibernateUntil)
+		if remaining < 0 {
+			remaining = 0
+		}
+		mins := int(remaining.Minutes())
+		secs := int(remaining.Seconds()) % 60
+		hibernateDisplay := fmt.Sprintf("💤 %02d:%02d", mins, secs)
+		m.tmuxBar.Update(tmux.FormatStatusRight("RATE LIMITED", hibernateDisplay, ""))
 		return
 	}
 
@@ -833,6 +900,13 @@ func SendLoopStatsUpdate(totalTokens int64) tea.Cmd {
 func SendDone() tea.Cmd {
 	return func() tea.Msg {
 		return doneMsg{}
+	}
+}
+
+// SendHibernate is a helper command to signal rate limit hibernate state
+func SendHibernate(until time.Time) tea.Cmd {
+	return func() tea.Msg {
+		return hibernateMsg{until: until}
 	}
 }
 

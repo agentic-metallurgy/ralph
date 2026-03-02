@@ -259,7 +259,7 @@ func processMessage(
 			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 				claudeLoop.SetSessionID(sessionID)
 			}
-			handleParsedMessage(parsed, jsonParser, tokenStats, msgChan, program, activeAgentIDs, loopTotalTokens)
+			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, loopTotalTokens)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -289,6 +289,7 @@ func processMessage(
 // handleParsedMessage processes a parsed JSON message from Claude
 func handleParsedMessage(
 	parsed *parser.ParsedMessage,
+	claudeLoop *loop.Loop,
 	jsonParser *parser.Parser,
 	tokenStats *stats.TokenStats,
 	msgChan chan<- tui.Message,
@@ -296,6 +297,17 @@ func handleParsedMessage(
 	activeAgentIDs map[string]bool,
 	loopTotalTokens *int64,
 ) {
+	// Check for rate limit rejection — enter hibernate state
+	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
+		claudeLoop.Hibernate(resetsAt)
+		program.Send(tui.SendHibernate(resetsAt)())
+		msgChan <- tui.Message{
+			Role:    tui.RoleHibernate,
+			Content: fmt.Sprintf("Rate limited until %s", resetsAt.Format(time.Kitchen)),
+		}
+		return // Don't process further
+	}
+
 	// Extract usage information
 	if usage := jsonParser.GetUsage(parsed); usage != nil {
 		tokenStats.AddUsage(
@@ -448,6 +460,11 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 				// Capture session ID
 				if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 					claudeLoop.SetSessionID(sessionID)
+				}
+				// Check for rate limit rejection — enter hibernate state
+				if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
+					claudeLoop.Hibernate(resetsAt)
+					fmt.Printf("[hibernate] Rate limited until %s\n", resetsAt.Format(time.Kitchen))
 				}
 				// Track stats
 				if usage := jsonParser.GetUsage(parsed); usage != nil {

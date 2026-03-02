@@ -1397,6 +1397,213 @@ func TestFreshLoopAfterStop(t *testing.T) {
 
 // TestPauseResumeSessionIDEndToEnd tests the complete session ID lifecycle:
 // start → capture session ID → pause → resume → verify --resume was passed with captured ID
+// ============================================================================
+// Hibernate Tests
+// ============================================================================
+
+// TestHibernateBasicState tests that Hibernate() sets the state correctly
+func TestHibernateBasicState(t *testing.T) {
+	cfg := loop.Config{
+		Iterations: 1,
+		Prompt:     "test",
+	}
+	l := loop.New(cfg)
+
+	// Initially not hibernating
+	if l.IsHibernating() {
+		t.Error("New loop should not be hibernating")
+	}
+
+	// Hibernate
+	hibernateUntil := time.Now().Add(1 * time.Second)
+	l.Hibernate(hibernateUntil)
+
+	if !l.IsHibernating() {
+		t.Error("Loop should be hibernating after Hibernate()")
+	}
+
+	// GetHibernateUntil should return the time
+	if !l.GetHibernateUntil().Equal(hibernateUntil) {
+		t.Errorf("Expected hibernate until %v, got %v", hibernateUntil, l.GetHibernateUntil())
+	}
+}
+
+// TestHibernateManualWake tests that Wake() clears hibernate state
+func TestHibernateManualWake(t *testing.T) {
+	cfg := loop.Config{
+		Iterations: 1,
+		Prompt:     "test",
+	}
+	l := loop.New(cfg)
+
+	// Hibernate for a long time
+	l.Hibernate(time.Now().Add(10 * time.Second))
+
+	if !l.IsHibernating() {
+		t.Error("Loop should be hibernating")
+	}
+
+	// Manual wake
+	l.Wake()
+
+	if l.IsHibernating() {
+		t.Error("Loop should not be hibernating after Wake()")
+	}
+}
+
+// TestHibernateExtendWithLaterTime tests that later hibernateUntil extends, earlier does not shorten
+func TestHibernateExtendWithLaterTime(t *testing.T) {
+	cfg := loop.Config{
+		Iterations: 1,
+		Prompt:     "test",
+	}
+	l := loop.New(cfg)
+
+	first := time.Now().Add(1 * time.Second)
+	later := time.Now().Add(5 * time.Second)
+
+	// Hibernate with first time
+	l.Hibernate(first)
+	if !l.GetHibernateUntil().Equal(first) {
+		t.Errorf("Expected hibernate until %v, got %v", first, l.GetHibernateUntil())
+	}
+
+	// Extend with later time
+	l.Hibernate(later)
+	if !l.GetHibernateUntil().Equal(later) {
+		t.Errorf("Expected hibernate to be extended to %v, got %v", later, l.GetHibernateUntil())
+	}
+
+	// Try to shorten (should NOT work)
+	l.Hibernate(first)
+	if !l.GetHibernateUntil().Equal(later) {
+		t.Errorf("Expected hibernate to NOT be shortened, should still be %v, got %v", later, l.GetHibernateUntil())
+	}
+}
+
+// TestHibernateAutoResumeWithMarkers tests the full hibernate → auto-resume flow with markers
+func TestHibernateAutoResumeWithMarkers(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for first iteration to start (system message)
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"type":"system"`) {
+			break
+		}
+	}
+
+	// Hibernate for a short time (100ms)
+	l.Hibernate(time.Now().Add(100 * time.Millisecond))
+
+	// Collect markers until completion
+	var hibernateFound, wakingFound bool
+	for msg := range output {
+		if msg.Type == "loop_marker" {
+			if strings.Contains(msg.Content, "HIBERNATING") {
+				hibernateFound = true
+			}
+			if strings.Contains(msg.Content, "WAKING") {
+				wakingFound = true
+			}
+		}
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+
+	if !hibernateFound {
+		t.Error("Expected HIBERNATING marker")
+	}
+	if !wakingFound {
+		t.Error("Expected WAKING marker after auto-resume")
+	}
+}
+
+// TestHibernateManualWakeWithMarkers tests hibernate → manual wake flow
+func TestHibernateManualWakeWithMarkers(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for first iteration to start
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"type":"system"`) {
+			break
+		}
+	}
+
+	// Hibernate for a long time
+	l.Hibernate(time.Now().Add(10 * time.Second))
+
+	// Wait for HIBERNATING marker
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "HIBERNATING") {
+			break
+		}
+	}
+
+	// Manual wake
+	l.Wake()
+
+	// Collect remaining markers
+	var wakingFound bool
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "WAKING") {
+			wakingFound = true
+		}
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+
+	if !wakingFound {
+		t.Error("Expected WAKING marker after manual wake")
+	}
+}
+
+// TestHibernateDoesNotAffectNotHibernating tests that Wake() is no-op when not hibernating
+func TestHibernateDoesNotAffectNotHibernating(t *testing.T) {
+	cfg := loop.Config{
+		Iterations: 1,
+		Prompt:     "test",
+	}
+	l := loop.New(cfg)
+
+	// Not hibernating
+	if l.IsHibernating() {
+		t.Error("Should not be hibernating initially")
+	}
+
+	// Wake when not hibernating (should be no-op, not panic)
+	l.Wake()
+
+	if l.IsHibernating() {
+		t.Error("Wake() should not change non-hibernating state")
+	}
+}
+
 func TestPauseResumeSessionIDEndToEnd(t *testing.T) {
 	cfg := loop.Config{
 		Iterations:     3,

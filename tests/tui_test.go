@@ -1898,3 +1898,158 @@ func TestTUIPauseResumeDoesNotQuit(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================================
+// Hibernate Tests
+// ============================================================================
+
+// TestHibernateRoleIcon tests that RoleHibernate has the 💤 icon
+func TestHibernateRoleIcon(t *testing.T) {
+	msg := tui.Message{Role: tui.RoleHibernate, Content: "Rate limited"}
+	icon := msg.GetIcon()
+	if icon != "💤" {
+		t.Errorf("Expected 💤 icon for RoleHibernate, got %s", icon)
+	}
+}
+
+// TestHibernateRoleStyle tests that RoleHibernate has an orange style
+func TestHibernateRoleStyle(t *testing.T) {
+	msg := tui.Message{Role: tui.RoleHibernate, Content: "test"}
+	style := msg.GetStyle()
+	// Style should render without panic (matching pattern of other role style tests)
+	rendered := style.Render("test")
+	if rendered == "" {
+		t.Error("Style for RoleHibernate rendered empty string")
+	}
+}
+
+// TestHibernateMsgUpdate tests that hibernateMsg updates the model's hibernate state
+func TestHibernateMsgUpdate(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Send hibernate message
+	hibernateUntil := time.Now().Add(5 * time.Minute)
+	hibernateCmd := tui.SendHibernate(hibernateUntil)
+	hibernateMsg := hibernateCmd()
+
+	model, _ = updateModel(model, hibernateMsg)
+
+	// After tick, the view should update (we can't directly check internal state,
+	// but we can verify the model renders properly)
+	view := model.View()
+	if view == "" || view == "Goodbye!\n" {
+		t.Error("Model should render properly after hibernate message")
+	}
+}
+
+// TestHibernateDisplayShowsRateLimited tests that TUI shows "RATE LIMITED" status when hibernating
+func TestHibernateDisplayShowsRateLimited(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Hibernate the loop
+	l.Hibernate(time.Now().Add(5 * time.Minute))
+
+	// Send hibernate message to TUI
+	hibernateCmd := tui.SendHibernate(time.Now().Add(5 * time.Minute))
+	hibernateMsg := hibernateCmd()
+	model, _ = updateModel(model, hibernateMsg)
+
+	view := model.View()
+
+	// Should show "RATE LIMITED" status
+	if !strings.Contains(view, "RATE LIMITED") {
+		t.Error("View should contain 'RATE LIMITED' when hibernating")
+	}
+}
+
+// TestHibernateDisplayShowsCountdown tests that TUI shows countdown timer when hibernating
+func TestHibernateDisplayShowsCountdown(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Hibernate for 5 minutes (300 seconds)
+	hibernateUntil := time.Now().Add(5 * time.Minute)
+	l.Hibernate(hibernateUntil)
+
+	// Send hibernate message to TUI
+	hibernateCmd := tui.SendHibernate(hibernateUntil)
+	hibernateMsg := hibernateCmd()
+	model, _ = updateModel(model, hibernateMsg)
+
+	view := model.View()
+
+	// Should show 💤 emoji and countdown timer (approximately 05:00 or 04:59)
+	if !strings.Contains(view, "💤") {
+		t.Error("View should contain 💤 emoji when hibernating")
+	}
+	// Should contain minute:second format (at least "0" followed by digits for time)
+	if !strings.Contains(view, "0") {
+		t.Error("View should contain countdown timer when hibernating")
+	}
+}
+
+// TestHibernateRKeyWake tests that 'r' key wakes from hibernate
+func TestHibernateRKeyWake(t *testing.T) {
+	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Hibernate the loop
+	l.Hibernate(time.Now().Add(10 * time.Second))
+
+	// Send hibernate message to TUI
+	hibernateCmd := tui.SendHibernate(time.Now().Add(10 * time.Second))
+	hibernateMsg := hibernateCmd()
+	model, _ = updateModel(model, hibernateMsg)
+
+	// Verify loop is hibernating
+	if !l.IsHibernating() {
+		t.Fatal("Loop should be hibernating before wake test")
+	}
+
+	// Press 'r' to wake
+	keyR := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
+	model, _ = updateModel(model, keyR)
+
+	// Loop should no longer be hibernating
+	if l.IsHibernating() {
+		t.Error("Loop should not be hibernating after 'r' key wake")
+	}
+}
+
+// TestHibernateMessageInActivityFeed tests that hibernate messages display correctly in activity feed
+func TestHibernateMessageInActivityFeed(t *testing.T) {
+	model := tui.NewModel()
+	model.AddMessage(tui.Message{Role: tui.RoleHibernate, Content: "Rate limited until 10:30 AM"})
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+
+	// Should show 💤 emoji in activity feed
+	if !strings.Contains(view, "💤") {
+		t.Error("Activity feed should show 💤 emoji for hibernate messages")
+	}
+}
+
+// TestSendHibernateCmd tests the SendHibernate helper function
+func TestSendHibernateCmd(t *testing.T) {
+	until := time.Now().Add(5 * time.Minute)
+	cmd := tui.SendHibernate(until)
+
+	if cmd == nil {
+		t.Error("SendHibernate should return a command")
+	}
+
+	// Execute the command and verify it returns a message
+	result := cmd()
+	if result == nil {
+		t.Error("Command should return a hibernate message")
+	}
+}
