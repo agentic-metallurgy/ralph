@@ -26,9 +26,9 @@ type Config struct {
 	Goal        string
 	ShowPrompt  bool
 	ShowVersion bool
-	NoTmux     bool
-	CLI        bool
-	Subcommand string // "plan", "build", or "" (default: build mode)
+	NoTmux      bool
+	CLI         bool
+	Subcommand  string // "plan", "build", or "" (default: build mode)
 }
 
 // NewConfig returns a new Config with default values
