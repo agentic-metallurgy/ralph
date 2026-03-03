@@ -125,8 +125,6 @@ type Model struct {
 	totalLoops     int
 	activeAgents   int
 	currentTask    string // Current task (e.g., "#6 Change the lib/gold into lib/silver")
-	completedTasks int    // Number of completed tasks from plan
-	totalTasks     int    // Total number of tasks from plan
 	currentMode    string // Current mode display ("Planning", "Building", or "")
 	startTime      time.Time
 	baseElapsed    time.Duration // elapsed time from previous sessions
@@ -203,12 +201,6 @@ func (m *Model) SetTmuxStatusBar(sb *tmux.StatusBar) {
 	m.tmuxBar = sb
 }
 
-// SetCompletedTasks sets the completed/total task counts from the implementation plan
-func (m *Model) SetCompletedTasks(completed, total int) {
-	m.completedTasks = completed
-	m.totalTasks = total
-}
-
 // SetCurrentMode sets the current mode display ("Planning", "Building", or "")
 func (m *Model) SetCurrentMode(mode string) {
 	m.currentMode = mode
@@ -273,12 +265,6 @@ type taskUpdateMsg struct {
 // modeUpdateMsg is sent to update the current mode display
 type modeUpdateMsg struct {
 	mode string
-}
-
-// completedTasksUpdateMsg is sent to update the completed/total task counts
-type completedTasksUpdateMsg struct {
-	completed int
-	total     int
 }
 
 // loopStartedMsg is sent when a new loop iteration begins (resets per-loop stats)
@@ -502,11 +488,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modeUpdateMsg:
 		m.currentMode = msg.mode
-		return m, nil
-
-	case completedTasksUpdateMsg:
-		m.completedTasks = msg.completed
-		m.totalTasks = msg.total
 		return m, nil
 
 	case loopStartedMsg:
@@ -737,9 +718,6 @@ func (m Model) renderFooter() string {
 		modeDisplay = fmt.Sprintf(" %s", m.currentMode)
 	}
 
-	// Completed Tasks display
-	completedDisplay := fmt.Sprintf(" %d/%d", m.completedTasks, m.totalTasks)
-
 	loopDetailsContent := lipgloss.JoinVertical(
 		lipgloss.Left,
 		titleStyle.Render("Ralph Loop Details"),
@@ -747,7 +725,6 @@ func (m Model) renderFooter() string {
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Time:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Active Agents:"), agentStyle.Render(agentDisplay)),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Completed Tasks:"), valueStyle.Render(completedDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Mode:"), valueStyle.Render(modeDisplay)),
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
@@ -875,12 +852,6 @@ func SendModeUpdate(mode string) tea.Cmd {
 	}
 }
 
-// SendCompletedTasksUpdate is a helper command to update completed/total task counts
-func SendCompletedTasksUpdate(completed, total int) tea.Cmd {
-	return func() tea.Msg {
-		return completedTasksUpdateMsg{completed: completed, total: total}
-	}
-}
 
 // SendLoopStarted is a helper command to signal a new loop iteration has begun
 func SendLoopStarted() tea.Cmd {
