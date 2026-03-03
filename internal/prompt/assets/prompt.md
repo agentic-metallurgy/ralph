@@ -17,3 +17,4 @@ ULTIMATE GOAL: $ultimate_goal_placeholder_sentence. Keep this goal in mind throu
 9999999. For any bugs you notice, resolve them or document them in @IMPLEMENTATION_PLAN.md using a subagent even if it is unrelated to the current piece of work.
 99999999. Implement functionality completely. Placeholders and stubs waste efforts and time redoing the same work.
 999999999. IMPORTANT: Keep @AGENTS.md operational only — status updates and progress notes belong in `IMPLEMENTATION_PLAN.md`. A bloated AGENTS.md pollutes every future loop's context.
+9999999999. No matter what DON'T commit ./specs/ or ./IMPLEMENTATION_PLAN.md during the work.
