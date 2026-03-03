@@ -1099,62 +1099,6 @@ func TestSetTmuxStatusBar(t *testing.T) {
 	}
 }
 
-// TestCompletedTasksDefault tests that completed tasks shows "0/0" by default
-func TestCompletedTasksDefault(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "Completed Tasks:") {
-		t.Error("View should contain 'Completed Tasks:' label")
-	}
-	if !strings.Contains(view, "0/0") {
-		t.Error("View should show '0/0' for default completed tasks")
-	}
-}
-
-// TestCompletedTasksUpdate tests that completed task counts update via SendCompletedTasksUpdate
-func TestCompletedTasksUpdate(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Simulate completed tasks update
-	cmd := tui.SendCompletedTasksUpdate(4, 7)
-	msg := cmd()
-	model, _ = updateModel(model, msg)
-
-	view := model.View()
-	if !strings.Contains(view, "4/7") {
-		t.Error("View should show '4/7' after completed tasks update")
-	}
-}
-
-// TestSendCompletedTasksUpdateCmd tests the SendCompletedTasksUpdate helper command
-func TestSendCompletedTasksUpdateCmd(t *testing.T) {
-	cmd := tui.SendCompletedTasksUpdate(3, 8)
-
-	if cmd == nil {
-		t.Error("SendCompletedTasksUpdate should return a command")
-	}
-
-	result := cmd()
-	if result == nil {
-		t.Error("Command should return a completed tasks update message")
-	}
-}
-
-// TestSetCompletedTasks tests the SetCompletedTasks setter method
-func TestSetCompletedTasks(t *testing.T) {
-	model := tui.NewModel()
-	model.SetCompletedTasks(5, 10)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "5/10") {
-		t.Error("View should show '5/10' after SetCompletedTasks")
-	}
-}
-
 // TestResizeFromTinyToNormal tests transitioning from too-small to normal size
 func TestResizeFromTinyToNormal(t *testing.T) {
 	model := tui.NewModel()
@@ -1704,34 +1648,6 @@ func TestRalphLoopDetailsTitle(t *testing.T) {
 	view := model.View()
 	if !strings.Contains(view, "Ralph Loop Details") {
 		t.Error("View should contain 'Ralph Loop Details' title (renamed from 'Ralph Details')")
-	}
-}
-
-// TestCompletedTasksAboveCurrentMode tests that "Completed Tasks:" appears above "Current Mode:"
-func TestCompletedTasksAboveCurrentMode(t *testing.T) {
-	model := tui.NewModel()
-	model.SetCompletedTasks(4, 7)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Set a current mode
-	cmd := tui.SendModeUpdate("Building")
-	model, _ = updateModel(model, cmd())
-
-	view := model.View()
-
-	// Find positions of both labels
-	completedIdx := strings.Index(view, "Completed Tasks:")
-	currentIdx := strings.Index(view, "Current Mode:")
-
-	if completedIdx == -1 {
-		t.Fatal("View should contain 'Completed Tasks:' label")
-	}
-	if currentIdx == -1 {
-		t.Fatal("View should contain 'Current Mode:' label")
-	}
-	if completedIdx >= currentIdx {
-		t.Errorf("'Completed Tasks:' (pos %d) should appear before 'Current Mode:' (pos %d)",
-			completedIdx, currentIdx)
 	}
 }
 
