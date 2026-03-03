@@ -20,7 +20,6 @@ import (
 )
 
 const statsFilePath = ".claude_stats"
-const planFilePath = "IMPLEMENTATION_PLAN.md"
 
 func main() {
 	// Parse command-line flags and get configuration
@@ -129,10 +128,6 @@ func main() {
 	model.SetLoopProgress(0, cfg.Iterations)
 	model.SetLoop(claudeLoop)
 	model.SetTmuxStatusBar(tmuxBar)
-
-	// Parse implementation plan for task counts
-	completedTasks, totalTasks := parseTaskCounts(planFilePath)
-	model.SetCompletedTasks(completedTasks, totalTasks)
 
 	// Set current mode for TUI display
 	if cfg.IsPlanMode() {
@@ -776,10 +771,6 @@ func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats) {
 	model.SetLoopProgress(0, cfg.Iterations)
 	model.SetTmuxStatusBar(tmuxBar)
 
-	// Parse implementation plan for task counts
-	completedTasks, totalTasks := parseTaskCounts(planFilePath)
-	model.SetCompletedTasks(completedTasks, totalTasks)
-
 	// Start in planning mode
 	model.SetCurrentMode("Planning")
 
@@ -1141,22 +1132,3 @@ func handleParsedMessagePlanAndBuild(
 	}
 }
 
-// parseTaskCounts reads an IMPLEMENTATION_PLAN.md file and returns the number of
-// completed (DONE) tasks and the total number of tasks.
-func parseTaskCounts(filepath string) (completed, total int) {
-	data, err := os.ReadFile(filepath)
-	if err != nil {
-		return 0, 0
-	}
-
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "## TASK ") {
-			total++
-		}
-		if strings.Contains(trimmed, "**Status: DONE**") || strings.Contains(trimmed, "**Status: NOT NEEDED**") {
-			completed++
-		}
-	}
-	return completed, total
-}
