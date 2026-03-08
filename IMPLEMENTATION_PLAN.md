@@ -42,10 +42,10 @@ Spec: `specs/default.md` — The TUI shows too much verbose file dump output. It
 
 - [x] **Add tests for `parser.ExtractFilePathFromInput()`.** Added `TestExtractFilePathFromInput` with 17 table-driven sub-tests covering all five branches (`file_path`, `path`, `pattern`, `command` short/boundary/truncated, `description`), edge cases (nil map, empty map, unrecognized key), priority ordering (4 tests verifying precedence chain), empty-string fallthrough, and non-string type assertion skip.
 
-- [ ] **Add tests for `tui.SendTaskUpdate()` and `tui.SetCurrentTask()`.** Both are exported functions with no test coverage. The `taskUpdateMsg` handling in `Update()` (tui.go:499-501) is untested.
+- [x] **Add tests for `tui.SendTaskUpdate()` and `tui.SetCurrentTask()`.** Already covered by `TestCurrentTaskDisplayedInFooter`, `TestCurrentTaskUpdatedViaMessage`, `TestCurrentTaskDefaultDash`, and `TestCurrentTaskBetweenCompletedTasksAndMode` (added during P2 currentTask work).
 
-- [ ] **Add tests for `loop.SetResumeSessionID()`.** This method (loop.go:229-233) is used for plan-and-build session chaining but has no direct test.
+- [x] **Add tests for `loop.SetResumeSessionID()`.** Added `TestSetResumeSessionID` (verifies resume ID is passed via `--resume` on next iteration) and `TestSetResumeSessionIDOverwrite` (verifies last-set value wins). Both use the mock command builder's session ID echo-back mechanism.
 
-- [ ] **Add test for `ExtractContent` with `map[string]interface{}` tool result content.** The map branch at parser.go:251-254 (marshals map to JSON) is untested.
+- [x] **Add test for `ExtractContent` with `map[string]interface{}` tool result content.** Added `TestExtractContentToolResultMap` (verifies map marshalled to JSON with correct keys), `TestExtractContentToolResultMapWithSystemReminder` (verifies exact JSON output), and `TestExtractContentToolResultEmptyMap` (verifies `{}` output). Covers the map branch at parser.go:251-254.
 
-- [ ] **Add tests for `RoleLoop` and `RoleLoopStopped` icons/styles outside October.** Currently only verified inside the October-specific test `TestOctoberOtherRolesUnchanged`.
+- [x] **Add tests for `RoleLoop` and `RoleLoopStopped` icons/styles outside October.** Added `TestRoleLoopIcon`, `TestRoleLoopStoppedIcon` (both set non-October time), `TestRoleLoopStyle`, and `TestRoleLoopStoppedStyle`. These verify icons (🚀, 🛑) and style rendering independently of the October test.

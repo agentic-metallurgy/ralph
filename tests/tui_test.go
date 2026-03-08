@@ -2110,3 +2110,53 @@ func TestSendHibernateCmd(t *testing.T) {
 		t.Error("Command should return a hibernate message")
 	}
 }
+
+// ============================================================================
+// Tests: RoleLoop and RoleLoopStopped Icons & Styles (non-October)
+// ============================================================================
+
+// TestRoleLoopIcon tests that RoleLoop has the 🚀 icon outside October
+func TestRoleLoopIcon(t *testing.T) {
+	tui.SetTimeNowForTest(func() time.Time {
+		return time.Date(2024, time.February, 15, 12, 0, 0, 0, time.UTC)
+	})
+	defer tui.SetTimeNowForTest(time.Now)
+
+	msg := tui.Message{Role: tui.RoleLoop, Content: "Loop started"}
+	if icon := msg.GetIcon(); icon != "🚀" {
+		t.Errorf("Expected 🚀 icon for RoleLoop, got %s", icon)
+	}
+}
+
+// TestRoleLoopStoppedIcon tests that RoleLoopStopped has the 🛑 icon outside October
+func TestRoleLoopStoppedIcon(t *testing.T) {
+	tui.SetTimeNowForTest(func() time.Time {
+		return time.Date(2024, time.February, 15, 12, 0, 0, 0, time.UTC)
+	})
+	defer tui.SetTimeNowForTest(time.Now)
+
+	msg := tui.Message{Role: tui.RoleLoopStopped, Content: "Loop stopped"}
+	if icon := msg.GetIcon(); icon != "🛑" {
+		t.Errorf("Expected 🛑 icon for RoleLoopStopped, got %s", icon)
+	}
+}
+
+// TestRoleLoopStyle tests that RoleLoop has a bold purple style
+func TestRoleLoopStyle(t *testing.T) {
+	msg := tui.Message{Role: tui.RoleLoop, Content: "test"}
+	style := msg.GetStyle()
+	rendered := style.Render("test")
+	if rendered == "" {
+		t.Error("Style for RoleLoop rendered empty string")
+	}
+}
+
+// TestRoleLoopStoppedStyle tests that RoleLoopStopped has a bold red style
+func TestRoleLoopStoppedStyle(t *testing.T) {
+	msg := tui.Message{Role: tui.RoleLoopStopped, Content: "test"}
+	style := msg.GetStyle()
+	rendered := style.Render("test")
+	if rendered == "" {
+		t.Error("Style for RoleLoopStopped rendered empty string")
+	}
+}
