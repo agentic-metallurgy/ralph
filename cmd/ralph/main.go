@@ -137,8 +137,6 @@ func main() {
 	// Set current mode for TUI display
 	if cfg.IsPlanMode() {
 		model.SetCurrentMode("Planning")
-	} else if cfg.IsPlanAndBuildMode() {
-		model.SetCurrentMode("Planning")
 	} else {
 		model.SetCurrentMode("Building")
 	}

@@ -28,7 +28,7 @@ Spec: `specs/default.md` — The TUI shows too much verbose file dump output. It
 
 - [x] **Deduplicate message processing logic.** Deleted `handleParsedMessagePlanAndBuild()` (was identical to `handleParsedMessage()`). Extracted `handleLoopMarker()` shared by `processMessage()`, `processPlanPhase()`, and `processBuildPhase()`. Extracted `handleParsedMessageCLI()` shared by `runCLI()` and both phases of `runPlanAndBuildCLI()`. Reduced main.go from 1204 to ~890 lines (~26% reduction) while preserving all behavior. All tests pass including `-race`.
 
-- [ ] **Remove dead code path in main.go:140-141.** The `cfg.IsPlanAndBuildMode()` check inside the standard TUI branch (lines 138-144) can never be true — execution enters the `runPlanAndBuild` branch at line 101 and returns. This `model.SetCurrentMode("Planning")` at line 141 is unreachable.
+- [x] **Remove dead code path in main.go:140-141.** Removed the unreachable `else if cfg.IsPlanAndBuildMode()` branch from the standard TUI mode's `SetCurrentMode` block. The condition could never be true because plan-and-build mode returns early at line 101. Simplified to a two-branch `if cfg.IsPlanMode()` / `else` pattern.
 
 ## P3: Dead Code Cleanup
 
