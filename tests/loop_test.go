@@ -1660,3 +1660,90 @@ func TestPauseResumeSessionIDEndToEnd(t *testing.T) {
 		t.Error("Resumed iteration should use --resume with the captured session ID")
 	}
 }
+
+// TestSetResumeSessionID tests that SetResumeSessionID stores the session ID
+// for use with --resume on the next iteration.
+func TestSetResumeSessionID(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+
+	// Wait for first iteration output
+	output := l.Output()
+	for msg := range output {
+		if msg.Type == "output" {
+			break
+		}
+	}
+
+	// Manually set resume session ID (simulates plan-and-build chaining)
+	l.SetResumeSessionID("plan-session-42")
+
+	// Drain remaining messages and check that --resume was used in next iteration
+	var foundResume bool
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, "plan-session-42") {
+			foundResume = true
+		}
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+
+	if !foundResume {
+		t.Error("Next iteration should use --resume with the session ID set via SetResumeSessionID")
+	}
+}
+
+// TestSetResumeSessionIDOverwrite tests that calling SetResumeSessionID
+// multiple times uses the last value set.
+func TestSetResumeSessionIDOverwrite(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+
+	// Wait for first iteration output
+	output := l.Output()
+	for msg := range output {
+		if msg.Type == "output" {
+			break
+		}
+	}
+
+	// Set, then overwrite
+	l.SetResumeSessionID("old-session")
+	l.SetResumeSessionID("new-session-99")
+
+	// Drain and check last set value is used
+	var foundNew bool
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, "new-session-99") {
+			foundNew = true
+		}
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+
+	if !foundNew {
+		t.Error("Next iteration should use the last session ID set via SetResumeSessionID")
+	}
+}

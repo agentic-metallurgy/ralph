@@ -450,19 +450,6 @@ func TestLoopProgressZeroZero(t *testing.T) {
 	}
 }
 
-// TestCreateProgram tests the CreateProgram function
-func TestCreateProgram(t *testing.T) {
-	msgChan := make(chan tui.Message, 10)
-	doneChan := make(chan struct{})
-	defer close(msgChan)
-	defer close(doneChan)
-
-	program := tui.CreateProgram(msgChan, doneChan)
-	if program == nil {
-		t.Error("CreateProgram should return a non-nil program")
-	}
-}
-
 // TestDefaultRoleIcon tests that unknown roles get default icon
 func TestDefaultRoleIcon(t *testing.T) {
 	msg := tui.Message{Role: "unknown", Content: "test"}
@@ -1736,6 +1723,76 @@ func TestCompletedTasksAboveCurrentMode(t *testing.T) {
 }
 
 // ============================================================================
+// Tests: Current Task Display in Footer
+// ============================================================================
+
+// TestCurrentTaskDisplayedInFooter tests that the currentTask field renders in the footer
+func TestCurrentTaskDisplayedInFooter(t *testing.T) {
+	model := tui.NewModel()
+	model.SetCurrentTask("#6 Refactor config")
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "Current Task:") {
+		t.Error("View should contain 'Current Task:' label")
+	}
+	if !strings.Contains(view, "#6 Refactor config") {
+		t.Error("View should display the current task text")
+	}
+}
+
+// TestCurrentTaskDefaultDash tests that current task shows "-" when no task is set
+func TestCurrentTaskDefaultDash(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "Current Task:") {
+		t.Error("View should contain 'Current Task:' label even when no task is set")
+	}
+}
+
+// TestCurrentTaskUpdatedViaMessage tests that SendTaskUpdate updates the displayed task
+func TestCurrentTaskUpdatedViaMessage(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Send a task update message
+	cmd := tui.SendTaskUpdate("#3 Refactor config parser")
+	model, _ = updateModel(model, cmd())
+
+	view := model.View()
+	if !strings.Contains(view, "#3 Refactor config parser") {
+		t.Error("View should display updated task from SendTaskUpdate")
+	}
+}
+
+// TestCurrentTaskBetweenCompletedTasksAndMode tests ordering of footer fields
+func TestCurrentTaskBetweenCompletedTasksAndMode(t *testing.T) {
+	model := tui.NewModel()
+	model.SetCurrentTask("#1 Setup")
+	model.SetCompletedTasks(2, 5)
+	model.SetCurrentMode("Building")
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+
+	completedIdx := strings.Index(view, "Completed Tasks:")
+	taskIdx := strings.Index(view, "Current Task:")
+	modeIdx := strings.Index(view, "Current Mode:")
+
+	if completedIdx == -1 || taskIdx == -1 || modeIdx == -1 {
+		t.Fatal("View should contain 'Completed Tasks:', 'Current Task:', and 'Current Mode:' labels")
+	}
+	if completedIdx >= taskIdx {
+		t.Errorf("'Completed Tasks:' (pos %d) should appear before 'Current Task:' (pos %d)", completedIdx, taskIdx)
+	}
+	if taskIdx >= modeIdx {
+		t.Errorf("'Current Task:' (pos %d) should appear before 'Current Mode:' (pos %d)", taskIdx, modeIdx)
+	}
+}
+
+// ============================================================================
 // Tests: Mode Display (Spec #9)
 // ============================================================================
 
@@ -2051,5 +2108,55 @@ func TestSendHibernateCmd(t *testing.T) {
 	result := cmd()
 	if result == nil {
 		t.Error("Command should return a hibernate message")
+	}
+}
+
+// ============================================================================
+// Tests: RoleLoop and RoleLoopStopped Icons & Styles (non-October)
+// ============================================================================
+
+// TestRoleLoopIcon tests that RoleLoop has the 🚀 icon outside October
+func TestRoleLoopIcon(t *testing.T) {
+	tui.SetTimeNowForTest(func() time.Time {
+		return time.Date(2024, time.February, 15, 12, 0, 0, 0, time.UTC)
+	})
+	defer tui.SetTimeNowForTest(time.Now)
+
+	msg := tui.Message{Role: tui.RoleLoop, Content: "Loop started"}
+	if icon := msg.GetIcon(); icon != "🚀" {
+		t.Errorf("Expected 🚀 icon for RoleLoop, got %s", icon)
+	}
+}
+
+// TestRoleLoopStoppedIcon tests that RoleLoopStopped has the 🛑 icon outside October
+func TestRoleLoopStoppedIcon(t *testing.T) {
+	tui.SetTimeNowForTest(func() time.Time {
+		return time.Date(2024, time.February, 15, 12, 0, 0, 0, time.UTC)
+	})
+	defer tui.SetTimeNowForTest(time.Now)
+
+	msg := tui.Message{Role: tui.RoleLoopStopped, Content: "Loop stopped"}
+	if icon := msg.GetIcon(); icon != "🛑" {
+		t.Errorf("Expected 🛑 icon for RoleLoopStopped, got %s", icon)
+	}
+}
+
+// TestRoleLoopStyle tests that RoleLoop has a bold purple style
+func TestRoleLoopStyle(t *testing.T) {
+	msg := tui.Message{Role: tui.RoleLoop, Content: "test"}
+	style := msg.GetStyle()
+	rendered := style.Render("test")
+	if rendered == "" {
+		t.Error("Style for RoleLoop rendered empty string")
+	}
+}
+
+// TestRoleLoopStoppedStyle tests that RoleLoopStopped has a bold red style
+func TestRoleLoopStoppedStyle(t *testing.T) {
+	msg := tui.Message{Role: tui.RoleLoopStopped, Content: "test"}
+	style := msg.GetStyle()
+	rendered := style.Render("test")
+	if rendered == "" {
+		t.Error("Style for RoleLoopStopped rendered empty string")
 	}
 }

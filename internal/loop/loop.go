@@ -44,7 +44,7 @@ type Message struct {
 // Loop manages the Claude CLI execution loop.
 type Loop struct {
 	config           Config
-	mu               sync.Mutex // protects config.Iterations, sessionID, resumeSessionID, completedWaiting, hibernate state
+	mu               sync.Mutex // protects running, paused, config.Iterations, sessionID, resumeSessionID, completedWaiting, hibernate state
 	output           chan Message
 	cancel           context.CancelFunc
 	running          bool
@@ -84,7 +84,9 @@ func (l *Loop) Output() <-chan Message {
 // Start begins the loop execution in a goroutine.
 func (l *Loop) Start(ctx context.Context) {
 	ctx, l.cancel = context.WithCancel(ctx)
+	l.mu.Lock()
 	l.running = true
+	l.mu.Unlock()
 
 	go l.run(ctx)
 }
@@ -94,42 +96,49 @@ func (l *Loop) Stop() {
 	if l.cancel != nil {
 		l.cancel()
 	}
+	l.mu.Lock()
 	l.running = false
+	l.mu.Unlock()
 }
 
 // IsRunning returns whether the loop is currently running.
 func (l *Loop) IsRunning() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	return l.running
 }
 
 // IsPaused returns whether the loop is currently paused.
 func (l *Loop) IsPaused() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	return l.paused
 }
 
 // Pause immediately interrupts the current iteration and pauses the loop.
 // Captures the current session ID so the next resume can use --resume.
 func (l *Loop) Pause() {
-	if !l.paused && l.running {
+	l.mu.Lock()
+	shouldPause := !l.paused && l.running
+	if shouldPause {
 		l.paused = true
-		// Capture session ID for resume
-		l.mu.Lock()
 		l.resumeSessionID = l.sessionID
-		l.mu.Unlock()
-		// Cancel the current iteration to interrupt it immediately
-		if l.iterationCancel != nil {
-			l.iterationCancel()
-		}
+	}
+	l.mu.Unlock()
+	// Cancel the current iteration to interrupt it immediately
+	if shouldPause && l.iterationCancel != nil {
+		l.iterationCancel()
 	}
 }
 
 // Resume resumes a paused loop, or wakes a completed-waiting loop to run new iterations.
 func (l *Loop) Resume() {
+	l.mu.Lock()
 	if l.paused {
 		l.paused = false
+		l.mu.Unlock()
 		l.resumeCh <- struct{}{}
 	} else {
-		l.mu.Lock()
 		cw := l.completedWaiting
 		l.mu.Unlock()
 		if cw {
@@ -141,6 +150,7 @@ func (l *Loop) Resume() {
 // Hibernate enters hibernate state and waits until the specified time.
 // If already hibernating, only extends if new time is later.
 // Cancels the current iteration to interrupt it immediately.
+// Captures the current session ID so the retried iteration can use --resume.
 func (l *Loop) Hibernate(until time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -150,6 +160,8 @@ func (l *Loop) Hibernate(until time.Time) {
 	}
 	l.hibernating = true
 	l.hibernateUntil = until
+	// Capture session ID for resume (mirrors Pause logic)
+	l.resumeSessionID = l.sessionID
 	// Cancel current iteration to stop processing
 	if l.iterationCancel != nil {
 		l.iterationCancel()
@@ -238,7 +250,11 @@ func (l *Loop) SetResumeSessionID(id string) {
 // post-completion loop extension workflow where users press '+' then 'r'.
 func (l *Loop) run(ctx context.Context) {
 	defer close(l.output)
-	defer func() { l.running = false }()
+	defer func() {
+		l.mu.Lock()
+		l.running = false
+		l.mu.Unlock()
+	}()
 
 	i := 1
 	for {
@@ -251,7 +267,10 @@ func (l *Loop) run(ctx context.Context) {
 			}
 
 			// Check if paused and wait for resume
-			if l.paused {
+			l.mu.Lock()
+			paused := l.paused
+			l.mu.Unlock()
+			if paused {
 				total := l.GetIterations()
 				l.output <- Message{
 					Type:    "loop_marker",
@@ -292,7 +311,10 @@ func (l *Loop) run(ctx context.Context) {
 			l.iterationCancel = nil
 
 			// If we were paused (interrupted), don't report as error
-			if l.paused {
+			l.mu.Lock()
+			paused = l.paused
+			l.mu.Unlock()
+			if paused {
 				total := l.GetIterations()
 				l.output <- Message{
 					Type:    "loop_marker",

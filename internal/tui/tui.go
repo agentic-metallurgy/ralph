@@ -39,8 +39,7 @@ var (
 	colorGreen     = lipgloss.Color("#9ECE6A")
 	colorDimGray   = lipgloss.Color("#565F89")
 	colorLightGray = lipgloss.Color("#C0CAF5")
-	colorBg        = lipgloss.Color("#1A1B26")
-	colorRed       = lipgloss.Color("#F7768E")
+colorRed       = lipgloss.Color("#F7768E")
 	colorOrange    = lipgloss.Color("#FF9E64")
 )
 
@@ -55,6 +54,7 @@ const (
 	RoleLoop        MessageRole = "loop"
 	RoleLoopStopped MessageRole = "loop_stopped"
 	RoleHibernate   MessageRole = "hibernate"
+	RoleThinking    MessageRole = "thinking"
 )
 
 // Message represents a single activity message in the feed
@@ -83,6 +83,8 @@ func (m Message) GetIcon() string {
 		return "🛑"
 	case RoleHibernate:
 		return "💤"
+	case RoleThinking:
+		return "💭"
 	default:
 		return "📝"
 	}
@@ -105,6 +107,8 @@ func (m Message) GetStyle() lipgloss.Style {
 		return lipgloss.NewStyle().Bold(true).Foreground(colorRed)
 	case RoleHibernate:
 		return lipgloss.NewStyle().Bold(true).Foreground(colorOrange)
+	case RoleThinking:
+		return lipgloss.NewStyle().Italic(true).Foreground(colorDimGray)
 	default:
 		return lipgloss.NewStyle().Foreground(colorDimGray)
 	}
@@ -295,6 +299,11 @@ type doneMsg struct{}
 // hibernateMsg is sent when rate limit is detected
 type hibernateMsg struct {
 	until time.Time
+}
+
+// loopRefMsg is sent to update the loop reference (e.g., when transitioning between plan and build phases)
+type loopRefMsg struct {
+	loop *loop.Loop
 }
 
 // Init initializes the model
@@ -539,6 +548,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.hibernating = true
 		m.hibernateUntil = msg.until
 		return m, nil
+
+	case loopRefMsg:
+		m.loop = msg.loop
+		return m, nil
 	}
 
 	// Handle viewport scrolling
@@ -740,6 +753,12 @@ func (m Model) renderFooter() string {
 	// Completed Tasks display
 	completedDisplay := fmt.Sprintf(" %d/%d", m.completedTasks, m.totalTasks)
 
+	// Current Task display
+	taskDisplay := " -"
+	if m.currentTask != "" {
+		taskDisplay = fmt.Sprintf(" %s", m.currentTask)
+	}
+
 	loopDetailsContent := lipgloss.JoinVertical(
 		lipgloss.Left,
 		titleStyle.Render("Ralph Loop Details"),
@@ -748,6 +767,7 @@ func (m Model) renderFooter() string {
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Active Agents:"), agentStyle.Render(agentDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Completed Tasks:"), valueStyle.Render(completedDisplay)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Task:"), valueStyle.Render(taskDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Mode:"), valueStyle.Render(modeDisplay)),
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
@@ -910,28 +930,16 @@ func SendHibernate(until time.Time) tea.Cmd {
 	}
 }
 
+// SendLoopRef is a helper command to update the loop reference in the TUI model.
+// Used in plan-and-build mode to swap the loop when transitioning between phases.
+func SendLoopRef(l *loop.Loop) tea.Cmd {
+	return func() tea.Msg {
+		return loopRefMsg{loop: l}
+	}
+}
+
 // TickMsgForTest returns a tickMsg for use in tests
 func TickMsgForTest() tea.Msg {
 	return tickMsg(time.Now())
 }
 
-// Run starts the Bubble Tea program
-func Run() error {
-	p := tea.NewProgram(NewModel(), tea.WithAltScreen())
-	_, err := p.Run()
-	return err
-}
-
-// RunWithChannels starts the TUI with external message and done channels
-func RunWithChannels(msgChan <-chan Message, doneChan <-chan struct{}) error {
-	model := NewModelWithChannels(msgChan, doneChan)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	_, err := p.Run()
-	return err
-}
-
-// CreateProgram creates a Bubble Tea program that can be controlled externally
-func CreateProgram(msgChan <-chan Message, doneChan <-chan struct{}) *tea.Program {
-	model := NewModelWithChannels(msgChan, doneChan)
-	return tea.NewProgram(model, tea.WithAltScreen())
-}

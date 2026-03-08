@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"syscall"
 )
 
@@ -67,22 +66,6 @@ func (s *StatusBar) Restore() {
 func FormatStatusRight(loopDisplay, tokenDisplay, timeDisplay string) string {
 	return fmt.Sprintf("[current loop: %s   tokens: %s   elapsed: %s]",
 		loopDisplay, tokenDisplay, timeDisplay)
-}
-
-// GetCurrentSessionName returns the current tmux session name, or empty if not in tmux.
-func GetCurrentSessionName() string {
-	if !IsInsideTmux() {
-		return ""
-	}
-	path := FindBinary()
-	if path == "" {
-		return ""
-	}
-	out, err := exec.Command(path, "display-message", "-p", "#{session_name}").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // IsInsideTmux returns true if the current process is running inside a tmux session.

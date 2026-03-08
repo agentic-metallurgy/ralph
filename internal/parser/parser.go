@@ -91,6 +91,7 @@ type ParsedContent struct {
 type ToolUse struct {
 	Name      string
 	InputJSON string // Truncated JSON preview
+	FilePath  string // Extracted file path from input (if available)
 }
 
 // ToolResult represents a tool result from the user
@@ -241,6 +242,7 @@ func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
 			content.ToolUses = append(content.ToolUses, ToolUse{
 				Name:      item.Name,
 				InputJSON: inputJSON,
+				FilePath:  ExtractFilePathFromInput(item.Input),
 			})
 
 		case ContentTypeToolResult:
