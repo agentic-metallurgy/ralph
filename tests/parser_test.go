@@ -1283,3 +1283,107 @@ func TestMessageTypeRateLimit(t *testing.T) {
 		t.Errorf("Expected type %q, got %q", parser.MessageTypeRateLimit, msg.Type)
 	}
 }
+
+// TestExtractFilePathFromInput tests all branches of ExtractFilePathFromInput.
+func TestExtractFilePathFromInput(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  map[string]interface{}
+		expect string
+	}{
+		{
+			"file_path key (Read/Write/Edit)",
+			map[string]interface{}{"file_path": "/src/main.go"},
+			"/src/main.go",
+		},
+		{
+			"path key",
+			map[string]interface{}{"path": "/var/log/app.log"},
+			"/var/log/app.log",
+		},
+		{
+			"pattern key (Glob/Grep)",
+			map[string]interface{}{"pattern": "**/*.go"},
+			"**/*.go",
+		},
+		{
+			"command key short",
+			map[string]interface{}{"command": "ls -la"},
+			"ls -la",
+		},
+		{
+			"command key exactly 50 chars",
+			map[string]interface{}{"command": "01234567890123456789012345678901234567890123456789"},
+			"01234567890123456789012345678901234567890123456789",
+		},
+		{
+			"command key truncated at 51 chars",
+			map[string]interface{}{"command": "012345678901234567890123456789012345678901234567890"},
+			"01234567890123456789012345678901234567890123456789...",
+		},
+		{
+			"command key long truncated",
+			map[string]interface{}{"command": "go test -v -run TestSomethingVeryLongThatExceedsFiftyCharacters ./internal/..."},
+			"go test -v -run TestSomethingVeryLongThatExceedsFi...",
+		},
+		{
+			"description key (Task)",
+			map[string]interface{}{"description": "Run database migration"},
+			"Run database migration",
+		},
+		{
+			"nil map returns empty",
+			nil,
+			"",
+		},
+		{
+			"empty map returns empty",
+			map[string]interface{}{},
+			"",
+		},
+		{
+			"unrecognized key returns empty",
+			map[string]interface{}{"content": "some data"},
+			"",
+		},
+		{
+			"file_path takes priority over path",
+			map[string]interface{}{"file_path": "/a.go", "path": "/b.go"},
+			"/a.go",
+		},
+		{
+			"path takes priority over pattern",
+			map[string]interface{}{"path": "/c.go", "pattern": "*.go"},
+			"/c.go",
+		},
+		{
+			"pattern takes priority over command",
+			map[string]interface{}{"pattern": "*.ts", "command": "npm test"},
+			"*.ts",
+		},
+		{
+			"command takes priority over description",
+			map[string]interface{}{"command": "make build", "description": "Build project"},
+			"make build",
+		},
+		{
+			"empty string file_path falls through to path",
+			map[string]interface{}{"file_path": "", "path": "/fallback.go"},
+			"/fallback.go",
+		},
+		{
+			"non-string value skipped",
+			map[string]interface{}{"file_path": 42, "path": "/real.go"},
+			"/real.go",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parser.ExtractFilePathFromInput(tt.input)
+			if result != tt.expect {
+				t.Errorf("Expected %q, got %q", tt.expect, result)
+			}
+		})
+	}
+}

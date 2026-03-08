@@ -40,7 +40,7 @@ Spec: `specs/default.md` — The TUI shows too much verbose file dump output. It
 
 ## P4: Test Gaps
 
-- [ ] **Add tests for `parser.ExtractFilePathFromInput()`.** This function (parser.go:344-369) has five branches (`file_path`, `path`, `pattern`, `command` with truncation, `description`) and zero test coverage.
+- [x] **Add tests for `parser.ExtractFilePathFromInput()`.** Added `TestExtractFilePathFromInput` with 17 table-driven sub-tests covering all five branches (`file_path`, `path`, `pattern`, `command` short/boundary/truncated, `description`), edge cases (nil map, empty map, unrecognized key), priority ordering (4 tests verifying precedence chain), empty-string fallthrough, and non-string type assertion skip.
 
 - [ ] **Add tests for `tui.SendTaskUpdate()` and `tui.SetCurrentTask()`.** Both are exported functions with no test coverage. The `taskUpdateMsg` handling in `Update()` (tui.go:499-501) is untested.
 
