@@ -32,11 +32,11 @@ Spec: `specs/default.md` — The TUI shows too much verbose file dump output. It
 
 ## P3: Dead Code Cleanup
 
-- [ ] **Remove unused TUI entry points.** `Run()` (tui.go:919), `RunWithChannels()` (tui.go:926), and `CreateProgram()` (tui.go:934) are not called from any production code. `main.go` constructs the program directly via `tea.NewProgram()`.
+- [x] **Remove unused TUI entry points.** Deleted `Run()`, `RunWithChannels()`, and `CreateProgram()` from tui.go. Also removed `TestCreateProgram` from tui_test.go (only caller). No production code used any of these — `main.go` constructs the program directly via `tea.NewProgram()`.
 
-- [ ] **Remove unused `colorBg` variable.** Defined at tui.go:42 as `lipgloss.Color("#1A1B26")` but never referenced in any style construction.
+- [x] **Remove unused `colorBg` variable.** Removed from tui.go color palette. Was never referenced in any style construction.
 
-- [ ] **Remove unused `GetCurrentSessionName()` function.** Defined at tmux.go:73-86, fully implemented and exported, but has zero callers in the codebase.
+- [x] **Remove unused `GetCurrentSessionName()` function.** Removed from tmux.go along with now-unused `strings` import. Had zero callers in the codebase.
 
 ## P4: Test Gaps
 

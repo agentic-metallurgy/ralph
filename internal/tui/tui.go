@@ -39,8 +39,7 @@ var (
 	colorGreen     = lipgloss.Color("#9ECE6A")
 	colorDimGray   = lipgloss.Color("#565F89")
 	colorLightGray = lipgloss.Color("#C0CAF5")
-	colorBg        = lipgloss.Color("#1A1B26")
-	colorRed       = lipgloss.Color("#F7768E")
+colorRed       = lipgloss.Color("#F7768E")
 	colorOrange    = lipgloss.Color("#FF9E64")
 )
 
@@ -944,23 +943,3 @@ func TickMsgForTest() tea.Msg {
 	return tickMsg(time.Now())
 }
 
-// Run starts the Bubble Tea program
-func Run() error {
-	p := tea.NewProgram(NewModel(), tea.WithAltScreen())
-	_, err := p.Run()
-	return err
-}
-
-// RunWithChannels starts the TUI with external message and done channels
-func RunWithChannels(msgChan <-chan Message, doneChan <-chan struct{}) error {
-	model := NewModelWithChannels(msgChan, doneChan)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	_, err := p.Run()
-	return err
-}
-
-// CreateProgram creates a Bubble Tea program that can be controlled externally
-func CreateProgram(msgChan <-chan Message, doneChan <-chan struct{}) *tea.Program {
-	model := NewModelWithChannels(msgChan, doneChan)
-	return tea.NewProgram(model, tea.WithAltScreen())
-}

@@ -450,19 +450,6 @@ func TestLoopProgressZeroZero(t *testing.T) {
 	}
 }
 
-// TestCreateProgram tests the CreateProgram function
-func TestCreateProgram(t *testing.T) {
-	msgChan := make(chan tui.Message, 10)
-	doneChan := make(chan struct{})
-	defer close(msgChan)
-	defer close(doneChan)
-
-	program := tui.CreateProgram(msgChan, doneChan)
-	if program == nil {
-		t.Error("CreateProgram should return a non-nil program")
-	}
-}
-
 // TestDefaultRoleIcon tests that unknown roles get default icon
 func TestDefaultRoleIcon(t *testing.T) {
 	msg := tui.Message{Role: "unknown", Content: "test"}
