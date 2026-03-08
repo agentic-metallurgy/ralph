@@ -229,27 +229,7 @@ func processMessage(
 ) {
 	switch msg.Type {
 	case "loop_marker":
-		// Update loop progress
-		program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
-		// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED)
-		isLoopStart := strings.Contains(msg.Content, "LOOP") &&
-			!strings.Contains(msg.Content, "STOPPED") &&
-			!strings.Contains(msg.Content, "COMPLETED") &&
-			!strings.Contains(msg.Content, "RESUMED")
-		if isLoopStart {
-			*loopTotalTokens = 0
-			program.Send(tui.SendLoopStarted()())
-			program.Send(tui.SendLoopStatsUpdate(0)())
-		}
-		// Use stop sign emoji for STOPPED messages
-		role := tui.RoleLoop
-		if strings.Contains(msg.Content, "STOPPED") {
-			role = tui.RoleLoopStopped
-		}
-		msgChan <- tui.Message{
-			Role:    role,
-			Content: msg.Content,
-		}
+		handleLoopMarker(msg, msgChan, program, loopTotalTokens)
 
 	case "output":
 		// Try to parse as JSON first
@@ -286,7 +266,33 @@ func processMessage(
 	}
 }
 
-// handleParsedMessage processes a parsed JSON message from Claude
+// handleLoopMarker processes a loop_marker message for TUI mode.
+// Shared by processMessage, processPlanPhase, and processBuildPhase.
+func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64) {
+	program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
+	// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED)
+	isLoopStart := strings.Contains(msg.Content, "LOOP") &&
+		!strings.Contains(msg.Content, "STOPPED") &&
+		!strings.Contains(msg.Content, "COMPLETED") &&
+		!strings.Contains(msg.Content, "RESUMED")
+	if isLoopStart {
+		*loopTotalTokens = 0
+		program.Send(tui.SendLoopStarted()())
+		program.Send(tui.SendLoopStatsUpdate(0)())
+	}
+	// Use stop sign emoji for STOPPED messages
+	role := tui.RoleLoop
+	if strings.Contains(msg.Content, "STOPPED") {
+		role = tui.RoleLoopStopped
+	}
+	msgChan <- tui.Message{
+		Role:    role,
+		Content: msg.Content,
+	}
+}
+
+// handleParsedMessage processes a parsed JSON message from Claude for TUI mode.
+// Shared by standard mode and plan-and-build mode.
 func handleParsedMessage(
 	parsed *parser.ParsedMessage,
 	claudeLoop *loop.Loop,
@@ -421,6 +427,68 @@ func handleParsedMessage(
 	}
 }
 
+// handleParsedMessageCLI processes a parsed JSON message for CLI mode output.
+// Shared by runCLI and both phases of runPlanAndBuildCLI.
+func handleParsedMessageCLI(
+	parsed *parser.ParsedMessage,
+	claudeLoop *loop.Loop,
+	jsonParser *parser.Parser,
+	tokenStats *stats.TokenStats,
+	activeAgentIDs map[string]bool,
+) {
+	// Check for rate limit rejection — enter hibernate state
+	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
+		claudeLoop.Hibernate(resetsAt)
+		fmt.Printf("[hibernate] Rate limited until %s\n", resetsAt.Format(time.Kitchen))
+	}
+	// Track stats
+	if usage := jsonParser.GetUsage(parsed); usage != nil {
+		tokenStats.AddUsage(
+			usage.InputTokens,
+			usage.OutputTokens,
+			usage.CacheCreationInputTokens,
+			usage.CacheReadInputTokens,
+		)
+	}
+	if cost := jsonParser.GetCost(parsed); cost > 0 {
+		tokenStats.AddCost(cost)
+	}
+	// Track parallel subagents
+	prevCount := len(activeAgentIDs)
+	if jsonParser.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
+		parentID := *parsed.ParentToolUseID
+		delete(activeAgentIDs, parentID)
+	}
+	for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
+		activeAgentIDs[taskID] = true
+	}
+	if newCount := len(activeAgentIDs); newCount != prevCount {
+		fmt.Printf("[agents] %d active\n", newCount)
+	}
+	// Print assistant text and tool use
+	if parsed.Type == parser.MessageTypeAssistant {
+		content := jsonParser.ExtractContent(parsed)
+		for _, text := range content.TextContent {
+			if text != "" {
+				fmt.Printf("[assistant] %s\n", text)
+			}
+		}
+		for _, item := range parsed.Message.Content {
+			if item.Type == parser.ContentTypeToolUse {
+				filePath := parser.ExtractFilePathFromInput(item.Input)
+				if filePath != "" {
+					fmt.Printf("[tool] %s: %s\n", item.Name, filePath)
+				} else {
+					fmt.Printf("[tool] %s\n", item.Name)
+				}
+			}
+		}
+	}
+	if parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 {
+		fmt.Printf("[cost] Iteration cost: $%.6f\n", parsed.TotalCostUSD)
+	}
+}
+
 // runCLI runs ralph in CLI mode: no TUI, output to stdout/stderr, exit on completion.
 func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenStats) int {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -464,65 +532,10 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 		case "output":
 			parsed := jsonParser.ParseLine(msg.Content)
 			if parsed != nil {
-				// Capture session ID
 				if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 					claudeLoop.SetSessionID(sessionID)
 				}
-				// Check for rate limit rejection — enter hibernate state
-				if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
-					claudeLoop.Hibernate(resetsAt)
-					fmt.Printf("[hibernate] Rate limited until %s\n", resetsAt.Format(time.Kitchen))
-				}
-				// Track stats
-				if usage := jsonParser.GetUsage(parsed); usage != nil {
-					tokenStats.AddUsage(
-						usage.InputTokens,
-						usage.OutputTokens,
-						usage.CacheCreationInputTokens,
-						usage.CacheReadInputTokens,
-					)
-				}
-				if cost := jsonParser.GetCost(parsed); cost > 0 {
-					tokenStats.AddCost(cost)
-				}
-				// Track parallel subagents
-				// Agents are added when Task tool_use items are detected (below)
-				// and removed when result messages with parent_tool_use_id arrive.
-				prevCount := len(activeAgentIDs)
-				if jsonParser.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
-					// Subagent finished - remove from tracking
-					parentID := *parsed.ParentToolUseID
-					delete(activeAgentIDs, parentID)
-				}
-				// Track "Task" tool_use items as pending agents (single add path)
-				for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
-					activeAgentIDs[taskID] = true
-				}
-				if newCount := len(activeAgentIDs); newCount != prevCount {
-					fmt.Printf("[agents] %d active\n", newCount)
-				}
-				// Print assistant text and tool use
-				if parsed.Type == parser.MessageTypeAssistant {
-					content := jsonParser.ExtractContent(parsed)
-					for _, text := range content.TextContent {
-						if text != "" {
-							fmt.Printf("[assistant] %s\n", text)
-						}
-					}
-					for _, item := range parsed.Message.Content {
-						if item.Type == parser.ContentTypeToolUse {
-							filePath := parser.ExtractFilePathFromInput(item.Input)
-							if filePath != "" {
-								fmt.Printf("[tool] %s: %s\n", item.Name, filePath)
-							} else {
-								fmt.Printf("[tool] %s\n", item.Name)
-							}
-						}
-					}
-				}
-				if parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 {
-					fmt.Printf("[cost] Iteration cost: $%.6f\n", parsed.TotalCostUSD)
-				}
+				handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, activeAgentIDs)
 			}
 
 		case "error":
@@ -591,62 +604,11 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 		case "output":
 			parsed := jsonParser.ParseLine(msg.Content)
 			if parsed != nil {
-				// Capture session ID
 				if sid := jsonParser.GetSessionID(parsed); sid != "" {
 					planLoop.SetSessionID(sid)
 					sessionID = sid
 				}
-				// Check for rate limit rejection — enter hibernate state
-				if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
-					planLoop.Hibernate(resetsAt)
-					fmt.Printf("[hibernate] Rate limited until %s\n", resetsAt.Format(time.Kitchen))
-				}
-				// Track stats
-				if usage := jsonParser.GetUsage(parsed); usage != nil {
-					tokenStats.AddUsage(
-						usage.InputTokens,
-						usage.OutputTokens,
-						usage.CacheCreationInputTokens,
-						usage.CacheReadInputTokens,
-					)
-				}
-				if cost := jsonParser.GetCost(parsed); cost > 0 {
-					tokenStats.AddCost(cost)
-				}
-				// Track parallel subagents
-				prevCount := len(activeAgentIDs)
-				if jsonParser.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
-					parentID := *parsed.ParentToolUseID
-					delete(activeAgentIDs, parentID)
-				}
-				for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
-					activeAgentIDs[taskID] = true
-				}
-				if newCount := len(activeAgentIDs); newCount != prevCount {
-					fmt.Printf("[agents] %d active\n", newCount)
-				}
-				// Print assistant text and tool use
-				if parsed.Type == parser.MessageTypeAssistant {
-					content := jsonParser.ExtractContent(parsed)
-					for _, text := range content.TextContent {
-						if text != "" {
-							fmt.Printf("[assistant] %s\n", text)
-						}
-					}
-					for _, item := range parsed.Message.Content {
-						if item.Type == parser.ContentTypeToolUse {
-							filePath := parser.ExtractFilePathFromInput(item.Input)
-							if filePath != "" {
-								fmt.Printf("[tool] %s: %s\n", item.Name, filePath)
-							} else {
-								fmt.Printf("[tool] %s\n", item.Name)
-							}
-						}
-					}
-				}
-				if parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 {
-					fmt.Printf("[cost] Iteration cost: $%.6f\n", parsed.TotalCostUSD)
-				}
+				handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, activeAgentIDs)
 			}
 
 		case "error":
@@ -706,61 +668,10 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 		case "output":
 			parsed := jsonParser.ParseLine(msg.Content)
 			if parsed != nil {
-				// Capture session ID
 				if sid := jsonParser.GetSessionID(parsed); sid != "" {
 					buildLoop.SetSessionID(sid)
 				}
-				// Check for rate limit rejection — enter hibernate state
-				if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
-					buildLoop.Hibernate(resetsAt)
-					fmt.Printf("[hibernate] Rate limited until %s\n", resetsAt.Format(time.Kitchen))
-				}
-				// Track stats
-				if usage := jsonParser.GetUsage(parsed); usage != nil {
-					tokenStats.AddUsage(
-						usage.InputTokens,
-						usage.OutputTokens,
-						usage.CacheCreationInputTokens,
-						usage.CacheReadInputTokens,
-					)
-				}
-				if cost := jsonParser.GetCost(parsed); cost > 0 {
-					tokenStats.AddCost(cost)
-				}
-				// Track parallel subagents
-				prevCount := len(activeAgentIDs)
-				if jsonParser.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
-					parentID := *parsed.ParentToolUseID
-					delete(activeAgentIDs, parentID)
-				}
-				for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
-					activeAgentIDs[taskID] = true
-				}
-				if newCount := len(activeAgentIDs); newCount != prevCount {
-					fmt.Printf("[agents] %d active\n", newCount)
-				}
-				// Print assistant text and tool use
-				if parsed.Type == parser.MessageTypeAssistant {
-					content := jsonParser.ExtractContent(parsed)
-					for _, text := range content.TextContent {
-						if text != "" {
-							fmt.Printf("[assistant] %s\n", text)
-						}
-					}
-					for _, item := range parsed.Message.Content {
-						if item.Type == parser.ContentTypeToolUse {
-							filePath := parser.ExtractFilePathFromInput(item.Input)
-							if filePath != "" {
-								fmt.Printf("[tool] %s: %s\n", item.Name, filePath)
-							} else {
-								fmt.Printf("[tool] %s\n", item.Name)
-							}
-						}
-					}
-				}
-				if parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 {
-					fmt.Printf("[cost] Iteration cost: $%.6f\n", parsed.TotalCostUSD)
-				}
+				handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, activeAgentIDs)
 			}
 
 		case "error":
@@ -936,24 +847,7 @@ func processPlanPhase(
 
 			switch msg.Type {
 			case "loop_marker":
-				program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
-				isLoopStart := strings.Contains(msg.Content, "LOOP") &&
-					!strings.Contains(msg.Content, "STOPPED") &&
-					!strings.Contains(msg.Content, "COMPLETED") &&
-					!strings.Contains(msg.Content, "RESUMED")
-				if isLoopStart {
-					loopTotalTokens = 0
-					program.Send(tui.SendLoopStarted()())
-					program.Send(tui.SendLoopStatsUpdate(0)())
-				}
-				role := tui.RoleLoop
-				if strings.Contains(msg.Content, "STOPPED") {
-					role = tui.RoleLoopStopped
-				}
-				msgChan <- tui.Message{
-					Role:    role,
-					Content: msg.Content,
-				}
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens)
 
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
@@ -961,7 +855,7 @@ func processPlanPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						planLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessagePlanAndBuild(parsed, planLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
+					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
 				}
 
 			case "error":
@@ -1012,24 +906,7 @@ func processBuildPhase(
 
 			switch msg.Type {
 			case "loop_marker":
-				program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
-				isLoopStart := strings.Contains(msg.Content, "LOOP") &&
-					!strings.Contains(msg.Content, "STOPPED") &&
-					!strings.Contains(msg.Content, "COMPLETED") &&
-					!strings.Contains(msg.Content, "RESUMED")
-				if isLoopStart {
-					loopTotalTokens = 0
-					program.Send(tui.SendLoopStarted()())
-					program.Send(tui.SendLoopStatsUpdate(0)())
-				}
-				role := tui.RoleLoop
-				if strings.Contains(msg.Content, "STOPPED") {
-					role = tui.RoleLoopStopped
-				}
-				msgChan <- tui.Message{
-					Role:    role,
-					Content: msg.Content,
-				}
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens)
 
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
@@ -1037,7 +914,7 @@ func processBuildPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						buildLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessagePlanAndBuild(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
+					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
 				}
 
 			case "error":
@@ -1052,131 +929,6 @@ func processBuildPhase(
 					Content: msg.Content,
 				}
 				program.Send(tui.SendDone()())
-			}
-		}
-	}
-}
-
-// handleParsedMessagePlanAndBuild processes a parsed JSON message from Claude for plan-and-build mode
-func handleParsedMessagePlanAndBuild(
-	parsed *parser.ParsedMessage,
-	claudeLoop *loop.Loop,
-	jsonParser *parser.Parser,
-	tokenStats *stats.TokenStats,
-	msgChan chan<- tui.Message,
-	program *tea.Program,
-	activeAgentIDs map[string]bool,
-	loopTotalTokens *int64,
-) {
-	// Check for rate limit rejection — enter hibernate state
-	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
-		claudeLoop.Hibernate(resetsAt)
-		program.Send(tui.SendHibernate(resetsAt)())
-		msgChan <- tui.Message{
-			Role:    tui.RoleHibernate,
-			Content: fmt.Sprintf("Rate limited until %s", resetsAt.Format(time.Kitchen)),
-		}
-		return // Don't process further
-	}
-
-	// Extract usage information
-	if usage := jsonParser.GetUsage(parsed); usage != nil {
-		tokenStats.AddUsage(
-			usage.InputTokens,
-			usage.OutputTokens,
-			usage.CacheCreationInputTokens,
-			usage.CacheReadInputTokens,
-		)
-		program.Send(tui.SendStatsUpdate(tokenStats)())
-		loopTokens := usage.InputTokens + usage.OutputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
-		*loopTotalTokens += loopTokens
-		program.Send(tui.SendLoopStatsUpdate(*loopTotalTokens)())
-	}
-
-	// Extract cost from result messages
-	if cost := jsonParser.GetCost(parsed); cost > 0 {
-		tokenStats.AddCost(cost)
-		program.Send(tui.SendStatsUpdate(tokenStats)())
-	}
-
-	// Track parallel subagents
-	prevCount := len(activeAgentIDs)
-	if jsonParser.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
-		parentID := *parsed.ParentToolUseID
-		delete(activeAgentIDs, parentID)
-	}
-	for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
-		activeAgentIDs[taskID] = true
-	}
-	if newCount := len(activeAgentIDs); newCount != prevCount {
-		program.Send(tui.SendAgentUpdate(newCount)())
-	}
-
-	// Process message content based on type
-	switch parsed.Type {
-	case parser.MessageTypeSystem:
-		return
-
-	case parser.MessageTypeAssistant:
-		content := jsonParser.ExtractContent(parsed)
-
-		// Display thinking blocks
-		if content.Thinking != "" {
-			msgChan <- tui.Message{
-				Role:    tui.RoleThinking,
-				Content: content.Thinking,
-			}
-		}
-
-		for _, text := range content.TextContent {
-			if text != "" {
-				msgChan <- tui.Message{
-					Role:    tui.RoleAssistant,
-					Content: text,
-				}
-				if ref := jsonParser.ExtractTaskReference(text); ref != nil {
-					taskLabel := fmt.Sprintf("#%d", ref.Number)
-					if ref.Description != "" {
-						taskLabel = fmt.Sprintf("#%d %s", ref.Number, ref.Description)
-					}
-					program.Send(tui.SendTaskUpdate(taskLabel)())
-				}
-			}
-		}
-
-		// Display tool uses with file path info
-		for _, toolUse := range content.ToolUses {
-			toolMsg := fmt.Sprintf("Using tool: %s", toolUse.Name)
-			if toolUse.FilePath != "" {
-				toolMsg = fmt.Sprintf("Using tool: %s — %s", toolUse.Name, toolUse.FilePath)
-			}
-			msgChan <- tui.Message{
-				Role:    tui.RoleTool,
-				Content: toolMsg,
-			}
-		}
-
-	case parser.MessageTypeUser:
-		// Skip tool result content in TUI mode (file dumps are too verbose).
-		// Still scan for task references in the results.
-		content := jsonParser.ExtractContent(parsed)
-		for _, toolResult := range content.ToolResults {
-			if toolResult.Content != "" {
-				if ref := jsonParser.ExtractTaskReference(toolResult.Content); ref != nil {
-					taskLabel := fmt.Sprintf("#%d", ref.Number)
-					if ref.Description != "" {
-						taskLabel = fmt.Sprintf("#%d %s", ref.Number, ref.Description)
-					}
-					program.Send(tui.SendTaskUpdate(taskLabel)())
-				}
-			}
-		}
-
-	case parser.MessageTypeResult:
-		if parsed.TotalCostUSD > 0 {
-			msgChan <- tui.Message{
-				Role:    tui.RoleSystem,
-				Content: fmt.Sprintf("Iteration cost: $%.6f", parsed.TotalCostUSD),
 			}
 		}
 	}
