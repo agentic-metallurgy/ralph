@@ -1736,6 +1736,76 @@ func TestCompletedTasksAboveCurrentMode(t *testing.T) {
 }
 
 // ============================================================================
+// Tests: Current Task Display in Footer
+// ============================================================================
+
+// TestCurrentTaskDisplayedInFooter tests that the currentTask field renders in the footer
+func TestCurrentTaskDisplayedInFooter(t *testing.T) {
+	model := tui.NewModel()
+	model.SetCurrentTask("#6 Refactor config")
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "Current Task:") {
+		t.Error("View should contain 'Current Task:' label")
+	}
+	if !strings.Contains(view, "#6 Refactor config") {
+		t.Error("View should display the current task text")
+	}
+}
+
+// TestCurrentTaskDefaultDash tests that current task shows "-" when no task is set
+func TestCurrentTaskDefaultDash(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "Current Task:") {
+		t.Error("View should contain 'Current Task:' label even when no task is set")
+	}
+}
+
+// TestCurrentTaskUpdatedViaMessage tests that SendTaskUpdate updates the displayed task
+func TestCurrentTaskUpdatedViaMessage(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Send a task update message
+	cmd := tui.SendTaskUpdate("#3 Refactor config parser")
+	model, _ = updateModel(model, cmd())
+
+	view := model.View()
+	if !strings.Contains(view, "#3 Refactor config parser") {
+		t.Error("View should display updated task from SendTaskUpdate")
+	}
+}
+
+// TestCurrentTaskBetweenCompletedTasksAndMode tests ordering of footer fields
+func TestCurrentTaskBetweenCompletedTasksAndMode(t *testing.T) {
+	model := tui.NewModel()
+	model.SetCurrentTask("#1 Setup")
+	model.SetCompletedTasks(2, 5)
+	model.SetCurrentMode("Building")
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+
+	completedIdx := strings.Index(view, "Completed Tasks:")
+	taskIdx := strings.Index(view, "Current Task:")
+	modeIdx := strings.Index(view, "Current Mode:")
+
+	if completedIdx == -1 || taskIdx == -1 || modeIdx == -1 {
+		t.Fatal("View should contain 'Completed Tasks:', 'Current Task:', and 'Current Mode:' labels")
+	}
+	if completedIdx >= taskIdx {
+		t.Errorf("'Completed Tasks:' (pos %d) should appear before 'Current Task:' (pos %d)", completedIdx, taskIdx)
+	}
+	if taskIdx >= modeIdx {
+		t.Errorf("'Current Task:' (pos %d) should appear before 'Current Mode:' (pos %d)", taskIdx, modeIdx)
+	}
+}
+
+// ============================================================================
 // Tests: Mode Display (Spec #9)
 // ============================================================================
 

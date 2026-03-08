@@ -22,7 +22,7 @@ Spec: `specs/default.md` — The TUI shows too much verbose file dump output. It
 
 ## P2: Code Quality / Correctness
 
-- [ ] **Render `currentTask` in the TUI footer.** The `Model.currentTask` field (tui.go:127) is set via `SetCurrentTask()` and updated by `taskUpdateMsg`, but never rendered. The footer shows `"Completed Tasks: X/Y"` at tui.go:750 but the current task string is not displayed anywhere. Add it to the footer right panel, e.g., `"Current Task: TASK 6"` between the completed tasks and current mode lines.
+- [x] **Render `currentTask` in the TUI footer.** Added `"Current Task:"` line to the Ralph Loop Details panel in `renderFooter()`, positioned between "Completed Tasks:" and "Current Mode:". Shows the task text (e.g., `#6 Refactor config`) or `"-"` when no task is set. No footerHeight change needed — the new 8th content line fills the existing Height(8) panel exactly. Four tests added: display, default dash, message update, and ordering.
 
 - [ ] **Mutex-protect `running` and `paused` fields in loop.go.** The `mu` mutex (loop.go:47) documents it protects `config.Iterations`, `sessionID`, `resumeSessionID`, `completedWaiting`, and hibernate state. But `running` and `paused` are read/written from multiple goroutines without synchronization: `IsRunning()` (line 102), `IsPaused()` (line 107), `Start()` (line 87), `Stop()` (line 98), `Pause()` (line 113), `Resume()` (line 128), and the `run()` goroutine (line 240). These are data races. Fix: use the existing `mu` mutex for all reads/writes of `running` and `paused`.
 

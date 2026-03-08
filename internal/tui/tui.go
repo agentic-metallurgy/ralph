@@ -754,6 +754,12 @@ func (m Model) renderFooter() string {
 	// Completed Tasks display
 	completedDisplay := fmt.Sprintf(" %d/%d", m.completedTasks, m.totalTasks)
 
+	// Current Task display
+	taskDisplay := " -"
+	if m.currentTask != "" {
+		taskDisplay = fmt.Sprintf(" %s", m.currentTask)
+	}
+
 	loopDetailsContent := lipgloss.JoinVertical(
 		lipgloss.Left,
 		titleStyle.Render("Ralph Loop Details"),
@@ -762,6 +768,7 @@ func (m Model) renderFooter() string {
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Active Agents:"), agentStyle.Render(agentDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Completed Tasks:"), valueStyle.Render(completedDisplay)),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Task:"), valueStyle.Render(taskDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Mode:"), valueStyle.Render(modeDisplay)),
 	)
 	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
