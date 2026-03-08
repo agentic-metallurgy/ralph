@@ -355,6 +355,14 @@ func handleParsedMessage(
 	case parser.MessageTypeAssistant:
 		content := jsonParser.ExtractContent(parsed)
 
+		// Display thinking blocks
+		if content.Thinking != "" {
+			msgChan <- tui.Message{
+				Role:    tui.RoleThinking,
+				Content: content.Thinking,
+			}
+		}
+
 		// Display text content and scan for task references
 		for _, text := range content.TextContent {
 			if text != "" {
@@ -373,25 +381,24 @@ func handleParsedMessage(
 			}
 		}
 
-		// Display tool uses
+		// Display tool uses with file path info
 		for _, toolUse := range content.ToolUses {
+			toolMsg := fmt.Sprintf("Using tool: %s", toolUse.Name)
+			if toolUse.FilePath != "" {
+				toolMsg = fmt.Sprintf("Using tool: %s — %s", toolUse.Name, toolUse.FilePath)
+			}
 			msgChan <- tui.Message{
 				Role:    tui.RoleTool,
-				Content: fmt.Sprintf("Using tool: %s", toolUse.Name),
+				Content: toolMsg,
 			}
 		}
 
 	case parser.MessageTypeUser:
+		// Skip tool result content in TUI mode (file dumps are too verbose).
+		// Still scan for task references in the results.
 		content := jsonParser.ExtractContent(parsed)
-
-		// Display tool results and scan for task references
 		for _, toolResult := range content.ToolResults {
 			if toolResult.Content != "" {
-				msgChan <- tui.Message{
-					Role:    tui.RoleUser,
-					Content: toolResult.Content,
-				}
-				// Detect IMPLEMENTATION_PLAN.md task references in tool results
 				if ref := jsonParser.ExtractTaskReference(toolResult.Content); ref != nil {
 					taskLabel := fmt.Sprintf("#%d", ref.Number)
 					if ref.Description != "" {
@@ -1089,6 +1096,14 @@ func handleParsedMessagePlanAndBuild(
 	case parser.MessageTypeAssistant:
 		content := jsonParser.ExtractContent(parsed)
 
+		// Display thinking blocks
+		if content.Thinking != "" {
+			msgChan <- tui.Message{
+				Role:    tui.RoleThinking,
+				Content: content.Thinking,
+			}
+		}
+
 		for _, text := range content.TextContent {
 			if text != "" {
 				msgChan <- tui.Message{
@@ -1105,22 +1120,24 @@ func handleParsedMessagePlanAndBuild(
 			}
 		}
 
+		// Display tool uses with file path info
 		for _, toolUse := range content.ToolUses {
+			toolMsg := fmt.Sprintf("Using tool: %s", toolUse.Name)
+			if toolUse.FilePath != "" {
+				toolMsg = fmt.Sprintf("Using tool: %s — %s", toolUse.Name, toolUse.FilePath)
+			}
 			msgChan <- tui.Message{
 				Role:    tui.RoleTool,
-				Content: fmt.Sprintf("Using tool: %s", toolUse.Name),
+				Content: toolMsg,
 			}
 		}
 
 	case parser.MessageTypeUser:
+		// Skip tool result content in TUI mode (file dumps are too verbose).
+		// Still scan for task references in the results.
 		content := jsonParser.ExtractContent(parsed)
-
 		for _, toolResult := range content.ToolResults {
 			if toolResult.Content != "" {
-				msgChan <- tui.Message{
-					Role:    tui.RoleUser,
-					Content: toolResult.Content,
-				}
 				if ref := jsonParser.ExtractTaskReference(toolResult.Content); ref != nil {
 					taskLabel := fmt.Sprintf("#%d", ref.Number)
 					if ref.Description != "" {

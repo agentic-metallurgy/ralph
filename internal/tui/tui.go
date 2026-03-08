@@ -55,6 +55,7 @@ const (
 	RoleLoop        MessageRole = "loop"
 	RoleLoopStopped MessageRole = "loop_stopped"
 	RoleHibernate   MessageRole = "hibernate"
+	RoleThinking    MessageRole = "thinking"
 )
 
 // Message represents a single activity message in the feed
@@ -83,6 +84,8 @@ func (m Message) GetIcon() string {
 		return "🛑"
 	case RoleHibernate:
 		return "💤"
+	case RoleThinking:
+		return "💭"
 	default:
 		return "📝"
 	}
@@ -105,6 +108,8 @@ func (m Message) GetStyle() lipgloss.Style {
 		return lipgloss.NewStyle().Bold(true).Foreground(colorRed)
 	case RoleHibernate:
 		return lipgloss.NewStyle().Bold(true).Foreground(colorOrange)
+	case RoleThinking:
+		return lipgloss.NewStyle().Italic(true).Foreground(colorDimGray)
 	default:
 		return lipgloss.NewStyle().Foreground(colorDimGray)
 	}
