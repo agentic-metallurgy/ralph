@@ -14,11 +14,11 @@ Spec: `specs/default.md` — The TUI shows too much verbose file dump output. It
 
 ## P1: Functional Bugs / Missing Behavior
 
-- [ ] **Add rate-limit/hibernate handling to plan-and-build mode.** `handleParsedMessagePlanAndBuild()` at main.go:1042-1142 lacks the rate limit check present in `handleParsedMessage()` at main.go:301-309. When rate limits are hit during plan-and-build, the loop is not hibernated. Fix: pass the active loop reference into `handleParsedMessagePlanAndBuild()` and add the `IsRateLimitRejected` check + `loop.Hibernate()` call. Similarly, `processPlanPhase()` at main.go:896-964 and `processBuildPhase()` at main.go:967-1039 need to forward the loop reference.
+- [x] **Add rate-limit/hibernate handling to plan-and-build mode.** Added `claudeLoop *loop.Loop` parameter to `handleParsedMessagePlanAndBuild()` with rate limit check (`IsRateLimitRejected` + `Hibernate` + `SendHibernate`). Both `processPlanPhase()` and `processBuildPhase()` now forward their respective loop references. Also added rate limit handling to both plan and build phases of `runPlanAndBuildCLI()`.
 
-- [ ] **Enable loop control hotkeys in plan-and-build TUI mode.** In `runPlanAndBuild()` at main.go:764-813, `model.SetLoop()` is never called, so `m.loop` is nil and all pause/resume/+/- hotkeys are inert (they all check `if m.loop != nil`). Fix: pass the current active loop to the model. This may require updating `SetLoop()` as the loop changes between plan and build phases — send a new Bubble Tea message to swap the loop reference when the phase transitions.
+- [x] **Enable loop control hotkeys in plan-and-build TUI mode.** Added `loopRefMsg` / `SendLoopRef()` to tui.go so the loop reference can be swapped at runtime. `runPlanAndBuildPhases()` now sends `SendLoopRef(planLoop)` during plan phase and `SendLoopRef(buildLoop)` during build phase, enabling all hotkeys (p/r/s/+/-) to work in plan-and-build mode.
 
-- [ ] **Hibernate should capture resumeSessionID.** When `loop.Hibernate()` is called at `internal/loop/loop.go:144-157`, it cancels the current iteration via `iterationCancel()` but does NOT copy `sessionID` into `resumeSessionID` the way `Pause()` does (loop.go:116-118). After waking, the retried iteration (loop.go:349, `i--; continue`) calls `executeIteration` which reads `resumeSessionID` — but it's empty. Fix: add `l.resumeSessionID = l.sessionID` under the mutex in `Hibernate()`, mirroring the logic in `Pause()`.
+- [x] **Hibernate should capture resumeSessionID.** Added `l.resumeSessionID = l.sessionID` inside `Hibernate()` under the mutex, mirroring `Pause()` logic. After waking from rate limit, the retried iteration now correctly uses `--resume` with the captured session ID.
 
 ## P2: Code Quality / Correctness
 

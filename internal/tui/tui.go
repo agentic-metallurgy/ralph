@@ -302,6 +302,11 @@ type hibernateMsg struct {
 	until time.Time
 }
 
+// loopRefMsg is sent to update the loop reference (e.g., when transitioning between plan and build phases)
+type loopRefMsg struct {
+	loop *loop.Loop
+}
+
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{tea.ClearScreen, tickCmd()}
@@ -543,6 +548,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case hibernateMsg:
 		m.hibernating = true
 		m.hibernateUntil = msg.until
+		return m, nil
+
+	case loopRefMsg:
+		m.loop = msg.loop
 		return m, nil
 	}
 
@@ -912,6 +921,14 @@ func SendDone() tea.Cmd {
 func SendHibernate(until time.Time) tea.Cmd {
 	return func() tea.Msg {
 		return hibernateMsg{until: until}
+	}
+}
+
+// SendLoopRef is a helper command to update the loop reference in the TUI model.
+// Used in plan-and-build mode to swap the loop when transitioning between phases.
+func SendLoopRef(l *loop.Loop) tea.Cmd {
+	return func() tea.Msg {
+		return loopRefMsg{loop: l}
 	}
 }
 

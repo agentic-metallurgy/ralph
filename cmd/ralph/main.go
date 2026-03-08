@@ -596,6 +596,11 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 					planLoop.SetSessionID(sid)
 					sessionID = sid
 				}
+				// Check for rate limit rejection — enter hibernate state
+				if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
+					planLoop.Hibernate(resetsAt)
+					fmt.Printf("[hibernate] Rate limited until %s\n", resetsAt.Format(time.Kitchen))
+				}
 				// Track stats
 				if usage := jsonParser.GetUsage(parsed); usage != nil {
 					tokenStats.AddUsage(
@@ -704,6 +709,11 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 				// Capture session ID
 				if sid := jsonParser.GetSessionID(parsed); sid != "" {
 					buildLoop.SetSessionID(sid)
+				}
+				// Check for rate limit rejection — enter hibernate state
+				if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
+					buildLoop.Hibernate(resetsAt)
+					fmt.Printf("[hibernate] Rate limited until %s\n", resetsAt.Format(time.Kitchen))
 				}
 				// Track stats
 				if usage := jsonParser.GetUsage(parsed); usage != nil {
@@ -848,9 +858,10 @@ func runPlanAndBuildPhases(
 		Prompt:     planPromptContent,
 	})
 
-	// Update TUI with planning phase
+	// Update TUI with planning phase and set loop reference for hotkey control
 	program.Send(tui.SendModeUpdate("Planning")())
 	program.Send(tui.SendLoopUpdate(0, cfg.Iterations)())
+	program.Send(tui.SendLoopRef(planLoop)())
 
 	// Start the plan loop
 	planLoop.Start(ctx)
@@ -887,10 +898,11 @@ func runPlanAndBuildPhases(
 		buildLoop.SetResumeSessionID(sessionID)
 	}
 
-	// Update TUI with building phase
+	// Update TUI with building phase and swap loop reference for hotkey control
 	program.Send(tui.SendModeUpdate("Building")())
 	program.Send(tui.SendLoopUpdate(0, cfg.BuildIterations)())
 	program.Send(tui.SendLoopStarted()())
+	program.Send(tui.SendLoopRef(buildLoop)())
 
 	// Start the build loop
 	buildLoop.Start(ctx)
@@ -949,7 +961,7 @@ func processPlanPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						planLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessagePlanAndBuild(parsed, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
+					handleParsedMessagePlanAndBuild(parsed, planLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
 				}
 
 			case "error":
@@ -1025,7 +1037,7 @@ func processBuildPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						buildLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessagePlanAndBuild(parsed, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
+					handleParsedMessagePlanAndBuild(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
 				}
 
 			case "error":
@@ -1048,6 +1060,7 @@ func processBuildPhase(
 // handleParsedMessagePlanAndBuild processes a parsed JSON message from Claude for plan-and-build mode
 func handleParsedMessagePlanAndBuild(
 	parsed *parser.ParsedMessage,
+	claudeLoop *loop.Loop,
 	jsonParser *parser.Parser,
 	tokenStats *stats.TokenStats,
 	msgChan chan<- tui.Message,
@@ -1055,6 +1068,17 @@ func handleParsedMessagePlanAndBuild(
 	activeAgentIDs map[string]bool,
 	loopTotalTokens *int64,
 ) {
+	// Check for rate limit rejection — enter hibernate state
+	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
+		claudeLoop.Hibernate(resetsAt)
+		program.Send(tui.SendHibernate(resetsAt)())
+		msgChan <- tui.Message{
+			Role:    tui.RoleHibernate,
+			Content: fmt.Sprintf("Rate limited until %s", resetsAt.Format(time.Kitchen)),
+		}
+		return // Don't process further
+	}
+
 	// Extract usage information
 	if usage := jsonParser.GetUsage(parsed); usage != nil {
 		tokenStats.AddUsage(

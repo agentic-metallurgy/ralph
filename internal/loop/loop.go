@@ -141,6 +141,7 @@ func (l *Loop) Resume() {
 // Hibernate enters hibernate state and waits until the specified time.
 // If already hibernating, only extends if new time is later.
 // Cancels the current iteration to interrupt it immediately.
+// Captures the current session ID so the retried iteration can use --resume.
 func (l *Loop) Hibernate(until time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -150,6 +151,8 @@ func (l *Loop) Hibernate(until time.Time) {
 	}
 	l.hibernating = true
 	l.hibernateUntil = until
+	// Capture session ID for resume (mirrors Pause logic)
+	l.resumeSessionID = l.sessionID
 	// Cancel current iteration to stop processing
 	if l.iterationCancel != nil {
 		l.iterationCancel()
