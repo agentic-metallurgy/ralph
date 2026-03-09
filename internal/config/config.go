@@ -15,7 +15,7 @@ const (
 )
 
 // Version is set at build time via -ldflags
-var Version = "dev"
+var Version = "v2026.3.8"
 
 // Config holds the configuration for the ralph-go application
 type Config struct {
