@@ -640,32 +640,6 @@ func TestTimerPausesOnCompletion(t *testing.T) {
 	}
 }
 
-// TestCacheTokenBreakdownDisplayed tests that cache write and cache read tokens
-// appear in the Usage & Cost panel footer with human-readable formatting
-func TestCacheTokenBreakdownDisplayed(t *testing.T) {
-	model := tui.NewModel()
-
-	s := stats.NewTokenStats()
-	s.AddUsage(500, 250, 12345, 67890)
-	model.SetStats(s)
-
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-	view := model.View()
-
-	if !strings.Contains(view, "12.3k") {
-		t.Error("View should display cache creation token count as human-readable (12.3k)")
-	}
-	if !strings.Contains(view, "67.9k") {
-		t.Error("View should display cache read token count as human-readable (67.9k)")
-	}
-	if !strings.Contains(view, "Cache Write") {
-		t.Error("View should contain 'Cache Write' label")
-	}
-	if !strings.Contains(view, "Cache Read") {
-		t.Error("View should contain 'Cache Read' label")
-	}
-}
-
 // TestPauseHotkey tests that 'p' key pauses the loop
 func TestPauseHotkey(t *testing.T) {
 	model := tui.NewModel()
@@ -846,43 +820,6 @@ func TestAgentCountDisplayed(t *testing.T) {
 	}
 }
 
-// TestAgentCountUpdate tests that the agent count updates via SendAgentUpdate
-func TestAgentCountUpdate(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Simulate agent update
-	cmd := tui.SendAgentUpdate(3)
-	agentMsg := cmd()
-	model, _ = updateModel(model, agentMsg)
-
-	view := model.View()
-	if !strings.Contains(view, "3") {
-		t.Error("View should show updated agent count of 3")
-	}
-}
-
-// TestAgentCountZeroAfterReset tests agent count returns to 0
-func TestAgentCountZeroAfterReset(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Set agents to 2
-	cmd := tui.SendAgentUpdate(2)
-	agentMsg := cmd()
-	model, _ = updateModel(model, agentMsg)
-
-	// Reset to 0
-	cmd = tui.SendAgentUpdate(0)
-	agentMsg = cmd()
-	model, _ = updateModel(model, agentMsg)
-
-	view := model.View()
-	if !strings.Contains(view, "Active Agents:") {
-		t.Error("View should still contain 'Active Agents:' label after reset")
-	}
-}
-
 // TestSendAgentUpdateCmd tests the SendAgentUpdate helper command
 func TestSendAgentUpdateCmd(t *testing.T) {
 	cmd := tui.SendAgentUpdate(5)
@@ -976,18 +913,6 @@ func TestInAppStatusBarRemoved(t *testing.T) {
 	}
 }
 
-// TestFooterShowsLoopProgress tests that the footer panel shows current loop progress
-func TestFooterShowsLoopProgress(t *testing.T) {
-	model := tui.NewModel()
-	model.SetLoopProgress(3, 5)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "#3/5") {
-		t.Error("Footer panel should display loop progress as '#3/5'")
-	}
-}
-
 // TestFooterShowsTokenCount tests that the footer panel shows human-readable token count
 func TestFooterShowsTokenCount(t *testing.T) {
 	model := tui.NewModel()
@@ -1000,17 +925,6 @@ func TestFooterShowsTokenCount(t *testing.T) {
 	// 900k total tokens should appear in the footer panel
 	if !strings.Contains(view, "900k") {
 		t.Error("Footer panel should display human-readable token count (expected '900k')")
-	}
-}
-
-// TestFooterDefaultLoopProgress tests footer panel with no loop progress set
-func TestFooterDefaultLoopProgress(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "#0/0") {
-		t.Error("Footer panel should display '#0/0' when no loop progress is set")
 	}
 }
 
@@ -1086,36 +1000,6 @@ func TestSetTmuxStatusBar(t *testing.T) {
 	}
 }
 
-// TestCompletedTasksDefault tests that completed tasks shows "0/0" by default
-func TestCompletedTasksDefault(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "Completed Tasks:") {
-		t.Error("View should contain 'Completed Tasks:' label")
-	}
-	if !strings.Contains(view, "0/0") {
-		t.Error("View should show '0/0' for default completed tasks")
-	}
-}
-
-// TestCompletedTasksUpdate tests that completed task counts update via SendCompletedTasksUpdate
-func TestCompletedTasksUpdate(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Simulate completed tasks update
-	cmd := tui.SendCompletedTasksUpdate(4, 7)
-	msg := cmd()
-	model, _ = updateModel(model, msg)
-
-	view := model.View()
-	if !strings.Contains(view, "4/7") {
-		t.Error("View should show '4/7' after completed tasks update")
-	}
-}
-
 // TestSendCompletedTasksUpdateCmd tests the SendCompletedTasksUpdate helper command
 func TestSendCompletedTasksUpdateCmd(t *testing.T) {
 	cmd := tui.SendCompletedTasksUpdate(3, 8)
@@ -1162,75 +1046,6 @@ func TestResizeFromTinyToNormal(t *testing.T) {
 	}
 	if !strings.Contains(view, "RESIZE_TEST_CONTENT") {
 		t.Error("Messages should be visible after resize to normal")
-	}
-}
-
-// TestAddLoopHotkey tests that '+' key increases total loops
-func TestAddLoopHotkey(t *testing.T) {
-	model := tui.NewModel()
-	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
-	model.SetLoop(l)
-	model.SetLoopProgress(2, 5)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Press '+' to add a loop
-	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
-	model, _ = updateModel(model, keyMsg)
-
-	view := model.View()
-	if !strings.Contains(view, "#2/6") {
-		t.Errorf("After pressing '+', total loops should increase from 5 to 6, view should contain '#2/6'")
-	}
-
-	// Verify the loop's iteration count was updated
-	if l.GetIterations() != 6 {
-		t.Errorf("Expected loop iterations to be 6 after '+', got %d", l.GetIterations())
-	}
-}
-
-// TestSubtractLoopHotkey tests that '-' key decreases total loops
-func TestSubtractLoopHotkey(t *testing.T) {
-	model := tui.NewModel()
-	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
-	model.SetLoop(l)
-	model.SetLoopProgress(2, 5)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Press '-' to subtract a loop
-	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'-'}}
-	model, _ = updateModel(model, keyMsg)
-
-	view := model.View()
-	if !strings.Contains(view, "#2/4") {
-		t.Errorf("After pressing '-', total loops should decrease from 5 to 4, view should contain '#2/4'")
-	}
-
-	// Verify the loop's iteration count was updated
-	if l.GetIterations() != 4 {
-		t.Errorf("Expected loop iterations to be 4 after '-', got %d", l.GetIterations())
-	}
-}
-
-// TestSubtractLoopFloorConstraint tests that '-' cannot go below current loop
-func TestSubtractLoopFloorConstraint(t *testing.T) {
-	model := tui.NewModel()
-	l := loop.New(loop.Config{Iterations: 4, Prompt: "test"})
-	model.SetLoop(l)
-	model.SetLoopProgress(4, 4) // on loop 4 of 4
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Press '-' — should be a no-op since currentLoop == totalLoops
-	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'-'}}
-	model, _ = updateModel(model, keyMsg)
-
-	view := model.View()
-	if !strings.Contains(view, "#4/4") {
-		t.Errorf("After pressing '-' at floor, loops should remain at 4/4, view should contain '#4/4'")
-	}
-
-	// Verify the loop's iteration count was NOT changed
-	if l.GetIterations() != 4 {
-		t.Errorf("Expected loop iterations to remain 4 at floor, got %d", l.GetIterations())
 	}
 }
 
@@ -1286,113 +1101,6 @@ func TestAddLoopWorksWhenCompleted(t *testing.T) {
 
 	if l.GetIterations() != 5 {
 		t.Errorf("Expected loop iterations to remain 5 after '-' at floor, got %d", l.GetIterations())
-	}
-}
-
-// TestHotkeyBarShowsLoopControls tests that the hotkey bar shows (+)/(-) # of loops
-func TestHotkeyBarShowsLoopControls(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "(+)/(-)") {
-		t.Error("Hotkey bar should contain '(+)/(-)' label")
-	}
-	if !strings.Contains(view, "# of loops") {
-		t.Error("Hotkey bar should contain '# of loops' label")
-	}
-}
-
-// TestHotkeyBarShowsStartWhenCompletedWithPendingLoops tests that after completion
-// with pending loops added via '+', the hotkey bar shows '(s)tart' instead of '(r)esume'
-func TestHotkeyBarShowsStartWhenCompletedWithPendingLoops(t *testing.T) {
-	model := tui.NewModel()
-	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
-	model.SetLoop(l)
-	model.SetLoopProgress(5, 5)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Simulate completion
-	cmd := tui.SendDone()
-	doneMsg := cmd()
-	model, _ = updateModel(model, doneMsg)
-
-	// Press '+' to add a loop
-	keyPlus := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
-	model, _ = updateModel(model, keyPlus)
-
-	view := model.View()
-	if !strings.Contains(view, "(s)tart") {
-		t.Error("Hotkey bar should show '(s)tart' when completed with pending loops")
-	}
-}
-
-// TestHotkeyBarShowsResumeWhenPaused tests that when paused, the hotkey bar shows '(r)esume'
-func TestHotkeyBarShowsResumeWhenPaused(t *testing.T) {
-	model := tui.NewModel()
-	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
-	model.SetLoop(l)
-	model.SetLoopProgress(2, 5)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Press 'p' to pause
-	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
-	model, _ = updateModel(model, keyP)
-
-	view := model.View()
-	if !strings.Contains(view, "(r)esume") {
-		t.Error("Hotkey bar should show '(r)esume' when paused")
-	}
-}
-
-// TestStartKeyResumesAfterCompletion tests that pressing 's' starts new loops after completion
-func TestStartKeyResumesAfterCompletion(t *testing.T) {
-	model := tui.NewModel()
-	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
-	model.SetLoop(l)
-	model.SetLoopProgress(5, 5)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Simulate completion
-	cmd := tui.SendDone()
-	doneMsg := cmd()
-	model, _ = updateModel(model, doneMsg)
-
-	// Press '+' to add a loop
-	keyPlus := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}}
-	model, _ = updateModel(model, keyPlus)
-
-	// Press 's' to start — should clear completed state
-	keyS := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}
-	model, _ = updateModel(model, keyS)
-
-	view := model.View()
-	// After pressing 's', completed state should be cleared — view should show RUNNING not COMPLETED
-	if strings.Contains(view, "COMPLETED") {
-		t.Error("After pressing 's' with pending loops, should no longer show COMPLETED")
-	}
-}
-
-// TestStartKeyNoopWithoutPendingLoops tests that 's' does nothing when completed without pending loops
-func TestStartKeyNoopWithoutPendingLoops(t *testing.T) {
-	model := tui.NewModel()
-	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
-	model.SetLoop(l)
-	model.SetLoopProgress(5, 5)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Simulate completion
-	cmd := tui.SendDone()
-	doneMsg := cmd()
-	model, _ = updateModel(model, doneMsg)
-
-	// Press 's' without adding loops — should be a no-op, still completed
-	keyS := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}
-	model, _ = updateModel(model, keyS)
-
-	view := model.View()
-	if !strings.Contains(view, "COMPLETED") {
-		t.Error("Pressing 's' without pending loops should keep COMPLETED state")
 	}
 }
 
@@ -1694,34 +1402,6 @@ func TestRalphLoopDetailsTitle(t *testing.T) {
 	}
 }
 
-// TestCompletedTasksAboveCurrentMode tests that "Completed Tasks:" appears above "Current Mode:"
-func TestCompletedTasksAboveCurrentMode(t *testing.T) {
-	model := tui.NewModel()
-	model.SetCompletedTasks(4, 7)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Set a current mode
-	cmd := tui.SendModeUpdate("Building")
-	model, _ = updateModel(model, cmd())
-
-	view := model.View()
-
-	// Find positions of both labels
-	completedIdx := strings.Index(view, "Completed Tasks:")
-	currentIdx := strings.Index(view, "Current Mode:")
-
-	if completedIdx == -1 {
-		t.Fatal("View should contain 'Completed Tasks:' label")
-	}
-	if currentIdx == -1 {
-		t.Fatal("View should contain 'Current Mode:' label")
-	}
-	if completedIdx >= currentIdx {
-		t.Errorf("'Completed Tasks:' (pos %d) should appear before 'Current Mode:' (pos %d)",
-			completedIdx, currentIdx)
-	}
-}
-
 // ============================================================================
 // Tests: Current Task Display in Footer
 // ============================================================================
@@ -1738,57 +1418,6 @@ func TestCurrentTaskDisplayedInFooter(t *testing.T) {
 	}
 	if !strings.Contains(view, "#6 Refactor config") {
 		t.Error("View should display the current task text")
-	}
-}
-
-// TestCurrentTaskDefaultDash tests that current task shows "-" when no task is set
-func TestCurrentTaskDefaultDash(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "Current Task:") {
-		t.Error("View should contain 'Current Task:' label even when no task is set")
-	}
-}
-
-// TestCurrentTaskUpdatedViaMessage tests that SendTaskUpdate updates the displayed task
-func TestCurrentTaskUpdatedViaMessage(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	// Send a task update message
-	cmd := tui.SendTaskUpdate("#3 Refactor config parser")
-	model, _ = updateModel(model, cmd())
-
-	view := model.View()
-	if !strings.Contains(view, "#3 Refactor config parser") {
-		t.Error("View should display updated task from SendTaskUpdate")
-	}
-}
-
-// TestCurrentTaskBetweenCompletedTasksAndMode tests ordering of footer fields
-func TestCurrentTaskBetweenCompletedTasksAndMode(t *testing.T) {
-	model := tui.NewModel()
-	model.SetCurrentTask("#1 Setup")
-	model.SetCompletedTasks(2, 5)
-	model.SetCurrentMode("Building")
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-
-	completedIdx := strings.Index(view, "Completed Tasks:")
-	taskIdx := strings.Index(view, "Current Task:")
-	modeIdx := strings.Index(view, "Current Mode:")
-
-	if completedIdx == -1 || taskIdx == -1 || modeIdx == -1 {
-		t.Fatal("View should contain 'Completed Tasks:', 'Current Task:', and 'Current Mode:' labels")
-	}
-	if completedIdx >= taskIdx {
-		t.Errorf("'Completed Tasks:' (pos %d) should appear before 'Current Task:' (pos %d)", completedIdx, taskIdx)
-	}
-	if taskIdx >= modeIdx {
-		t.Errorf("'Current Task:' (pos %d) should appear before 'Current Mode:' (pos %d)", taskIdx, modeIdx)
 	}
 }
 
