@@ -27,6 +27,23 @@ func SetTimeNowForTest(fn func() time.Time) {
 	timeNow = fn
 }
 
+// tmuxBarUpdater is the interface for managing the tmux status bar (production and test)
+type tmuxBarUpdater interface {
+	IsActive() bool
+	Update(string)
+	Restore()
+}
+
+// FakeStatusBarForTest is a test fake for the tmux status bar that records Update calls.
+// Inject it via SetTmuxStatusBar to observe what content the TUI sends to tmux.
+type FakeStatusBarForTest struct {
+	LastContent string
+}
+
+func (f *FakeStatusBarForTest) IsActive() bool        { return true }
+func (f *FakeStatusBarForTest) Update(content string) { f.LastContent = content }
+func (f *FakeStatusBarForTest) Restore()              {}
+
 // isOctober returns true if the current month is October
 func isOctober() bool {
 	return timeNow().Month() == time.October
@@ -148,7 +165,7 @@ type Model struct {
 	msgChan           <-chan Message
 	doneChan          <-chan struct{}
 	loop              *loop.Loop
-	tmuxBar           *tmux.StatusBar
+	tmuxBar           tmuxBarUpdater
 	hibernating       bool      // whether loop is hibernating due to rate limit
 	hibernateUntil    time.Time // when rate limit resets
 }
@@ -203,7 +220,7 @@ func (m *Model) SetBaseElapsed(d time.Duration) {
 }
 
 // SetTmuxStatusBar sets the tmux status bar manager for live tmux status updates
-func (m *Model) SetTmuxStatusBar(sb *tmux.StatusBar) {
+func (m *Model) SetTmuxStatusBar(sb tmuxBarUpdater) {
 	m.tmuxBar = sb
 }
 
@@ -825,7 +842,7 @@ func (m Model) updateTmuxStatusBar() {
 
 	// If hibernating, show countdown instead of normal stats
 	if m.hibernating {
-		remaining := time.Until(m.hibernateUntil)
+		remaining := m.hibernateUntil.Sub(timeNow())
 		if remaining < 0 {
 			remaining = 0
 		}
