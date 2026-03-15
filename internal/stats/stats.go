@@ -4,17 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 )
 
-// TokenStats tracks token usage and costs
+// TokenStats tracks token usage and costs.
+// All mutating methods are protected by a sync.RWMutex for concurrent access
+// from the processLoopOutput goroutine (writer) and the BubbleTea TUI goroutine (reader).
 type TokenStats struct {
-	InputTokens         int64   `json:"input_tokens"`
-	OutputTokens        int64   `json:"output_tokens"`
-	CacheCreationTokens int64   `json:"cache_creation_tokens"`
-	CacheReadTokens     int64   `json:"cache_read_tokens"`
-	TotalCostUSD        float64 `json:"total_cost"`
-	TotalTokensCount    int64   `json:"total_tokens"`
-	TotalElapsedNs      int64   `json:"elapsed_ns"`
+	mu                  sync.RWMutex `json:"-"`
+	InputTokens         int64        `json:"input_tokens"`
+	OutputTokens        int64        `json:"output_tokens"`
+	CacheCreationTokens int64        `json:"cache_creation_tokens"`
+	CacheReadTokens     int64        `json:"cache_read_tokens"`
+	TotalCostUSD        float64      `json:"total_cost"`
+	TotalTokensCount    int64        `json:"total_tokens"`
+	TotalElapsedNs      int64        `json:"elapsed_ns"`
 }
 
 // NewTokenStats creates a new empty TokenStats instance
@@ -32,11 +36,13 @@ func NewTokenStats() *TokenStats {
 
 // AddUsage adds token usage counts to the stats
 func (t *TokenStats) AddUsage(input, output, cacheCreation, cacheRead int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.InputTokens += input
 	t.OutputTokens += output
 	t.CacheCreationTokens += cacheCreation
 	t.CacheReadTokens += cacheRead
-	t.TotalTokensCount = t.TotalTokens()
+	t.TotalTokensCount = t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens
 }
 
 // Pricing constants for Claude Sonnet 4 (per token)
@@ -57,6 +63,8 @@ func EstimateCostFromTokens(input, output, cacheCreation, cacheRead int64) float
 
 // AddCost adds cost to the total cost
 func (t *TokenStats) AddCost(costUSD float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.TotalCostUSD += costUSD
 }
 
@@ -69,7 +77,32 @@ func (t *TokenStats) ReconcileCost(estimatedDelta, actualCost float64) {
 
 // TotalTokens returns the sum of all token counts
 func (t *TokenStats) TotalTokens() int64 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens
+}
+
+// SetTotalElapsedNs sets the total elapsed time in nanoseconds (thread-safe)
+func (t *TokenStats) SetTotalElapsedNs(ns int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.TotalElapsedNs = ns
+}
+
+// Snapshot returns a consistent point-in-time copy of the stats for reading.
+// The returned value has a fresh (zero) mutex and can be read without locking.
+func (t *TokenStats) Snapshot() TokenStats {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return TokenStats{
+		InputTokens:         t.InputTokens,
+		OutputTokens:        t.OutputTokens,
+		CacheCreationTokens: t.CacheCreationTokens,
+		CacheReadTokens:     t.CacheReadTokens,
+		TotalCostUSD:        t.TotalCostUSD,
+		TotalTokensCount:    t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens,
+		TotalElapsedNs:      t.TotalElapsedNs,
+	}
 }
 
 // FormatTokens formats a token count into a human-readable string
@@ -91,10 +124,21 @@ func FormatTokens(count int64) string {
 
 // Save persists the stats to a JSON file at the given path
 func (t *TokenStats) Save(path string) error {
-	// Update total tokens before saving
-	t.TotalTokensCount = t.TotalTokens()
+	// Take a consistent snapshot under lock, then do I/O outside the lock
+	t.mu.Lock()
+	t.TotalTokensCount = t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens
+	snap := TokenStats{
+		InputTokens:         t.InputTokens,
+		OutputTokens:        t.OutputTokens,
+		CacheCreationTokens: t.CacheCreationTokens,
+		CacheReadTokens:     t.CacheReadTokens,
+		TotalCostUSD:        t.TotalCostUSD,
+		TotalTokensCount:    t.TotalTokensCount,
+		TotalElapsedNs:      t.TotalElapsedNs,
+	}
+	t.mu.Unlock()
 
-	data, err := json.MarshalIndent(t, "", "  ")
+	data, err := json.MarshalIndent(&snap, "", "  ")
 	if err != nil {
 		return err
 	}

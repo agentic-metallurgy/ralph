@@ -402,7 +402,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					totalElapsed = m.baseElapsed + timeNow().Sub(m.startTime)
 				}
-				m.stats.TotalElapsedNs = totalElapsed.Nanoseconds()
+				m.stats.SetTotalElapsedNs(totalElapsed.Nanoseconds())
 			}
 			// Restore tmux status bar to its original state
 			if m.tmuxBar != nil {
@@ -696,16 +696,19 @@ func (m Model) renderFooter() string {
 		Bold(true).
 		Foreground(colorPurple)
 
+	// Take a consistent snapshot of stats for display (avoids races with writer goroutine)
+	snap := m.stats.Snapshot()
+
 	// Usage & Cost panel
 	usageCostContent := lipgloss.JoinVertical(
 		lipgloss.Left,
 		titleStyle.Render("Usage & Cost"),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Tokens:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.TotalTokens())))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Input:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.InputTokens)))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Output:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.OutputTokens)))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Write:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.CacheCreationTokens)))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Read:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(m.stats.CacheReadTokens)))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Cost:"), costStyle.Render(fmt.Sprintf(" $%.6f", m.stats.TotalCostUSD))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Tokens:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(snap.TotalTokensCount)))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Input:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(snap.InputTokens)))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Output:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(snap.OutputTokens)))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Write:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(snap.CacheCreationTokens)))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Read:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(snap.CacheReadTokens)))),
+		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Cost:"), costStyle.Render(fmt.Sprintf(" $%.6f", snap.TotalCostUSD))),
 	)
 	usageCostPanel := panelStyle.Render(usageCostContent)
 
