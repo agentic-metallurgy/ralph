@@ -26,6 +26,7 @@ const (
 	ContentTypeText       ContentType = "text"
 	ContentTypeToolUse    ContentType = "tool_use"
 	ContentTypeToolResult ContentType = "tool_result"
+	ContentTypeThinking   ContentType = "thinking"
 )
 
 // Usage represents token usage information from Claude
@@ -45,13 +46,14 @@ type RateLimitInfo struct {
 
 // ContentItem represents a single content item in a message
 type ContentItem struct {
-	Type      ContentType            `json:"type"`
-	Text      string                 `json:"text,omitempty"`
-	ID        string                 `json:"id,omitempty"`          // Tool use ID for tool_use
-	Name      string                 `json:"name,omitempty"`        // Tool name for tool_use
-	Input     map[string]interface{} `json:"input,omitempty"`       // Tool input for tool_use
-	ToolUseID string                 `json:"tool_use_id,omitempty"` // Tool use ID for tool_result
-	Content   interface{}            `json:"content,omitempty"`     // Tool result content
+	Type           ContentType            `json:"type"`
+	Text           string                 `json:"text,omitempty"`
+	ID             string                 `json:"id,omitempty"`          // Tool use ID for tool_use
+	Name           string                 `json:"name,omitempty"`        // Tool name for tool_use
+	Input          map[string]interface{} `json:"input,omitempty"`       // Tool input for tool_use
+	ToolUseID      string                 `json:"tool_use_id,omitempty"` // Tool use ID for tool_result
+	Content        interface{}            `json:"content,omitempty"`     // Tool result content
+	ThinkingText   string                 `json:"thinking,omitempty"`    // Thinking content for thinking items
 }
 
 // InnerMessage represents the message field within an assistant/user message
@@ -227,6 +229,11 @@ func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
 				} else {
 					content.TextContent = append(content.TextContent, text)
 				}
+			}
+
+		case ContentTypeThinking:
+			if item.ThinkingText != "" {
+				content.Thinking = item.ThinkingText
 			}
 
 		case ContentTypeToolUse:

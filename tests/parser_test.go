@@ -1450,3 +1450,137 @@ func TestExtractContentToolResultEmptyMap(t *testing.T) {
 		t.Errorf("Expected '{}', got %q", content.ToolResults[0].Content)
 	}
 }
+
+// ========== Extended Thinking Content Item Tests ==========
+
+// TestContentTypeThinkingConstant verifies the ContentTypeThinking constant value
+func TestContentTypeThinkingConstant(t *testing.T) {
+	if parser.ContentTypeThinking != "thinking" {
+		t.Errorf("Expected ContentTypeThinking to be 'thinking', got %q", parser.ContentTypeThinking)
+	}
+}
+
+// TestExtractContentThinkingItem tests that a proper thinking content item
+// (type: "thinking" with "thinking" field) is extracted correctly
+func TestExtractContentThinkingItem(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Let me analyze this step by step..."}]}}`
+	msg := p.ParseLine(line)
+	content := p.ExtractContent(msg)
+
+	if content.Thinking != "Let me analyze this step by step..." {
+		t.Errorf("Expected thinking content, got %q", content.Thinking)
+	}
+	// Thinking items should not appear in TextContent
+	if len(content.TextContent) != 0 {
+		t.Errorf("Expected 0 text items, got %d", len(content.TextContent))
+	}
+}
+
+// TestExtractContentThinkingItemWithText tests a message containing both
+// a thinking content item and a text content item
+func TestExtractContentThinkingItemWithText(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"My reasoning here"},{"type":"text","text":"Here is my answer"}]}}`
+	msg := p.ParseLine(line)
+	content := p.ExtractContent(msg)
+
+	if content.Thinking != "My reasoning here" {
+		t.Errorf("Expected thinking 'My reasoning here', got %q", content.Thinking)
+	}
+	if len(content.TextContent) != 1 {
+		t.Fatalf("Expected 1 text item, got %d", len(content.TextContent))
+	}
+	if content.TextContent[0] != "Here is my answer" {
+		t.Errorf("Expected text 'Here is my answer', got %q", content.TextContent[0])
+	}
+}
+
+// TestExtractContentThinkingItemEmpty tests that an empty thinking content item
+// does not set the Thinking field
+func TestExtractContentThinkingItemEmpty(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":""}]}}`
+	msg := p.ParseLine(line)
+	content := p.ExtractContent(msg)
+
+	if content.Thinking != "" {
+		t.Errorf("Expected empty thinking for empty thinking item, got %q", content.Thinking)
+	}
+}
+
+// TestExtractContentThinkingItemMultiline tests multiline thinking content
+func TestExtractContentThinkingItemMultiline(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Step 1: Analyze the problem\nStep 2: Consider options\nStep 3: Choose best approach"}]}}`
+	msg := p.ParseLine(line)
+	content := p.ExtractContent(msg)
+
+	expected := "Step 1: Analyze the problem\nStep 2: Consider options\nStep 3: Choose best approach"
+	if content.Thinking != expected {
+		t.Errorf("Expected multiline thinking, got %q", content.Thinking)
+	}
+}
+
+// TestExtractContentThinkingItemOverridesTagThinking tests that when both a
+// thinking content item and a <thinking> tag in text exist, the last one wins
+func TestExtractContentThinkingItemOverridesTagThinking(t *testing.T) {
+	p := parser.NewParser()
+
+	// Text with <thinking> tag comes first, then a proper thinking content item
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"<thinking>Old tag thinking</thinking>"},{"type":"thinking","thinking":"New content item thinking"}]}}`
+	msg := p.ParseLine(line)
+	content := p.ExtractContent(msg)
+
+	// The thinking content item should override the tag-based thinking
+	if content.Thinking != "New content item thinking" {
+		t.Errorf("Expected thinking item to win, got %q", content.Thinking)
+	}
+}
+
+// TestExtractContentThinkingItemWithToolUse tests thinking content items
+// alongside tool use items
+func TestExtractContentThinkingItemWithToolUse(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"I need to read a file"},{"type":"tool_use","name":"Read","input":{"file_path":"/test.go"}}]}}`
+	msg := p.ParseLine(line)
+	content := p.ExtractContent(msg)
+
+	if content.Thinking != "I need to read a file" {
+		t.Errorf("Expected thinking content, got %q", content.Thinking)
+	}
+	if len(content.ToolUses) != 1 {
+		t.Fatalf("Expected 1 tool use, got %d", len(content.ToolUses))
+	}
+	if content.ToolUses[0].Name != "Read" {
+		t.Errorf("Expected tool name 'Read', got %q", content.ToolUses[0].Name)
+	}
+}
+
+// TestParseLineThinkingContentItemParsed tests that the ThinkingText field
+// is correctly parsed from JSON
+func TestParseLineThinkingContentItemParsed(t *testing.T) {
+	p := parser.NewParser()
+
+	line := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"My thoughts"}]}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil result")
+	}
+	if len(msg.Message.Content) != 1 {
+		t.Fatalf("Expected 1 content item, got %d", len(msg.Message.Content))
+	}
+	item := msg.Message.Content[0]
+	if item.Type != parser.ContentTypeThinking {
+		t.Errorf("Expected type 'thinking', got %q", item.Type)
+	}
+	if item.ThinkingText != "My thoughts" {
+		t.Errorf("Expected ThinkingText 'My thoughts', got %q", item.ThinkingText)
+	}
+}
