@@ -2,8 +2,9 @@
 
 ## Build & Test
 - Build: `go build -o ralph ./cmd/ralph`
-- Test: `go test -v ./tests/`
+- Test all: `go test -v ./tests/ ./cmd/ralph/`
 - Test single: `go test -v -run TestName ./tests/`
+- Test main: `go test -v ./cmd/ralph/`
 
 ## Project Structure
 - `cmd/ralph/main.go` — entry point, wires loop/parser/tui together
@@ -14,7 +15,8 @@
 - `internal/stats/` — token usage tracking, persistence (.ralph.claude_stats)
 - `internal/tmux/` — auto-wrap in tmux session
 - `internal/tui/` — BubbleTea TUI (activity panel, footer, hotkeys)
-- `tests/` — all test files
+- `tests/` — BDD and unit tests for internal packages
+- `cmd/ralph/main_test.go` — tests for main.go functions (parseTaskCounts, isNewLoopStart)
 - `specs/` — feature specifications
 
 ## Subcommands
