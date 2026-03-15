@@ -62,11 +62,21 @@ func viewNotContains(m tui.Model, substr string) bool {
 
 // --- Tests ---
 
-// TestBDD_UserControlsLoopExecution_StatusLifecycle tests the full status lifecycle:
-// RUNNING → STOPPED → RUNNING → COMPLETED
-// Given a running loop, the user pauses it (showing STOPPED), resumes it (showing RUNNING),
-// and eventually the loop completes (showing COMPLETED).
-func TestBDD_UserControlsLoopExecution_StatusLifecycle(t *testing.T) {
+// TestBDD_UserControlsLoopExecution_RunningShowsRunningStatus tests that a loop
+// in its default running state displays the RUNNING status banner.
+func TestBDD_UserControlsLoopExecution_RunningShowsRunningStatus(t *testing.T) {
+	// Given: a model with a loop in running state
+	m, _ := setupReadyModelWithLoop(2, 5)
+
+	// Then: status should show RUNNING
+	if !viewContains(m, "RUNNING") {
+		t.Error("Given a running loop, status should display RUNNING")
+	}
+}
+
+// TestBDD_UserControlsLoopExecution_PauseShowsStoppedStatus tests that pressing 'p'
+// on a running loop changes the status banner to STOPPED.
+func TestBDD_UserControlsLoopExecution_PauseShowsStoppedStatus(t *testing.T) {
 	// Given: a model with an actually-running loop (Pause requires running=true)
 	cfg := loop.Config{
 		Iterations:     100,
@@ -87,32 +97,63 @@ func TestBDD_UserControlsLoopExecution_StatusLifecycle(t *testing.T) {
 	go func() { for range l.Output() {} }()
 	time.Sleep(50 * time.Millisecond)
 
-	// Then: status should show RUNNING
-	if !viewContains(m, "RUNNING") {
-		t.Error("Given a running loop, status should display RUNNING")
-	}
-
 	// When: user presses 'p' to pause
 	m, _ = pressKey(m, 'p')
-	time.Sleep(200 * time.Millisecond) // let loop process the pause
+	time.Sleep(200 * time.Millisecond)
 
 	// Then: status should show STOPPED
 	if !viewContains(m, "STOPPED") {
 		t.Error("After pausing, status should display STOPPED")
 	}
+}
+
+// TestBDD_UserControlsLoopExecution_ResumeShowsRunningStatus tests that pressing 'r'
+// after pausing restores the RUNNING status banner.
+func TestBDD_UserControlsLoopExecution_ResumeShowsRunningStatus(t *testing.T) {
+	// Given: a model with an actually-running loop that has been paused
+	cfg := loop.Config{
+		Iterations:     100,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	m := tui.NewModel()
+	m.SetLoop(l)
+	m.SetLoopProgress(2, 5)
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	l.Start(ctx)
+	go func() { for range l.Output() {} }()
+	time.Sleep(50 * time.Millisecond)
+
+	m, _ = pressKey(m, 'p')
+	time.Sleep(200 * time.Millisecond)
+
+	if !viewContains(m, "STOPPED") {
+		t.Fatal("Precondition failed: should show STOPPED after pause")
+	}
 
 	// When: user presses 'r' to resume
 	m, _ = pressKey(m, 'r')
-	time.Sleep(200 * time.Millisecond) // let loop process the resume
+	time.Sleep(200 * time.Millisecond)
 
 	// Then: status should show RUNNING again
 	if !viewContains(m, "RUNNING") {
 		t.Error("After resuming, status should display RUNNING")
 	}
+}
+
+// TestBDD_UserControlsLoopExecution_CompletionShowsCompletedStatus tests that when
+// the loop signals done, both the status banner and footer show COMPLETED/Completed.
+func TestBDD_UserControlsLoopExecution_CompletionShowsCompletedStatus(t *testing.T) {
+	// Given: a running model at its final loop
+	m, _ := setupReadyModelWithLoop(5, 5)
 
 	// When: loop completes
-	cancel() // stop the real loop
-	time.Sleep(50 * time.Millisecond)
 	m, _ = sendTuiMsg(m, tui.SendDone())
 
 	// Then: status should show COMPLETED
@@ -405,50 +446,55 @@ func TestBDD_UserControlsLoopExecution_HibernateOverridesStoppedDisplay(t *testi
 	}
 }
 
-// TestBDD_UserControlsLoopExecution_HotkeyBarStateTransitions tests that the hotkey bar
-// correctly illuminates different keys based on state.
-func TestBDD_UserControlsLoopExecution_HotkeyBarStateTransitions(t *testing.T) {
-	m, l := setupReadyModelWithLoop(2, 5)
+// TestBDD_UserControlsLoopExecution_HotkeyBarShowsPauseDuringRunning tests that
+// the hotkey bar displays (p)ause while the loop is in running state.
+func TestBDD_UserControlsLoopExecution_HotkeyBarShowsPauseDuringRunning(t *testing.T) {
+	// Given: a model in running state
+	m, _ := setupReadyModelWithLoop(2, 5)
 
-	// State: Running → pause should be highlighted
-	view := m.View()
-	if !strings.Contains(view, "(p)ause") {
+	// Then: hotkey bar should show (p)ause
+	if !viewContains(m, "(p)ause") {
 		t.Error("While running, hotkey bar should show '(p)ause'")
 	}
+}
 
-	// State: Paused → resume should be highlighted
+// TestBDD_UserControlsLoopExecution_HotkeyBarShowsResumeDuringPause tests that
+// the hotkey bar displays (r)esume when the loop is paused.
+func TestBDD_UserControlsLoopExecution_HotkeyBarShowsResumeDuringPause(t *testing.T) {
+	// Given: a model that has been paused
+	m, _ := setupReadyModelWithLoop(2, 5)
+
+	// When: user presses 'p' to pause
 	m, _ = pressKey(m, 'p')
-	view = m.View()
-	if !strings.Contains(view, "(r)esume") {
+
+	// Then: hotkey bar should show (r)esume
+	if !viewContains(m, "(r)esume") {
 		t.Error("While paused, hotkey bar should show '(r)esume'")
 	}
+}
 
-	// State: Resume and complete
-	m, _ = pressKey(m, 'r')
-	m.SetLoopProgress(5, 5)
+// TestBDD_UserControlsLoopExecution_HotkeyBarShowsStartAfterCompletionWithPending tests
+// that the hotkey bar displays (s)tart when completed with pending loops.
+func TestBDD_UserControlsLoopExecution_HotkeyBarShowsStartAfterCompletionWithPending(t *testing.T) {
+	// Given: a completed model with a pending loop added via '+'
+	m, _ := setupReadyModelWithLoop(5, 5)
 	m, _ = sendTuiMsg(m, tui.SendDone())
-
-	// State: Completed without pending → no start shown
-	view = m.View()
-
-	// State: Completed with pending → (s)tart should be shown
 	m, _ = pressKey(m, '+')
-	view = m.View()
-	if !strings.Contains(view, "(s)tart") {
+
+	// Then: hotkey bar should show (s)tart
+	if !viewContains(m, "(s)tart") {
 		t.Error("When completed with pending loops, hotkey bar should show '(s)tart'")
 	}
+}
 
-	// State: Hibernate → (r) wake should be shown
-	m2, _ := setupReadyModelWithLoop(2, 5)
-	l2 := l
-	_ = l2
-	m2.SetLoop(loop.New(loop.Config{Iterations: 5, Prompt: "test"}))
-	l3 := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
-	m2.SetLoop(l3)
-	l3.Hibernate(time.Now().Add(5 * time.Minute))
-	m2, _ = sendTuiMsg(m2, tui.SendHibernate(time.Now().Add(5*time.Minute)))
-	view = m2.View()
-	if !strings.Contains(view, "(r) wake") {
+// TestBDD_UserControlsLoopExecution_HotkeyBarShowsWakeDuringHibernate tests that
+// the hotkey bar displays (r) wake when the loop is hibernating.
+func TestBDD_UserControlsLoopExecution_HotkeyBarShowsWakeDuringHibernate(t *testing.T) {
+	// Given: a hibernating model
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
+
+	// Then: hotkey bar should show (r) wake
+	if !viewContains(m, "(r) wake") {
 		t.Error("While hibernating, hotkey bar should show '(r) wake'")
 	}
 }
