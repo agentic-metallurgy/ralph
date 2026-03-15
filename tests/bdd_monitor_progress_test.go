@@ -505,6 +505,11 @@ func TestBDD_UserMonitorsBuildProgress_DoneFreezesFutureUpdates(t *testing.T) {
 }
 
 func TestBDD_UserMonitorsBuildProgress_DoneFreezesTimerDisplay(t *testing.T) {
+	// Use mock time so we can advance time without real sleeps
+	var mockNow = time.Now()
+	tui.SetTimeNowForTest(func() time.Time { return mockNow })
+	defer tui.SetTimeNowForTest(time.Now)
+
 	// Given: a model with timer running
 	m := setupReadyModel()
 
@@ -512,8 +517,8 @@ func TestBDD_UserMonitorsBuildProgress_DoneFreezesTimerDisplay(t *testing.T) {
 	m, _ = sendTuiMsg(m, tui.SendDone())
 	view1 := m.View()
 
-	// Allow a small time to pass, then tick
-	time.Sleep(50 * time.Millisecond)
+	// Advance mock time and send a tick — timer should still be frozen
+	mockNow = mockNow.Add(time.Second)
 	m, _ = updateModel(m, tui.TickMsgForTest())
 	view2 := m.View()
 

@@ -218,24 +218,28 @@ func TestBDD_UserExitsApplication_PersistsPausedElapsedTime(t *testing.T) {
 }
 
 func TestBDD_UserExitsApplication_PausedElapsedFrozenAtPausePoint(t *testing.T) {
+	// Use mock time so elapsed is deterministic (no real sleep needed)
+	var mockNow = time.Now()
+	tui.SetTimeNowForTest(func() time.Time { return mockNow })
+	defer tui.SetTimeNowForTest(time.Now)
+
 	// Given: a model that was paused, with known base elapsed
 	m, _ := setupReadyModelWithLoop(1, 3)
 	tokenStats := stats.NewTokenStats()
 	m.SetStats(tokenStats)
 	m.SetBaseElapsed(10 * time.Minute)
 
-	// When: pause, wait briefly, then quit
+	// When: pause, advance mock time, then quit
 	m, _ = pressKey(m, 'p')
-	time.Sleep(50 * time.Millisecond) // timer should be frozen, so this shouldn't add time
+	mockNow = mockNow.Add(time.Minute) // advance mock time — frozen timer should ignore this
 
 	m, _ = pressKey(m, 'q')
 
-	// Then: elapsed time should be close to 10 min + small delta (not 10 min + 50ms of sleep)
-	// The paused elapsed is captured at pause time, not at quit time
-	upperBound := (10*time.Minute + 5*time.Second).Nanoseconds() // generous upper bound
-	if tokenStats.TotalElapsedNs > upperBound {
-		t.Errorf("Paused elapsed should be near 10min, not significantly more. Got %d ns (upper bound %d ns)",
-			tokenStats.TotalElapsedNs, upperBound)
+	// Then: elapsed should be exactly 10 minutes (timer was frozen at pause, not at quit)
+	expected := (10 * time.Minute).Nanoseconds()
+	if tokenStats.TotalElapsedNs != expected {
+		t.Errorf("Paused elapsed should be exactly 10min. Got %d ns (expected %d ns)",
+			tokenStats.TotalElapsedNs, expected)
 	}
 }
 

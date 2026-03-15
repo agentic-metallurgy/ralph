@@ -169,17 +169,22 @@ func TestBDD_UserControlsLoopExecution_CompletionShowsCompletedStatus(t *testing
 // freezes both the total elapsed timer and the per-loop timer.
 // This verifies the view is completely static while paused (no ticking timers).
 func TestBDD_UserControlsLoopExecution_PauseFreezesBothTimers(t *testing.T) {
+	// Use mock time so we can simulate elapsed time without real sleeps
+	var mockNow = time.Now()
+	tui.SetTimeNowForTest(func() time.Time { return mockNow })
+	defer tui.SetTimeNowForTest(time.Now)
+
 	// Given: a model with a loop that has been running for a moment
 	m, _ := setupReadyModelWithLoop(1, 5)
-	time.Sleep(10 * time.Millisecond) // let timers accumulate slightly
+	mockNow = mockNow.Add(time.Second) // simulate 1s of elapsed time
 
 	// When: user presses 'p' to pause
 	m, _ = pressKey(m, 'p')
 
-	// Then: two renders separated by time should produce identical output
+	// Then: two renders separated by simulated time should produce identical output
 	// (both total timer and per-loop timer are frozen)
 	view1 := m.View()
-	time.Sleep(50 * time.Millisecond)
+	mockNow = mockNow.Add(time.Second) // advance mock time while paused
 	view2 := m.View()
 
 	if view1 != view2 {
@@ -191,13 +196,19 @@ func TestBDD_UserControlsLoopExecution_PauseFreezesBothTimers(t *testing.T) {
 // after pause unfreezes timers so they advance again.
 // We verify this by checking that the view is frozen when paused, and unfrozen after resume.
 func TestBDD_UserControlsLoopExecution_ResumeRestoresBothTimers(t *testing.T) {
+	// Use mock time so we can simulate elapsed time without real sleeps
+	var mockNow = time.Now()
+	tui.SetTimeNowForTest(func() time.Time { return mockNow })
+	defer tui.SetTimeNowForTest(time.Now)
+
 	// Given: a paused loop
 	m, _ := setupReadyModelWithLoop(1, 5)
+	mockNow = mockNow.Add(time.Second) // simulate 1s of elapsed time before pause
 	m, _ = pressKey(m, 'p')
 
-	// Verify pause is working: views should be identical even after a delay
+	// Verify pause is working: advancing mock time should NOT change the view
 	frozenView := m.View()
-	time.Sleep(10 * time.Millisecond)
+	mockNow = mockNow.Add(time.Second)
 	if m.View() != frozenView {
 		t.Fatal("Precondition failed: pause should freeze the view")
 	}
@@ -205,10 +216,9 @@ func TestBDD_UserControlsLoopExecution_ResumeRestoresBothTimers(t *testing.T) {
 	// When: user presses 'r' to resume
 	m, _ = pressKey(m, 'r')
 
-	// Then: views should eventually differ (wait long enough for the second to tick)
-	// The timer displays HH:MM:SS, so we need to wait >1 second for a visible change
+	// Then: advancing mock time should now change the view (timers are no longer frozen)
 	viewAfterResume := m.View()
-	time.Sleep(1100 * time.Millisecond)
+	mockNow = mockNow.Add(2 * time.Second) // advance 2 seconds of mock time
 	viewLater := m.View()
 
 	if viewAfterResume == viewLater {
@@ -537,15 +547,20 @@ func TestBDD_UserControlsLoopExecution_QuitPersistsElapsedDuringPause(t *testing
 // TestBDD_UserControlsLoopExecution_CompletionFreezesBothTimers tests that when the loop
 // completes, both the total and per-loop timers are frozen.
 func TestBDD_UserControlsLoopExecution_CompletionFreezesBothTimers(t *testing.T) {
+	// Use mock time so we can simulate elapsed time without real sleeps
+	var mockNow = time.Now()
+	tui.SetTimeNowForTest(func() time.Time { return mockNow })
+	defer tui.SetTimeNowForTest(time.Now)
+
 	// Given: a running model
 	m, _ := setupReadyModelWithLoop(5, 5)
 
 	// When: loop completes
 	m, _ = sendTuiMsg(m, tui.SendDone())
 
-	// Then: view should be frozen (both timers paused)
+	// Then: view should be frozen (both timers paused) even after mock time advances
 	view1 := m.View()
-	time.Sleep(50 * time.Millisecond)
+	mockNow = mockNow.Add(time.Second) // advance mock time while "done"
 	view2 := m.View()
 
 	if view1 != view2 {

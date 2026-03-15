@@ -19,10 +19,10 @@ const (
 	minHeight = 15
 )
 
-// timeNow is the time source used for seasonal checks (overridable in tests)
+// timeNow is the time source used for seasonal checks and elapsed time calculations (overridable in tests)
 var timeNow = time.Now
 
-// SetTimeNowForTest overrides the time source for testing seasonal behavior
+// SetTimeNowForTest overrides the time source for testing (seasonal behavior and elapsed time)
 func SetTimeNowForTest(fn func() time.Time) {
 	timeNow = fn
 }
@@ -155,7 +155,7 @@ type Model struct {
 
 // NewModel creates and returns a new initialized Model
 func NewModel() Model {
-	now := time.Now()
+	now := timeNow()
 	return Model{
 		ready:          false,
 		width:          0,
@@ -228,7 +228,7 @@ func (m Model) getElapsed() time.Duration {
 	if m.timerPaused {
 		return m.pausedElapsed
 	}
-	return m.baseElapsed + time.Since(m.startTime)
+	return m.baseElapsed + timeNow().Sub(m.startTime)
 }
 
 // getLoopElapsed returns the elapsed time for the current loop iteration
@@ -236,7 +236,7 @@ func (m Model) getLoopElapsed() time.Duration {
 	if m.loopTimerPaused {
 		return m.loopPausedElapsed
 	}
-	return m.loopBaseElapsed + time.Since(m.loopStartTime)
+	return m.loopBaseElapsed + timeNow().Sub(m.loopStartTime)
 }
 
 // AddMessage adds a message to the activity feed
@@ -389,7 +389,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.timerPaused {
 					totalElapsed = m.pausedElapsed
 				} else {
-					totalElapsed = m.baseElapsed + time.Since(m.startTime)
+					totalElapsed = m.baseElapsed + timeNow().Sub(m.startTime)
 				}
 				m.stats.TotalElapsedNs = totalElapsed.Nanoseconds()
 			}
@@ -403,11 +403,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Pause the loop - freeze elapsed time (both total and per-loop)
 			if m.loop != nil {
 				if !m.timerPaused {
-					m.pausedElapsed = m.baseElapsed + time.Since(m.startTime)
+					m.pausedElapsed = m.baseElapsed + timeNow().Sub(m.startTime)
 					m.timerPaused = true
 				}
 				if !m.loopTimerPaused {
-					m.loopPausedElapsed = m.loopBaseElapsed + time.Since(m.loopStartTime)
+					m.loopPausedElapsed = m.loopBaseElapsed + timeNow().Sub(m.loopStartTime)
 					m.loopTimerPaused = true
 				}
 				m.loop.Pause()
@@ -426,24 +426,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Resume timers when waking from hibernate
 					if m.timerPaused {
 						m.baseElapsed = m.pausedElapsed
-						m.startTime = time.Now()
+						m.startTime = timeNow()
 						m.timerPaused = false
 					}
 					if m.loopTimerPaused {
 						m.loopBaseElapsed = m.loopPausedElapsed
-						m.loopStartTime = time.Now()
+						m.loopStartTime = timeNow()
 						m.loopTimerPaused = false
 					}
 					return m, nil
 				}
 				if m.timerPaused {
 					m.baseElapsed = m.pausedElapsed
-					m.startTime = time.Now()
+					m.startTime = timeNow()
 					m.timerPaused = false
 				}
 				if m.loopTimerPaused {
 					m.loopBaseElapsed = m.loopPausedElapsed
-					m.loopStartTime = time.Now()
+					m.loopStartTime = timeNow()
 					m.loopTimerPaused = false
 				}
 				// Clear completed state when resuming with pending loops
@@ -520,7 +520,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case loopStartedMsg:
 		// New loop iteration started — reset per-loop timer and tokens
-		m.loopStartTime = time.Now()
+		m.loopStartTime = timeNow()
 		m.loopBaseElapsed = 0
 		m.loopTimerPaused = false
 		m.loopPausedElapsed = 0
@@ -535,11 +535,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Processing is done — freeze both timers and mark as completed
 		m.completed = true
 		if !m.timerPaused {
-			m.pausedElapsed = m.baseElapsed + time.Since(m.startTime)
+			m.pausedElapsed = m.baseElapsed + timeNow().Sub(m.startTime)
 			m.timerPaused = true
 		}
 		if !m.loopTimerPaused {
-			m.loopPausedElapsed = m.loopBaseElapsed + time.Since(m.loopStartTime)
+			m.loopPausedElapsed = m.loopBaseElapsed + timeNow().Sub(m.loopStartTime)
 			m.loopTimerPaused = true
 		}
 		return m, nil
@@ -940,6 +940,6 @@ func SendLoopRef(l *loop.Loop) tea.Cmd {
 
 // TickMsgForTest returns a tickMsg for use in tests
 func TickMsgForTest() tea.Msg {
-	return tickMsg(time.Now())
+	return tickMsg(timeNow())
 }
 
