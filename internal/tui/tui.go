@@ -947,3 +947,13 @@ func WaitForDoneForTest(ch <-chan struct{}) tea.Cmd {
 	return waitForDone(ch)
 }
 
+// SetMaxMessagesForTest overrides the maxMessages cap for boundary testing.
+func (m *Model) SetMaxMessagesForTest(n int) {
+	m.maxMessages = n
+}
+
+// MessageCountForTest returns the current number of messages in the activity feed.
+func (m *Model) MessageCountForTest() int {
+	return len(m.messages)
+}
+
