@@ -153,6 +153,40 @@ func TestParseTaskCountsStatusOnSameLineAsHeader(t *testing.T) {
 	}
 }
 
+func TestParseTaskCountsReflectsFileChanges(t *testing.T) {
+	// Verifies that repeated calls to parseTaskCounts pick up file modifications,
+	// which is the basis for live recount at iteration boundaries.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "IMPLEMENTATION_PLAN.md")
+
+	// Initial: 1 done out of 3
+	initial := "## TASK 1\n**Status: DONE**\n## TASK 2\n**Status: TODO**\n## TASK 3\n**Status: TODO**\n"
+	os.WriteFile(path, []byte(initial), 0644)
+
+	completed, total := parseTaskCounts(path)
+	if completed != 1 || total != 3 {
+		t.Errorf("initial: expected 1/3, got %d/%d", completed, total)
+	}
+
+	// Simulate Claude marking task 2 as DONE during an iteration
+	updated := "## TASK 1\n**Status: DONE**\n## TASK 2\n**Status: DONE**\n## TASK 3\n**Status: TODO**\n"
+	os.WriteFile(path, []byte(updated), 0644)
+
+	completed, total = parseTaskCounts(path)
+	if completed != 2 || total != 3 {
+		t.Errorf("after update: expected 2/3, got %d/%d", completed, total)
+	}
+
+	// Simulate adding a new task during the session
+	expanded := updated + "## TASK 4\n**Status: TODO**\n"
+	os.WriteFile(path, []byte(expanded), 0644)
+
+	completed, total = parseTaskCounts(path)
+	if completed != 2 || total != 4 {
+		t.Errorf("after expansion: expected 2/4, got %d/%d", completed, total)
+	}
+}
+
 func TestHandleLoopMarkerReturnsTrue(t *testing.T) {
 	// Verify the isLoopStart detection logic matches what handleLoopMarker uses
 	tests := []struct {
