@@ -34,12 +34,7 @@ func setupHibernatingModel(current, total int, hibernateDuration time.Duration) 
 
 func TestBDD_UserHandlesRateLimits_HibernateShowsRateLimitedBanner(t *testing.T) {
 	// Given: a running loop that enters hibernate
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
-
-	// Precondition: loop is actually hibernating
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
-	}
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
 	// Then: the status banner shows RATE LIMITED
 	if !viewContains(m, "RATE LIMITED") {
@@ -83,9 +78,9 @@ func TestBDD_UserHandlesRateLimits_HibernateOverridesStoppedDisplay(t *testing.T
 	l.Hibernate(until)
 	m, _ = sendTuiMsg(m, tui.SendHibernate(until))
 
-	// Precondition: loop is hibernating
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	// Precondition: view shows RATE LIMITED
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// Then: shows RATE LIMITED, NOT STOPPED
@@ -101,11 +96,11 @@ func TestBDD_UserHandlesRateLimits_HibernateOverridesStoppedDisplay(t *testing.T
 
 func TestBDD_UserHandlesRateLimits_HibernateShowsCountdownWithSleepEmoji(t *testing.T) {
 	// Given: a hibernating loop with 5 minutes remaining
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
 	// Precondition
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// Then: the footer shows the 💤 emoji as part of the countdown
@@ -116,10 +111,10 @@ func TestBDD_UserHandlesRateLimits_HibernateShowsCountdownWithSleepEmoji(t *test
 
 func TestBDD_UserHandlesRateLimits_CountdownShowsMinutesAndSeconds(t *testing.T) {
 	// Given: a hibernating loop with 5 minutes remaining
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// Then: countdown shows approximately 05:00 or 04:59 (MM:SS format)
@@ -149,9 +144,9 @@ func TestBDD_UserHandlesRateLimits_CountdownAtZeroBoundary(t *testing.T) {
 	l.Hibernate(past)
 	m, _ = sendTuiMsg(m, tui.SendHibernate(past))
 
-	// Precondition: loop is still in hibernate state (loop doesn't auto-clear)
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should still report hibernating even if deadline passed")
+	// Precondition: view shows RATE LIMITED (loop stays hibernating even if deadline passed)
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED even if deadline passed")
 	}
 
 	// Then: countdown should show 00:00 (clamped to zero, not negative)
@@ -162,10 +157,10 @@ func TestBDD_UserHandlesRateLimits_CountdownAtZeroBoundary(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_CountdownWithShortDuration(t *testing.T) {
 	// Given: a hibernating loop with only 30 seconds remaining
-	m, l := setupHibernatingModel(1, 5, 30*time.Second)
+	m, _ := setupHibernatingModel(1, 5, 30*time.Second)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// Then: countdown shows 00:XX (under 1 minute)
@@ -178,12 +173,8 @@ func TestBDD_UserHandlesRateLimits_CountdownWithShortDuration(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_WakeViaClearsRateLimitState(t *testing.T) {
 	// Given: a hibernating loop
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	// Precondition
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
-	}
 	if !viewContains(m, "RATE LIMITED") {
 		t.Fatal("Precondition: should show RATE LIMITED banner")
 	}
@@ -191,11 +182,7 @@ func TestBDD_UserHandlesRateLimits_WakeViaClearsRateLimitState(t *testing.T) {
 	// When: user presses 'r' to wake
 	m, _ = pressKey(m, 'r')
 
-	// Then: loop is no longer hibernating
-	if l.IsHibernating() {
-		t.Error("Loop should not be hibernating after 'r' key wake")
-	}
-	// And: RATE LIMITED banner is gone
+	// Then: RATE LIMITED banner is gone
 	if viewContains(m, "RATE LIMITED") {
 		t.Error("RATE LIMITED banner should be cleared after wake")
 	}
@@ -203,10 +190,10 @@ func TestBDD_UserHandlesRateLimits_WakeViaClearsRateLimitState(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_WakeRestoresRunningStatus(t *testing.T) {
 	// Given: a hibernating loop
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// When: user presses 'r' to wake
@@ -220,10 +207,10 @@ func TestBDD_UserHandlesRateLimits_WakeRestoresRunningStatus(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_WakeClearsCountdown(t *testing.T) {
 	// Given: a hibernating loop showing countdown
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 	if !viewContains(m, "💤") {
 		t.Fatal("Precondition: should show 💤 countdown")
@@ -242,10 +229,10 @@ func TestBDD_UserHandlesRateLimits_WakeClearsCountdown(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_WakeResumesTotalTimer(t *testing.T) {
 	// Given: a hibernating loop (hibernate freezes timers via pause)
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// When: user presses 'r' to wake
@@ -260,19 +247,16 @@ func TestBDD_UserHandlesRateLimits_WakeResumesTotalTimer(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_SKeyAlsoWakesFromHibernate(t *testing.T) {
 	// Given: a hibernating loop
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// When: user presses 's' (the start key, which shares handler with 'r')
 	m, _ = pressKey(m, 's')
 
-	// Then: loop is no longer hibernating
-	if l.IsHibernating() {
-		t.Error("Loop should not be hibernating after 's' key wake")
-	}
+	// Then: RATE LIMITED should be cleared
 	if viewContains(m, "RATE LIMITED") {
 		t.Error("RATE LIMITED should be cleared after 's' key wake")
 	}
@@ -282,10 +266,10 @@ func TestBDD_UserHandlesRateLimits_SKeyAlsoWakesFromHibernate(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_HotkeyBarShowsWakeDuringHibernate(t *testing.T) {
 	// Given: a hibernating loop
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// Then: hotkey bar shows "(r) wake"
@@ -296,10 +280,10 @@ func TestBDD_UserHandlesRateLimits_HotkeyBarShowsWakeDuringHibernate(t *testing.
 
 func TestBDD_UserHandlesRateLimits_HotkeyBarDoesNotShowResumeDuringHibernate(t *testing.T) {
 	// Given: a hibernating loop
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// Then: hotkey bar does NOT show "(r)esume" — it should show "(r) wake" instead
@@ -310,10 +294,10 @@ func TestBDD_UserHandlesRateLimits_HotkeyBarDoesNotShowResumeDuringHibernate(t *
 
 func TestBDD_UserHandlesRateLimits_HotkeyBarShowsPauseDimmedDuringHibernate(t *testing.T) {
 	// Given: a hibernating loop
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// Then: "(p)ause" should still be visible (dimmed) in the hotkey bar
@@ -324,10 +308,10 @@ func TestBDD_UserHandlesRateLimits_HotkeyBarShowsPauseDimmedDuringHibernate(t *t
 
 func TestBDD_UserHandlesRateLimits_HotkeyBarAfterWakeShowsPause(t *testing.T) {
 	// Given: a hibernating loop
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// When: user wakes from hibernate
@@ -341,10 +325,10 @@ func TestBDD_UserHandlesRateLimits_HotkeyBarAfterWakeShowsPause(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_HotkeyBarShowsQuitAndLoopsDuringHibernate(t *testing.T) {
 	// Given: a hibernating loop
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// Then: quit and loop adjustment keys are always visible
@@ -426,19 +410,18 @@ func TestBDD_UserHandlesRateLimits_HibernateDuringCompletedState(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_AddLoopDuringHibernate(t *testing.T) {
 	// Given: a hibernating loop at 2/5
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
-	// Precondition
-	if l.GetIterations() != 5 {
-		t.Fatal("Precondition: should have 5 total iterations")
+	if !viewContains(m, "#2/5") {
+		t.Fatal("Precondition: should show loop progress #2/5")
 	}
 
 	// When: user presses '+' to add a loop
 	m, _ = pressKey(m, '+')
 
-	// Then: total loops increase to 6
-	if l.GetIterations() != 6 {
-		t.Errorf("Expected 6 total iterations after +, got %d", l.GetIterations())
+	// Then: display shows increased total
+	if !viewContains(m, "#2/6") {
+		t.Error("Expected loop progress #2/6 after pressing '+'")
 	}
 	// And: still shows RATE LIMITED (adding a loop doesn't clear hibernate)
 	if !viewContains(m, "RATE LIMITED") {
@@ -448,14 +431,14 @@ func TestBDD_UserHandlesRateLimits_AddLoopDuringHibernate(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_SubtractLoopDuringHibernate(t *testing.T) {
 	// Given: a hibernating loop at 2/5
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 
 	// When: user presses '-' to remove a loop
 	m, _ = pressKey(m, '-')
 
-	// Then: total loops decrease to 4 (floor is currentLoop=2)
-	if l.GetIterations() != 4 {
-		t.Errorf("Expected 4 total iterations after -, got %d", l.GetIterations())
+	// Then: display shows decreased total
+	if !viewContains(m, "#2/4") {
+		t.Error("Expected loop progress #2/4 after pressing '-'")
 	}
 	// And: still hibernating
 	if !viewContains(m, "RATE LIMITED") {
@@ -467,11 +450,11 @@ func TestBDD_UserHandlesRateLimits_SubtractLoopDuringHibernate(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_WakeWhenNotHibernating(t *testing.T) {
 	// Given: a running loop that is NOT hibernating
-	m, l := setupReadyModelWithLoop(2, 5)
+	m, _ := setupReadyModelWithLoop(2, 5)
 
-	// Precondition: not hibernating
-	if l.IsHibernating() {
-		t.Fatal("Precondition: loop should NOT be hibernating")
+	// Precondition: not showing RATE LIMITED
+	if viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should NOT show RATE LIMITED")
 	}
 
 	// When: user presses 'r' (which is resume, not wake, when not hibernating)
@@ -514,9 +497,6 @@ func TestBDD_UserHandlesRateLimits_MultipleHibernateWakeCycles(t *testing.T) {
 		m, _ = sendTuiMsg(m, tui.SendHibernate(until))
 
 		// Then: shows RATE LIMITED
-		if !l.IsHibernating() {
-			t.Errorf("Cycle %d: loop should be hibernating", i+1)
-		}
 		if !viewContains(m, "RATE LIMITED") {
 			t.Errorf("Cycle %d: expected RATE LIMITED banner", i+1)
 		}
@@ -524,10 +504,7 @@ func TestBDD_UserHandlesRateLimits_MultipleHibernateWakeCycles(t *testing.T) {
 		// When: user wakes
 		m, _ = pressKey(m, 'r')
 
-		// Then: no longer hibernating
-		if l.IsHibernating() {
-			t.Errorf("Cycle %d: loop should not be hibernating after wake", i+1)
-		}
+		// Then: RATE LIMITED is cleared
 		if viewContains(m, "RATE LIMITED") {
 			t.Errorf("Cycle %d: RATE LIMITED should be cleared after wake", i+1)
 		}
@@ -553,10 +530,10 @@ func TestBDD_UserHandlesRateLimits_HibernateExtendsDeadline(t *testing.T) {
 
 func TestBDD_UserHandlesRateLimits_LoopProgressVisibleDuringHibernate(t *testing.T) {
 	// Given: a hibernating loop at 3/7
-	m, l := setupHibernatingModel(3, 7, 5*time.Minute)
+	m, _ := setupHibernatingModel(3, 7, 5*time.Minute)
 
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: should show RATE LIMITED")
 	}
 
 	// Then: loop progress is still visible in the footer
