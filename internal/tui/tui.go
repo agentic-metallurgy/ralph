@@ -943,3 +943,15 @@ func TickMsgForTest() tea.Msg {
 	return tickMsg(timeNow())
 }
 
+// WaitForMessageForTest exposes waitForMessage for BDD channel-flow tests.
+// The channel must be pre-filled (buffered) so the command returns without blocking.
+func WaitForMessageForTest(ch <-chan Message) tea.Cmd {
+	return waitForMessage(ch)
+}
+
+// WaitForDoneForTest exposes waitForDone for BDD channel-flow tests.
+// The channel must be pre-signaled (buffered) so the command returns without blocking.
+func WaitForDoneForTest(ch <-chan struct{}) tea.Cmd {
+	return waitForDone(ch)
+}
+
