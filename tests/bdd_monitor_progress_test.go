@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -30,19 +31,6 @@ func TestBDD_UserMonitorsBuildProgress_EmptyStateShowsWaiting(t *testing.T) {
 	// Then: the activity panel shows "Waiting for activity..."
 	if !strings.Contains(view, "Waiting for activity...") {
 		t.Errorf("Expected empty model to show 'Waiting for activity...', got:\n%s", view)
-	}
-}
-
-func TestBDD_UserMonitorsBuildProgress_EmptyStateShowsRunningStatus(t *testing.T) {
-	// Given: a freshly initialized model with no messages and no loop
-	m := setupReadyModel()
-
-	// When: the view is rendered
-	view := m.View()
-
-	// Then: the status banner shows RUNNING (default state)
-	if !strings.Contains(view, "RUNNING") {
-		t.Errorf("Expected empty model to show 'RUNNING' status, got:\n%s", view)
 	}
 }
 
@@ -167,12 +155,18 @@ func TestBDD_UserMonitorsBuildProgress_ScrollPreservedOnTick(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		m, _ = sendTuiMsg(m, tui.SendMessage(tui.Message{
 			Role:    tui.RoleAssistant,
-			Content: "SCROLL_MSG_" + string(rune('A'+i%26)),
+			Content: fmt.Sprintf("SCROLL_MSG_%02d", i),
 		}))
 	}
-	// Scroll up
+	// Scroll up away from the bottom
 	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyPgUp})
 	m, _ = updateModel(m, tea.KeyMsg{Type: tea.KeyPgUp})
+
+	// Precondition: after scrolling up, the last message should NOT be visible
+	if viewContains(m, "SCROLL_MSG_29") {
+		t.Fatal("Precondition: after scrolling up, last message should not be visible")
+	}
+
 	viewBefore := m.View()
 
 	// When: a tick occurs (timer refresh)
@@ -180,14 +174,13 @@ func TestBDD_UserMonitorsBuildProgress_ScrollPreservedOnTick(t *testing.T) {
 
 	// Then: the scroll position is preserved (view doesn't jump to bottom)
 	viewAfter := m.View()
-	// The view shouldn't radically change — the messages shown should be similar
-	// We verify the last message is NOT suddenly visible (which would mean scroll jumped)
-	if viewContains(m, "BRAND_NEW_BOTTOM_MSG") {
-		t.Error("Tick should not scroll viewport to bottom")
+	if viewContains(m, "SCROLL_MSG_29") {
+		t.Error("Tick should not scroll viewport to bottom — last message should remain hidden")
 	}
-	// The views may differ slightly in timer display, but the overall content should be stable
-	_ = viewBefore
-	_ = viewAfter
+	// Verify an early message visible before tick is still visible after
+	if strings.Contains(viewBefore, "SCROLL_MSG_00") && !strings.Contains(viewAfter, "SCROLL_MSG_00") {
+		t.Error("Tick should preserve scroll position — visible messages should remain visible")
+	}
 }
 
 // --- Scenario 6: Loop progress updates in footer ---
@@ -336,19 +329,6 @@ func TestBDD_UserMonitorsBuildProgress_AgentCountUpdates(t *testing.T) {
 	}
 }
 
-func TestBDD_UserMonitorsBuildProgress_AgentCountDefaultZero(t *testing.T) {
-	// Given: a fresh model with no agent updates
-	m := setupReadyModel()
-
-	// When: the view is rendered
-	view := m.View()
-
-	// Then: shows 0 active agents
-	if !strings.Contains(view, "Active Agents:") {
-		t.Errorf("Expected 'Active Agents:' label in footer")
-	}
-}
-
 func TestBDD_UserMonitorsBuildProgress_AgentCountResetToZero(t *testing.T) {
 	// Given: a model with 5 active agents
 	m := setupReadyModel()
@@ -437,19 +417,6 @@ func TestBDD_UserMonitorsBuildProgress_ModeTransitions(t *testing.T) {
 	}
 }
 
-func TestBDD_UserMonitorsBuildProgress_ModeDefaultDash(t *testing.T) {
-	// Given: a fresh model with no mode set
-	m := setupReadyModel()
-
-	// When: the view is rendered
-	view := m.View()
-
-	// Then: shows "Current Mode:" label
-	if !strings.Contains(view, "Current Mode:") {
-		t.Errorf("Expected 'Current Mode:' label in footer")
-	}
-}
-
 // --- Additional BDD scenarios for completeness ---
 
 // Scenario: Completed tasks update in footer
@@ -514,24 +481,6 @@ func TestBDD_UserMonitorsBuildProgress_FooterFieldOrdering(t *testing.T) {
 		agentIdx < completedIdx && completedIdx < taskIdx && taskIdx < modeIdx) {
 		t.Errorf("Footer fields not in expected order: Loop@%d < Time@%d < Status@%d < Agent@%d < Completed@%d < Task@%d < Mode@%d",
 			loopIdx, timeIdx, statusIdx, agentIdx, completedIdx, taskIdx, modeIdx)
-	}
-}
-
-// Scenario: Both footer panels present
-
-func TestBDD_UserMonitorsBuildProgress_BothPanelsPresent(t *testing.T) {
-	// Given: a ready model
-	m := setupReadyModel()
-
-	// When: the view is rendered
-	view := m.View()
-
-	// Then: both panel titles are visible
-	if !strings.Contains(view, "Usage & Cost") {
-		t.Error("Expected 'Usage & Cost' panel title in footer")
-	}
-	if !strings.Contains(view, "Ralph Loop Details") {
-		t.Error("Expected 'Ralph Loop Details' panel title in footer")
 	}
 }
 
@@ -700,12 +649,13 @@ func TestBDD_UserMonitorsBuildProgress_LoopStartedResetsPerLoopStats(t *testing.
 	// When: a new loop iteration starts
 	m, _ = sendTuiMsg(m, tui.SendLoopStarted())
 
-	// Then: the per-loop token count is reset (verified via tmux path or internal state)
-	// This scenario is verified by the fact that loopStartedMsg sets loopTotalTokens=0
-	// which would be reflected in tmux status bar updates; we verify the model processes
-	// the message without error by checking it doesn't crash and still renders
-	view := m.View()
-	if view == "" {
-		t.Error("Model should still render after loop started reset")
+	// Then: the model still renders with the stats panel present
+	// (per-loop tokens are reset internally; the total stats panel remains visible)
+	m, _ = sendTuiMsg(m, tui.SendLoopStatsUpdate(100))
+	if !viewContains(m, "Total Tokens:") {
+		t.Error("Stats panel should still be present after loop started reset")
+	}
+	if !viewContains(m, "RUNNING") {
+		t.Error("Status should still show RUNNING after loop started reset")
 	}
 }

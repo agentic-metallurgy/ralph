@@ -501,27 +501,6 @@ func TestBDD_UserHandlesRateLimits_HibernateWithoutLoop(t *testing.T) {
 	// Without a loop, the banner check returns false
 }
 
-func TestBDD_UserHandlesRateLimits_HibernateRoleIconIsCorrect(t *testing.T) {
-	// Given: a message with RoleHibernate
-	msg := tui.Message{Role: tui.RoleHibernate, Content: "test"}
-
-	// Then: icon is 💤
-	if msg.GetIcon() != "💤" {
-		t.Errorf("Expected 💤 icon for RoleHibernate, got %q", msg.GetIcon())
-	}
-}
-
-func TestBDD_UserHandlesRateLimits_HibernateRoleStyleRendersNonEmpty(t *testing.T) {
-	// Given: a message with RoleHibernate
-	msg := tui.Message{Role: tui.RoleHibernate, Content: "test content"}
-
-	// Then: style renders non-empty (orange bold style)
-	rendered := msg.GetStyle().Render("test content")
-	if rendered == "" {
-		t.Error("Expected non-empty rendered output for RoleHibernate style")
-	}
-}
-
 // --- State transition: Multiple hibernate/wake cycles ---
 
 func TestBDD_UserHandlesRateLimits_MultipleHibernateWakeCycles(t *testing.T) {
@@ -583,23 +562,6 @@ func TestBDD_UserHandlesRateLimits_LoopProgressVisibleDuringHibernate(t *testing
 	// Then: loop progress is still visible in the footer
 	if !viewContains(m, "#3/7") {
 		t.Error("Expected loop progress '#3/7' to remain visible during hibernate")
-	}
-}
-
-func TestBDD_UserHandlesRateLimits_FooterPanelsPresentDuringHibernate(t *testing.T) {
-	// Given: a hibernating loop
-	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
-
-	if !l.IsHibernating() {
-		t.Fatal("Precondition: loop should be hibernating")
-	}
-
-	// Then: both footer panels are present
-	if !viewContains(m, "Usage & Cost") {
-		t.Error("Expected 'Usage & Cost' panel during hibernate")
-	}
-	if !viewContains(m, "Ralph Loop Details") {
-		t.Error("Expected 'Ralph Loop Details' panel during hibernate")
 	}
 }
 

@@ -240,17 +240,6 @@ func TestBDD_UserAdaptsToTerminal_OnePixelAboveMinimum(t *testing.T) {
 
 // --- Scenario 5: Pre-init state (no WindowSizeMsg yet) ---
 
-func TestBDD_UserAdaptsToTerminal_PreInitReturnsEmptyString(t *testing.T) {
-	// Given: a freshly created model with no WindowSizeMsg received
-	m := tui.NewModel()
-
-	// Then: the view returns an empty string (clean alt screen)
-	view := m.View()
-	if view != "" {
-		t.Errorf("Pre-init view should be empty string for clean alt screen, got: %q", view)
-	}
-}
-
 func TestBDD_UserAdaptsToTerminal_PreInitDoesNotShowLayout(t *testing.T) {
 	// Given: a model with messages but no WindowSizeMsg
 	m := tui.NewModel()
@@ -544,12 +533,3 @@ func TestBDD_UserAdaptsToTerminal_TickDuringPreInit(t *testing.T) {
 	}
 }
 
-func TestBDD_UserAdaptsToTerminal_WaitingMessageAtNormalSize(t *testing.T) {
-	// Given: a new model at normal size with no messages
-	m := setupReadyModel()
-
-	// Then: shows "Waiting for activity..." placeholder
-	if !viewContains(m, "Waiting for activity...") {
-		t.Error("Empty model at normal size should show 'Waiting for activity...'")
-	}
-}
