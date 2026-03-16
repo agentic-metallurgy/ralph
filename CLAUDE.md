@@ -1,1 +1,1 @@
-- no claude attribution in commits/prs
+Read @AGENTS.md
