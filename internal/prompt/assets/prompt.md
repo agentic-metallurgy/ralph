@@ -1,6 +1,8 @@
 0a. familiarize yourself with the source code in this directory, use up to 50 parallel Sonnet subagents.
 0b. familiarize yourself with the specs in the specs/ directory
 
+Ignore any other plan files other than IMPLEMENTATION_PLAN.md - there are other agents potentially working in the same repo alongside you. Focus on your own plan.
+
 1. read @IMPLEMENTATION_PLAN.md and implement the single highest priority TASK using up to 5 Opus subagents
 2. Ensure all tests and linting passes, then update IMPLEMENTATION_PLAN.md with your progress
 3. Ensure implementation steps are organized around verifiable milestones, and that you have either a) validated them or b) documented the validation steps or what's not working.
