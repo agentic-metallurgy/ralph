@@ -191,7 +191,6 @@ func processLoopOutput(
 	defer close(msgChan)
 
 	loopOutput := claudeLoop.Output()
-	activeAgentIDs := make(map[string]bool)
 	var loopTotalTokens int64 // per-loop token tracking for tmux status bar
 
 	for {
@@ -209,7 +208,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens)
 		}
 	}
 }
@@ -222,7 +221,6 @@ func processMessage(
 	tokenStats *stats.TokenStats,
 	msgChan chan<- tui.Message,
 	program *tea.Program,
-	activeAgentIDs map[string]bool,
 	loopTotalTokens *int64,
 ) {
 	switch msg.Type {
@@ -237,7 +235,7 @@ func processMessage(
 			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 				claudeLoop.SetSessionID(sessionID)
 			}
-			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, loopTotalTokens)
+			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -298,7 +296,6 @@ func handleParsedMessage(
 	tokenStats *stats.TokenStats,
 	msgChan chan<- tui.Message,
 	program *tea.Program,
-	activeAgentIDs map[string]bool,
 	loopTotalTokens *int64,
 ) {
 	// Check for rate limit rejection — enter hibernate state
@@ -331,23 +328,6 @@ func handleParsedMessage(
 	if cost := jsonParser.GetCost(parsed); cost > 0 {
 		tokenStats.AddCost(cost)
 		program.Send(tui.SendStatsUpdate(tokenStats)())
-	}
-
-	// Track parallel subagents
-	// Agents are added when Task tool_use items are detected (below)
-	// and removed when result messages with parent_tool_use_id arrive.
-	prevCount := len(activeAgentIDs)
-	if jsonParser.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
-		// Subagent finished - remove from tracking
-		parentID := *parsed.ParentToolUseID
-		delete(activeAgentIDs, parentID)
-	}
-	// Track "Task" tool_use items as pending agents (single add path)
-	for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
-		activeAgentIDs[taskID] = true
-	}
-	if newCount := len(activeAgentIDs); newCount != prevCount {
-		program.Send(tui.SendAgentUpdate(newCount)())
 	}
 
 	// Process message content based on type
@@ -432,7 +412,6 @@ func handleParsedMessageCLI(
 	claudeLoop *loop.Loop,
 	jsonParser *parser.Parser,
 	tokenStats *stats.TokenStats,
-	activeAgentIDs map[string]bool,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -450,18 +429,6 @@ func handleParsedMessageCLI(
 	}
 	if cost := jsonParser.GetCost(parsed); cost > 0 {
 		tokenStats.AddCost(cost)
-	}
-	// Track parallel subagents
-	prevCount := len(activeAgentIDs)
-	if jsonParser.IsSubagentMessage(parsed) && parsed.Type == parser.MessageTypeResult {
-		parentID := *parsed.ParentToolUseID
-		delete(activeAgentIDs, parentID)
-	}
-	for _, taskID := range jsonParser.GetTaskToolUseIDs(parsed) {
-		activeAgentIDs[taskID] = true
-	}
-	if newCount := len(activeAgentIDs); newCount != prevCount {
-		fmt.Printf("[agents] %d active\n", newCount)
 	}
 	// Print assistant text and tool use
 	if parsed.Type == parser.MessageTypeAssistant {
@@ -508,7 +475,6 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 	claudeLoop.Start(ctx)
 
 	jsonParser := parser.NewParser()
-	activeAgentIDs := make(map[string]bool)
 
 	mode := "build"
 	if cfg.IsPlanMode() {
@@ -533,7 +499,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 				if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 					claudeLoop.SetSessionID(sessionID)
 				}
-				handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, activeAgentIDs)
+				handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats)
 			}
 
 		case "error":
@@ -565,7 +531,6 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 	}()
 
 	jsonParser := parser.NewParser()
-	activeAgentIDs := make(map[string]bool)
 
 	fmt.Println("ralph cli: starting plan-and-build mode")
 
@@ -606,7 +571,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 					planLoop.SetSessionID(sid)
 					sessionID = sid
 				}
-				handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, activeAgentIDs)
+				handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats)
 			}
 
 		case "error":
@@ -648,9 +613,6 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 
 	buildLoop.Start(ctx)
 
-	// Reset agent tracking for build phase
-	activeAgentIDs = make(map[string]bool)
-
 	// Process build loop output
 	for msg := range buildLoop.Output() {
 		select {
@@ -669,7 +631,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 				if sid := jsonParser.GetSessionID(parsed); sid != "" {
 					buildLoop.SetSessionID(sid)
 				}
-				handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, activeAgentIDs)
+				handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats)
 			}
 
 		case "error":
@@ -830,7 +792,6 @@ func processPlanPhase(
 	program *tea.Program,
 ) string {
 	loopOutput := planLoop.Output()
-	activeAgentIDs := make(map[string]bool)
 	var loopTotalTokens int64
 
 	for {
@@ -853,7 +814,7 @@ func processPlanPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						planLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
+					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens)
 				}
 
 			case "error":
@@ -885,7 +846,6 @@ func processBuildPhase(
 	program *tea.Program,
 ) {
 	loopOutput := buildLoop.Output()
-	activeAgentIDs := make(map[string]bool)
 	var loopTotalTokens int64
 
 	for {
@@ -912,7 +872,7 @@ func processBuildPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						buildLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
+					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens)
 				}
 
 			case "error":

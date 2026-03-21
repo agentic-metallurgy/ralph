@@ -310,42 +310,6 @@ func TestBDD_UserMonitorsBuildProgress_StatsLargeValues(t *testing.T) {
 	}
 }
 
-// --- Scenario 8: Agent count updates ---
-
-func TestBDD_UserMonitorsBuildProgress_AgentCountUpdates(t *testing.T) {
-	// Given: a ready model
-	m := setupReadyModel()
-
-	// When: agent count is updated to 3
-	m, _ = sendTuiMsg(m, tui.SendAgentUpdate(3))
-
-	// Then: footer shows "3" for active agents
-	view := m.View()
-	if !strings.Contains(view, "Active Agents:") {
-		t.Errorf("Expected 'Active Agents:' label in footer")
-	}
-	if !strings.Contains(view, "3") {
-		t.Errorf("Expected agent count '3' in footer")
-	}
-}
-
-func TestBDD_UserMonitorsBuildProgress_AgentCountResetToZero(t *testing.T) {
-	// Given: a model with 5 active agents
-	m := setupReadyModel()
-	m, _ = sendTuiMsg(m, tui.SendAgentUpdate(5))
-	if !viewContains(m, "5") {
-		t.Fatal("Precondition: should show 5 agents")
-	}
-
-	// When: agent count resets to 0
-	m, _ = sendTuiMsg(m, tui.SendAgentUpdate(0))
-
-	// Then: the label persists and shows 0
-	if !viewContains(m, "Active Agents:") {
-		t.Error("Expected 'Active Agents:' label to persist after reset")
-	}
-}
-
 // --- Scenario 9: Current task updates ---
 
 func TestBDD_UserMonitorsBuildProgress_CurrentTaskUpdates(t *testing.T) {
@@ -454,7 +418,6 @@ func TestBDD_UserMonitorsBuildProgress_FooterFieldOrdering(t *testing.T) {
 	// Given: a model with all footer fields populated
 	m := setupReadyModel()
 	m, _ = sendTuiMsg(m, tui.SendLoopUpdate(2, 5))
-	m, _ = sendTuiMsg(m, tui.SendAgentUpdate(3))
 	m, _ = sendTuiMsg(m, tui.SendCompletedTasksUpdate(1, 4))
 	m, _ = sendTuiMsg(m, tui.SendTaskUpdate("#3 Build widget"))
 	m, _ = sendTuiMsg(m, tui.SendModeUpdate("Building"))
@@ -466,21 +429,20 @@ func TestBDD_UserMonitorsBuildProgress_FooterFieldOrdering(t *testing.T) {
 	loopIdx := strings.Index(view, "Loop:")
 	timeIdx := strings.Index(view, "Total Time:")
 	statusIdx := strings.Index(view, "Status:")
-	agentIdx := strings.Index(view, "Active Agents:")
 	completedIdx := strings.Index(view, "Completed Tasks:")
 	taskIdx := strings.Index(view, "Current Task:")
 	modeIdx := strings.Index(view, "Current Mode:")
 
-	if loopIdx == -1 || timeIdx == -1 || statusIdx == -1 || agentIdx == -1 ||
+	if loopIdx == -1 || timeIdx == -1 || statusIdx == -1 ||
 		completedIdx == -1 || taskIdx == -1 || modeIdx == -1 {
-		t.Fatalf("Not all footer fields found. Loop=%d Time=%d Status=%d Agent=%d Completed=%d Task=%d Mode=%d",
-			loopIdx, timeIdx, statusIdx, agentIdx, completedIdx, taskIdx, modeIdx)
+		t.Fatalf("Not all footer fields found. Loop=%d Time=%d Status=%d Completed=%d Task=%d Mode=%d",
+			loopIdx, timeIdx, statusIdx, completedIdx, taskIdx, modeIdx)
 	}
 
-	if !(loopIdx < timeIdx && timeIdx < statusIdx && statusIdx < agentIdx &&
-		agentIdx < completedIdx && completedIdx < taskIdx && taskIdx < modeIdx) {
-		t.Errorf("Footer fields not in expected order: Loop@%d < Time@%d < Status@%d < Agent@%d < Completed@%d < Task@%d < Mode@%d",
-			loopIdx, timeIdx, statusIdx, agentIdx, completedIdx, taskIdx, modeIdx)
+	if !(loopIdx < timeIdx && timeIdx < statusIdx &&
+		statusIdx < completedIdx && completedIdx < taskIdx && taskIdx < modeIdx) {
+		t.Errorf("Footer fields not in expected order: Loop@%d < Time@%d < Status@%d < Completed@%d < Task@%d < Mode@%d",
+			loopIdx, timeIdx, statusIdx, completedIdx, taskIdx, modeIdx)
 	}
 }
 
@@ -490,7 +452,6 @@ func TestBDD_UserMonitorsBuildProgress_DoneFreezesFutureUpdates(t *testing.T) {
 	// Given: a model with active loop progress
 	m := setupReadyModel()
 	m, _ = sendTuiMsg(m, tui.SendLoopUpdate(5, 5))
-	m, _ = sendTuiMsg(m, tui.SendAgentUpdate(2))
 
 	// When: done signal is received
 	m, _ = sendTuiMsg(m, tui.SendDone())
@@ -560,15 +521,15 @@ func TestBDD_UserMonitorsBuildProgress_StatsPersistAcrossAgentChange(t *testing.
 		t.Fatal("Precondition: cost should show $1.500000")
 	}
 
-	// When: agent count is updated
-	m, _ = sendTuiMsg(m, tui.SendAgentUpdate(5))
+	// When: task is updated
+	m, _ = sendTuiMsg(m, tui.SendTaskUpdate("#5 Some task"))
 
 	// Then: stats still show the same cost
 	if !viewContains(m, "$1.500000") {
-		t.Error("Stats should persist when agent count changes")
+		t.Error("Stats should persist when task changes")
 	}
-	if !viewContains(m, "5") {
-		t.Error("Agent count should update to 5")
+	if !viewContains(m, "#5 Some task") {
+		t.Error("Task should update to '#5 Some task'")
 	}
 }
 
