@@ -206,6 +206,7 @@ func processLoopOutput(
 
 	loopOutput := claudeLoop.Output()
 	var loopTotalTokens int64 // per-loop token tracking for tmux status bar
+	var iterEstimate float64  // per-iteration estimated cost from token counts
 
 	for {
 		select {
@@ -222,7 +223,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate)
 		}
 	}
 }
@@ -237,10 +238,11 @@ func processMessage(
 	program *tea.Program,
 	loopTotalTokens *int64,
 	logFile io.Writer,
+	iterEstimate *float64,
 ) {
 	switch msg.Type {
 	case "loop_marker":
-		handleLoopMarker(msg, msgChan, program, loopTotalTokens)
+		handleLoopMarker(msg, msgChan, program, loopTotalTokens, iterEstimate)
 
 	case "output":
 		// Try to parse as JSON first
@@ -250,7 +252,7 @@ func processMessage(
 			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 				claudeLoop.SetSessionID(sessionID)
 			}
-			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile)
+			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile, iterEstimate)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -279,7 +281,7 @@ func processMessage(
 
 // handleLoopMarker processes a loop_marker message for TUI mode.
 // Shared by processMessage, processPlanPhase, and processBuildPhase.
-func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64) {
+func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64, iterEstimate *float64) {
 	program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
 	// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED)
 	isLoopStart := strings.Contains(msg.Content, "LOOP") &&
@@ -288,6 +290,7 @@ func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea
 		!strings.Contains(msg.Content, "RESUMED")
 	if isLoopStart {
 		*loopTotalTokens = 0
+		*iterEstimate = 0
 		program.Send(tui.SendLoopStarted()())
 		program.Send(tui.SendLoopStatsUpdate(0)())
 	}
@@ -313,6 +316,7 @@ func handleParsedMessage(
 	program *tea.Program,
 	loopTotalTokens *int64,
 	logFile io.Writer,
+	iterEstimate *float64,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -333,6 +337,15 @@ func handleParsedMessage(
 			usage.CacheCreationInputTokens,
 			usage.CacheReadInputTokens,
 		)
+		// Estimate cost from token counts and update in real-time
+		estimate := stats.EstimateCostFromTokens(
+			usage.InputTokens,
+			usage.OutputTokens,
+			usage.CacheCreationInputTokens,
+			usage.CacheReadInputTokens,
+		)
+		tokenStats.AddCost(estimate)
+		*iterEstimate += estimate
 		program.Send(tui.SendStatsUpdate(tokenStats)())
 		// Also track per-loop tokens for tmux status bar
 		loopTokens := usage.InputTokens + usage.OutputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
@@ -340,9 +353,16 @@ func handleParsedMessage(
 		program.Send(tui.SendLoopStatsUpdate(*loopTotalTokens)())
 	}
 
-	// Extract cost from result messages
+	// Extract cost from result messages — reconcile estimate with actual
 	if cost := jsonParser.GetCost(parsed); cost > 0 {
-		tokenStats.AddCost(cost)
+		if !jsonParser.IsSubagentMessage(parsed) {
+			// Main iteration result: replace accumulated estimate with actual cost
+			tokenStats.ReconcileCost(*iterEstimate, cost)
+			*iterEstimate = 0
+		} else {
+			// Subagent result: add actual cost directly
+			tokenStats.AddCost(cost)
+		}
 		program.Send(tui.SendStatsUpdate(tokenStats)())
 	}
 
@@ -431,6 +451,7 @@ func handleParsedMessageCLI(
 	jsonParser *parser.Parser,
 	tokenStats *stats.TokenStats,
 	logFile io.Writer,
+	iterEstimate *float64,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -445,9 +466,26 @@ func handleParsedMessageCLI(
 			usage.CacheCreationInputTokens,
 			usage.CacheReadInputTokens,
 		)
+		// Estimate cost from token counts and update in real-time
+		estimate := stats.EstimateCostFromTokens(
+			usage.InputTokens,
+			usage.OutputTokens,
+			usage.CacheCreationInputTokens,
+			usage.CacheReadInputTokens,
+		)
+		tokenStats.AddCost(estimate)
+		*iterEstimate += estimate
 	}
+	// Extract cost from result messages — reconcile estimate with actual
 	if cost := jsonParser.GetCost(parsed); cost > 0 {
-		tokenStats.AddCost(cost)
+		if !jsonParser.IsSubagentMessage(parsed) {
+			// Main iteration result: replace accumulated estimate with actual cost
+			tokenStats.ReconcileCost(*iterEstimate, cost)
+			*iterEstimate = 0
+		} else {
+			// Subagent result: add actual cost directly
+			tokenStats.AddCost(cost)
+		}
 	}
 	// Print assistant text and tool use
 	if parsed.Type == parser.MessageTypeAssistant {
@@ -498,6 +536,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 	claudeLoop.Start(ctx)
 
 	jsonParser := parser.NewParser()
+	var iterEstimate float64
 
 	mode := "build"
 	if cfg.IsPlanMode() {
@@ -514,6 +553,14 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 
 		switch msg.Type {
 		case "loop_marker":
+			// Reset per-iteration estimate on new loop start
+			isLoopStart := strings.Contains(msg.Content, "LOOP") &&
+				!strings.Contains(msg.Content, "STOPPED") &&
+				!strings.Contains(msg.Content, "COMPLETED") &&
+				!strings.Contains(msg.Content, "RESUMED")
+			if isLoopStart {
+				iterEstimate = 0
+			}
 			fmt.Printf("[loop] %s\n", msg.Content)
 
 		case "output":
@@ -522,7 +569,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 				if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 					claudeLoop.SetSessionID(sessionID)
 				}
-				handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile)
+				handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate)
 			}
 
 		case "error":
@@ -574,6 +621,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 	planLoop.Start(ctx)
 
 	var sessionID string
+	var planIterEstimate float64
 
 	// Process plan loop output
 	for msg := range planLoop.Output() {
@@ -585,6 +633,13 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 
 		switch msg.Type {
 		case "loop_marker":
+			isLoopStart := strings.Contains(msg.Content, "LOOP") &&
+				!strings.Contains(msg.Content, "STOPPED") &&
+				!strings.Contains(msg.Content, "COMPLETED") &&
+				!strings.Contains(msg.Content, "RESUMED")
+			if isLoopStart {
+				planIterEstimate = 0
+			}
 			fmt.Printf("[loop] %s\n", msg.Content)
 
 		case "output":
@@ -594,7 +649,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 					planLoop.SetSessionID(sid)
 					sessionID = sid
 				}
-				handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile)
+				handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, &planIterEstimate)
 			}
 
 		case "error":
@@ -636,6 +691,8 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 
 	buildLoop.Start(ctx)
 
+	var buildIterEstimate float64
+
 	// Process build loop output
 	for msg := range buildLoop.Output() {
 		select {
@@ -646,6 +703,13 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 
 		switch msg.Type {
 		case "loop_marker":
+			isLoopStart := strings.Contains(msg.Content, "LOOP") &&
+				!strings.Contains(msg.Content, "STOPPED") &&
+				!strings.Contains(msg.Content, "COMPLETED") &&
+				!strings.Contains(msg.Content, "RESUMED")
+			if isLoopStart {
+				buildIterEstimate = 0
+			}
 			fmt.Printf("[loop] %s\n", msg.Content)
 
 		case "output":
@@ -654,7 +718,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 				if sid := jsonParser.GetSessionID(parsed); sid != "" {
 					buildLoop.SetSessionID(sid)
 				}
-				handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile)
+				handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, &buildIterEstimate)
 			}
 
 		case "error":
@@ -818,6 +882,7 @@ func processPlanPhase(
 ) string {
 	loopOutput := planLoop.Output()
 	var loopTotalTokens int64
+	var iterEstimate float64
 
 	for {
 		select {
@@ -831,7 +896,7 @@ func processPlanPhase(
 
 			switch msg.Type {
 			case "loop_marker":
-				handleLoopMarker(msg, msgChan, program, &loopTotalTokens)
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate)
 
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
@@ -839,7 +904,7 @@ func processPlanPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						planLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile)
+					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate)
 				}
 
 			case "error":
@@ -873,6 +938,7 @@ func processBuildPhase(
 ) {
 	loopOutput := buildLoop.Output()
 	var loopTotalTokens int64
+	var iterEstimate float64
 
 	for {
 		select {
@@ -890,7 +956,7 @@ func processBuildPhase(
 
 			switch msg.Type {
 			case "loop_marker":
-				handleLoopMarker(msg, msgChan, program, &loopTotalTokens)
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate)
 
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
@@ -898,7 +964,7 @@ func processBuildPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						buildLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile)
+					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate)
 				}
 
 			case "error":

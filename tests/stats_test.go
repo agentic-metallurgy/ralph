@@ -565,6 +565,63 @@ func TestElapsedTime_SaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestEstimateCostFromTokens(t *testing.T) {
+	tests := []struct {
+		name                                       string
+		input, output, cacheCreation, cacheRead    int64
+		expected                                   float64
+	}{
+		{"1M input tokens", 1_000_000, 0, 0, 0, 3.00},
+		{"1M output tokens", 0, 1_000_000, 0, 0, 15.00},
+		{"1M cache creation tokens", 0, 0, 1_000_000, 0, 3.75},
+		{"1M cache read tokens", 0, 0, 0, 1_000_000, 0.30},
+		{"all zeros", 0, 0, 0, 0, 0.0},
+		{"mixed counts", 100_000, 50_000, 20_000, 200_000, 0.30 + 0.75 + 0.075 + 0.06},
+	}
+
+	tolerance := 0.0000001
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stats.EstimateCostFromTokens(tt.input, tt.output, tt.cacheCreation, tt.cacheRead)
+			diff := result - tt.expected
+			if diff < -tolerance || diff > tolerance {
+				t.Errorf("EstimateCostFromTokens(%d, %d, %d, %d) = %f, expected %f",
+					tt.input, tt.output, tt.cacheCreation, tt.cacheRead, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestReconcileCost(t *testing.T) {
+	tests := []struct {
+		name           string
+		initialCost    float64
+		estimatedDelta float64
+		actualCost     float64
+		expected       float64
+	}{
+		{"replace estimate with actual", 1.00, 0.50, 0.60, 1.10},
+		{"zero estimate", 1.00, 0.0, 0.50, 1.50},
+		{"zero actual", 1.00, 0.50, 0.0, 0.50},
+		{"both zero", 1.00, 0.0, 0.0, 1.00},
+		{"estimate equals actual", 1.00, 0.30, 0.30, 1.00},
+	}
+
+	tolerance := 0.0000001
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := stats.NewTokenStats()
+			s.TotalCostUSD = tt.initialCost
+			s.ReconcileCost(tt.estimatedDelta, tt.actualCost)
+			diff := s.TotalCostUSD - tt.expected
+			if diff < -tolerance || diff > tolerance {
+				t.Errorf("After ReconcileCost(%f, %f): TotalCostUSD = %f, expected %f",
+					tt.estimatedDelta, tt.actualCost, s.TotalCostUSD, tt.expected)
+			}
+		})
+	}
+}
+
 func TestFormatTokens(t *testing.T) {
 	tests := []struct {
 		name     string
