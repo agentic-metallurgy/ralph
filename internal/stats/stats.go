@@ -39,9 +39,32 @@ func (t *TokenStats) AddUsage(input, output, cacheCreation, cacheRead int64) {
 	t.TotalTokensCount = t.TotalTokens()
 }
 
+// Pricing constants for Claude Sonnet 4 (per token)
+const (
+	PriceInputPerToken         = 3.00 / 1_000_000
+	PriceOutputPerToken        = 15.00 / 1_000_000
+	PriceCacheCreationPerToken = 3.75 / 1_000_000
+	PriceCacheReadPerToken     = 0.30 / 1_000_000
+)
+
+// EstimateCostFromTokens computes estimated cost from token counts using hardcoded pricing
+func EstimateCostFromTokens(input, output, cacheCreation, cacheRead int64) float64 {
+	return float64(input)*PriceInputPerToken +
+		float64(output)*PriceOutputPerToken +
+		float64(cacheCreation)*PriceCacheCreationPerToken +
+		float64(cacheRead)*PriceCacheReadPerToken
+}
+
 // AddCost adds cost to the total cost
 func (t *TokenStats) AddCost(costUSD float64) {
 	t.TotalCostUSD += costUSD
+}
+
+// ReconcileCost replaces an estimated cost delta with the actual cost.
+// It subtracts the estimated amount and adds the actual amount.
+func (t *TokenStats) ReconcileCost(estimatedDelta, actualCost float64) {
+	t.TotalCostUSD -= estimatedDelta
+	t.TotalCostUSD += actualCost
 }
 
 // TotalTokens returns the sum of all token counts
