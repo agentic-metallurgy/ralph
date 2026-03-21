@@ -4,7 +4,7 @@
 1. read @IMPLEMENTATION_PLAN.md and implement the single highest priority TASK using up to 5 Opus subagents
 2. Ensure all tests and linting passes, then update IMPLEMENTATION_PLAN.md with your progress
 3. Ensure implementation steps are organized around verifiable milestones, and that you have either a) validated them or b) documented the validation steps or what's not working.
-4. use `git add -A` and `git commit -m "..."` to commit your changes - do not include any claude attribution
+4. use `git add -A` and `git commit -m "..."` to commit your changes - do not include any claude attribution. There may be other agents working in the same directory — only commit your own changes.
 5. If the implemented features don't match IMPLEMENTATION_PLAN.md, correct the plan.
 
 ULTIMATE GOAL: $ultimate_goal_placeholder_sentence. Keep this goal in mind throughout implementation.

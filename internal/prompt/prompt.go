@@ -15,32 +15,39 @@ var embeddedFS embed.FS
 const embeddedPromptPath = "assets/prompt.md"
 const embeddedPlanPromptPath = "assets/plan_prompt.md"
 
+const defaultPlanFile = "IMPLEMENTATION_PLAN.md"
+
 // Loader provides methods for loading the loop prompt
 type Loader struct {
 	overridePath string
 	planMode     bool
 	goal         string
+	planFile     string
 }
 
 // NewLoader creates a new prompt Loader.
 // If overridePath is empty, the embedded prompt will be used.
 // If overridePath is provided, it will load from that file instead.
 // The goal parameter specifies the ultimate goal sentence for the prompt.
-func NewLoader(overridePath string, goal string) *Loader {
+// The planFile parameter specifies the implementation plan filename (empty uses default).
+func NewLoader(overridePath, goal, planFile string) *Loader {
 	return &Loader{
 		overridePath: overridePath,
 		goal:         goal,
+		planFile:     planFile,
 	}
 }
 
 // NewPlanLoader creates a prompt Loader for plan mode.
 // If overridePath is empty, the embedded plan prompt will be used.
 // The goal parameter specifies the ultimate goal sentence for the plan prompt.
-func NewPlanLoader(overridePath string, goal string) *Loader {
+// The planFile parameter specifies the implementation plan filename (empty uses default).
+func NewPlanLoader(overridePath, goal, planFile string) *Loader {
 	return &Loader{
 		overridePath: overridePath,
 		planMode:     true,
 		goal:         goal,
+		planFile:     planFile,
 	}
 }
 
@@ -65,6 +72,7 @@ func (l *Loader) Load() (string, error) {
 	}
 
 	content = substituteGoal(content, l.goal)
+	content = substitutePlanFile(content, l.planFile)
 
 	return content, nil
 }
@@ -113,6 +121,15 @@ func substituteGoal(content, goal string) string {
 	return strings.Replace(content, "$ultimate_goal_placeholder_sentence", goal, 1)
 }
 
+// substitutePlanFile replaces the default IMPLEMENTATION_PLAN.md references with a custom plan file name.
+// If planFile is empty or matches the default, no substitution is performed.
+func substitutePlanFile(content, planFile string) string {
+	if planFile == "" || planFile == defaultPlanFile {
+		return content
+	}
+	return strings.ReplaceAll(content, defaultPlanFile, planFile)
+}
+
 // IsUsingOverride returns true if a custom prompt file is configured
 func (l *Loader) IsUsingOverride() bool {
 	return l.overridePath != ""
@@ -125,7 +142,7 @@ func (l *Loader) IsPlanMode() bool {
 
 // GetEmbeddedPrompt is a convenience function to get the embedded prompt directly
 func GetEmbeddedPrompt() (string, error) {
-	loader := NewLoader("", "")
+	loader := NewLoader("", "", "")
 	return loader.Load()
 }
 

@@ -22,7 +22,6 @@ import (
 
 const statsFilePath = ".ralph.claude_stats"
 const logFilePath = ".ralph.log"
-const planFilePath = "IMPLEMENTATION_PLAN.md"
 
 func main() {
 	// Parse command-line flags and get configuration
@@ -38,9 +37,9 @@ func main() {
 	if cfg.ShowPrompt {
 		var showLoader *prompt.Loader
 		if cfg.IsPlanMode() {
-			showLoader = prompt.NewPlanLoader("", cfg.Goal)
+			showLoader = prompt.NewPlanLoader("", cfg.Goal, cfg.PlanFile)
 		} else {
-			showLoader = prompt.NewLoader("", cfg.Goal)
+			showLoader = prompt.NewLoader("", cfg.Goal, cfg.PlanFile)
 		}
 		content, err := showLoader.Load()
 		if err != nil {
@@ -68,9 +67,9 @@ func main() {
 	// Load the loop prompt (embedded or from override file)
 	var promptLoader *prompt.Loader
 	if cfg.IsPlanMode() {
-		promptLoader = prompt.NewPlanLoader(cfg.LoopPrompt, cfg.Goal)
+		promptLoader = prompt.NewPlanLoader(cfg.LoopPrompt, cfg.Goal, cfg.PlanFile)
 	} else {
-		promptLoader = prompt.NewLoader(cfg.LoopPrompt, cfg.Goal)
+		promptLoader = prompt.NewLoader(cfg.LoopPrompt, cfg.Goal, cfg.PlanFile)
 	}
 	promptContent, err := promptLoader.Load()
 	if err != nil {
@@ -144,7 +143,7 @@ func main() {
 	model.SetTmuxStatusBar(tmuxBar)
 
 	// Parse implementation plan for task counts
-	completedTasks, totalTasks := parseTaskCounts(planFilePath)
+	completedTasks, totalTasks := parseTaskCounts(cfg.PlanFile)
 	model.SetCompletedTasks(completedTasks, totalTasks)
 
 	// Set current mode for TUI display
@@ -607,7 +606,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 	// Phase 1: Planning
 	fmt.Printf("[phase] Planning (%d iteration)\n", cfg.Iterations)
 
-	planPromptLoader := prompt.NewPlanLoader(cfg.LoopPrompt, cfg.Goal)
+	planPromptLoader := prompt.NewPlanLoader(cfg.LoopPrompt, cfg.Goal, cfg.PlanFile)
 	planPromptContent, err := planPromptLoader.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[error] Failed to load plan prompt: %v\n", err)
@@ -672,7 +671,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 	// Phase 2: Building
 	fmt.Printf("[phase] Building (%d iterations)\n", cfg.BuildIterations)
 
-	buildPromptLoader := prompt.NewLoader(cfg.LoopPrompt, cfg.Goal)
+	buildPromptLoader := prompt.NewLoader(cfg.LoopPrompt, cfg.Goal, cfg.PlanFile)
 	buildPromptContent, err := buildPromptLoader.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[error] Failed to load build prompt: %v\n", err)
@@ -752,7 +751,7 @@ func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats, logFile i
 	model.SetTmuxStatusBar(tmuxBar)
 
 	// Parse implementation plan for task counts
-	completedTasks, totalTasks := parseTaskCounts(planFilePath)
+	completedTasks, totalTasks := parseTaskCounts(cfg.PlanFile)
 	model.SetCompletedTasks(completedTasks, totalTasks)
 
 	// Start in planning mode
@@ -801,7 +800,7 @@ func runPlanAndBuildPhases(
 	defer close(msgChan)
 
 	// Phase 1: Planning
-	planPromptLoader := prompt.NewPlanLoader(cfg.LoopPrompt, cfg.Goal)
+	planPromptLoader := prompt.NewPlanLoader(cfg.LoopPrompt, cfg.Goal, cfg.PlanFile)
 	planPromptContent, err := planPromptLoader.Load()
 	if err != nil {
 		msgChan <- tui.Message{
@@ -836,7 +835,7 @@ func runPlanAndBuildPhases(
 	}
 
 	// Phase 2: Building
-	buildPromptLoader := prompt.NewLoader(cfg.LoopPrompt, cfg.Goal)
+	buildPromptLoader := prompt.NewLoader(cfg.LoopPrompt, cfg.Goal, cfg.PlanFile)
 	buildPromptContent, err := buildPromptLoader.Load()
 	if err != nil {
 		msgChan <- tui.Message{

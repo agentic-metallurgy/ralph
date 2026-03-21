@@ -17,6 +17,9 @@ const (
 // Version is set at build time via -ldflags
 var Version = "v2026.3.8"
 
+// DefaultPlanFile is the default implementation plan filename
+const DefaultPlanFile = "IMPLEMENTATION_PLAN.md"
+
 // Config holds the configuration for the ralph-go application
 type Config struct {
 	Iterations      int
@@ -25,6 +28,7 @@ type Config struct {
 	SpecFolder      string
 	LoopPrompt      string
 	Goal            string
+	PlanFile        string
 	ShowPrompt      bool
 	ShowVersion     bool
 	NoTmux          bool
@@ -39,6 +43,7 @@ func NewConfig() *Config {
 		SpecFile:   "",
 		SpecFolder: DefaultSpecFolder,
 		LoopPrompt: "",
+		PlanFile:   DefaultPlanFile,
 	}
 }
 
@@ -70,6 +75,7 @@ func ParseFlags() *Config {
 	flag.StringVar(&cfg.SpecFolder, "spec-folder", DefaultSpecFolder, "Folder containing spec files")
 	flag.StringVar(&cfg.LoopPrompt, "loop-prompt", "", "Path to loop prompt override (defaults to embedded prompt.md)")
 	flag.StringVar(&cfg.Goal, "goal", "", "Ultimate goal sentence to guide the agent")
+	flag.StringVar(&cfg.PlanFile, "plan-file", DefaultPlanFile, "Implementation plan filename")
 	flag.BoolVar(&cfg.ShowPrompt, "show-prompt", false, "Print the embedded loop prompt and exit")
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
 	flag.BoolVar(&cfg.NoTmux, "no-tmux", false, "Run without tmux wrapper")

@@ -11,20 +11,20 @@ import (
 
 func TestNewLoader(t *testing.T) {
 	// Test creating loader without override
-	loader := prompt.NewLoader("", "")
+	loader := prompt.NewLoader("", "", "")
 	if loader.IsUsingOverride() {
 		t.Error("Expected IsUsingOverride() to be false for empty path")
 	}
 
 	// Test creating loader with override
-	loaderWithOverride := prompt.NewLoader("/some/path.md", "")
+	loaderWithOverride := prompt.NewLoader("/some/path.md", "", "")
 	if !loaderWithOverride.IsUsingOverride() {
 		t.Error("Expected IsUsingOverride() to be true for non-empty path")
 	}
 }
 
 func TestLoadEmbedded(t *testing.T) {
-	loader := prompt.NewLoader("", "")
+	loader := prompt.NewLoader("", "", "")
 	content, err := loader.Load()
 
 	if err != nil {
@@ -64,7 +64,7 @@ func TestLoadFromFile(t *testing.T) {
 	}
 	tmpFile.Close()
 
-	loader := prompt.NewLoader(tmpFile.Name(), "")
+	loader := prompt.NewLoader(tmpFile.Name(), "", "")
 	content, err := loader.Load()
 
 	if err != nil {
@@ -77,7 +77,7 @@ func TestLoadFromFile(t *testing.T) {
 }
 
 func TestLoadFromFile_NotExists(t *testing.T) {
-	loader := prompt.NewLoader("/nonexistent/path/to/prompt.md", "")
+	loader := prompt.NewLoader("/nonexistent/path/to/prompt.md", "", "")
 	_, err := loader.Load()
 
 	if err == nil {
@@ -99,7 +99,7 @@ func TestLoadFromFile_RelativePath(t *testing.T) {
 		t.Fatalf("Failed to write temp file: %v", err)
 	}
 
-	loader := prompt.NewLoader(tmpFile, "")
+	loader := prompt.NewLoader(tmpFile, "", "")
 	content, err := loader.Load()
 
 	if err != nil {
@@ -123,7 +123,7 @@ func TestGetEmbeddedPrompt(t *testing.T) {
 	}
 
 	// Should be same as loading via Loader
-	loader := prompt.NewLoader("", "")
+	loader := prompt.NewLoader("", "", "")
 	loaderContent, _ := loader.Load()
 
 	if content != loaderContent {
@@ -144,7 +144,7 @@ func TestIsUsingOverride(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			loader := prompt.NewLoader(tt.overridePath, "")
+			loader := prompt.NewLoader(tt.overridePath, "", "")
 			result := loader.IsUsingOverride()
 			if result != tt.expected {
 				t.Errorf("IsUsingOverride() = %v, expected %v", result, tt.expected)
@@ -171,7 +171,7 @@ func TestEmbeddedPromptSize(t *testing.T) {
 }
 
 func TestLoadEmbeddedPlanPrompt(t *testing.T) {
-	loader := prompt.NewPlanLoader("", "")
+	loader := prompt.NewPlanLoader("", "", "")
 	content, err := loader.Load()
 
 	if err != nil {
@@ -216,7 +216,7 @@ func TestGetEmbeddedPlanPrompt(t *testing.T) {
 
 func TestNewPlanLoader(t *testing.T) {
 	// Test creating plan loader without override
-	loader := prompt.NewPlanLoader("", "")
+	loader := prompt.NewPlanLoader("", "", "")
 	if loader.IsUsingOverride() {
 		t.Error("Expected IsUsingOverride() to be false for empty path")
 	}
@@ -225,7 +225,7 @@ func TestNewPlanLoader(t *testing.T) {
 	}
 
 	// Test creating plan loader with override
-	loaderWithOverride := prompt.NewPlanLoader("/some/path.md", "")
+	loaderWithOverride := prompt.NewPlanLoader("/some/path.md", "", "")
 	if !loaderWithOverride.IsUsingOverride() {
 		t.Error("Expected IsUsingOverride() to be true for non-empty path")
 	}
@@ -248,7 +248,7 @@ func TestPlanLoaderWithOverride(t *testing.T) {
 	}
 	tmpFile.Close()
 
-	loader := prompt.NewPlanLoader(tmpFile.Name(), "Build the best app")
+	loader := prompt.NewPlanLoader(tmpFile.Name(), "Build the best app", "")
 	content, err := loader.Load()
 
 	if err != nil {
@@ -278,12 +278,12 @@ func TestBuildAndPlanPromptsAreDifferent(t *testing.T) {
 }
 
 func TestPromptIsPlanMode(t *testing.T) {
-	buildLoader := prompt.NewLoader("", "")
+	buildLoader := prompt.NewLoader("", "", "")
 	if buildLoader.IsPlanMode() {
 		t.Error("Build loader should not be in plan mode")
 	}
 
-	planLoader := prompt.NewPlanLoader("", "")
+	planLoader := prompt.NewPlanLoader("", "", "")
 	if !planLoader.IsPlanMode() {
 		t.Error("Plan loader should be in plan mode")
 	}
@@ -291,7 +291,7 @@ func TestPromptIsPlanMode(t *testing.T) {
 
 func TestPlanPromptGoalSubstitution(t *testing.T) {
 	// With a goal provided, $ultimate_goal_placeholder_sentence should be replaced
-	loader := prompt.NewPlanLoader("", "Build a world-class trading platform")
+	loader := prompt.NewPlanLoader("", "Build a world-class trading platform", "")
 	content, err := loader.Load()
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
@@ -311,7 +311,7 @@ func TestPlanPromptGoalSubstitution(t *testing.T) {
 
 func TestPlanPromptGoalEmpty(t *testing.T) {
 	// With empty goal, placeholder and trailing ". " should be removed
-	loader := prompt.NewPlanLoader("", "")
+	loader := prompt.NewPlanLoader("", "", "")
 	content, err := loader.Load()
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
@@ -328,7 +328,7 @@ func TestPlanPromptGoalEmpty(t *testing.T) {
 
 func TestPlanPromptGoalWithTrailingPeriod(t *testing.T) {
 	// Goal with trailing period should not produce double period
-	loader := prompt.NewPlanLoader("", "Build the best app.")
+	loader := prompt.NewPlanLoader("", "Build the best app.", "")
 	content, err := loader.Load()
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
@@ -344,7 +344,7 @@ func TestPlanPromptGoalWithTrailingPeriod(t *testing.T) {
 
 func TestBuildPromptGoalSubstitution(t *testing.T) {
 	// With a goal provided, $ultimate_goal_placeholder_sentence should be replaced in build prompt
-	loader := prompt.NewLoader("", "Ship the MVP by Friday")
+	loader := prompt.NewLoader("", "Ship the MVP by Friday", "")
 	content, err := loader.Load()
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
@@ -363,7 +363,7 @@ func TestBuildPromptGoalSubstitution(t *testing.T) {
 
 func TestBuildPromptGoalEmpty(t *testing.T) {
 	// With empty goal, placeholder and trailing ". " should be removed
-	loader := prompt.NewLoader("", "")
+	loader := prompt.NewLoader("", "", "")
 	content, err := loader.Load()
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
@@ -380,7 +380,7 @@ func TestBuildPromptGoalEmpty(t *testing.T) {
 
 func TestBuildPromptGoalWithTrailingPeriod(t *testing.T) {
 	// Goal with trailing period should not produce double period in build prompt
-	loader := prompt.NewLoader("", "Ship the MVP.")
+	loader := prompt.NewLoader("", "Ship the MVP.", "")
 	content, err := loader.Load()
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
@@ -404,7 +404,7 @@ func TestLoadEmptyFile(t *testing.T) {
 	tmpFile.Close()
 	defer os.Remove(tmpFile.Name())
 
-	loader := prompt.NewLoader(tmpFile.Name(), "")
+	loader := prompt.NewLoader(tmpFile.Name(), "", "")
 	content, err := loader.Load()
 
 	if err != nil {
