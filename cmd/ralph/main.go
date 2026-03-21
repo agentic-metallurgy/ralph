@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -20,6 +21,7 @@ import (
 )
 
 const statsFilePath = ".claude_stats"
+const logFilePath = ".ralph.log"
 const planFilePath = "IMPLEMENTATION_PLAN.md"
 
 func main() {
@@ -83,13 +85,24 @@ func main() {
 		tokenStats = stats.NewTokenStats()
 	}
 
+	// Open log file (truncated each run); fall back to io.Discard on error
+	var logFile io.Writer
+	logFileHandle, err := os.Create(logFilePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not open log file %s: %v\n", logFilePath, err)
+		logFile = io.Discard
+	} else {
+		logFile = logFileHandle
+		defer logFileHandle.Close()
+	}
+
 	// CLI mode: run without TUI, output to stdout/stderr, exit when complete
 	if cfg.CLI {
 		var exitCode int
 		if cfg.IsPlanAndBuildMode() {
-			exitCode = runPlanAndBuildCLI(cfg, tokenStats)
+			exitCode = runPlanAndBuildCLI(cfg, tokenStats, logFile)
 		} else {
-			exitCode = runCLI(cfg, promptContent, tokenStats)
+			exitCode = runCLI(cfg, promptContent, tokenStats, logFile)
 		}
 		if err := tokenStats.Save(statsFilePath); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
@@ -99,7 +112,7 @@ func main() {
 
 	// Plan-and-build mode: run planning (1 iteration) then building (N iterations) in single TUI session
 	if cfg.IsPlanAndBuildMode() {
-		runPlanAndBuild(cfg, tokenStats)
+		runPlanAndBuild(cfg, tokenStats, logFile)
 		if err := tokenStats.Save(statsFilePath); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
 		}
@@ -161,7 +174,7 @@ func main() {
 	jsonParser := parser.NewParser()
 
 	// Start the processing goroutine
-	go processLoopOutput(ctx, claudeLoop, jsonParser, tokenStats, msgChan, doneChan, program)
+	go processLoopOutput(ctx, claudeLoop, jsonParser, tokenStats, msgChan, doneChan, program, logFile)
 
 	// Start the loop execution
 	claudeLoop.Start(ctx)
@@ -187,6 +200,7 @@ func processLoopOutput(
 	msgChan chan<- tui.Message,
 	doneChan chan struct{},
 	program *tea.Program,
+	logFile io.Writer,
 ) {
 	defer close(msgChan)
 
@@ -208,7 +222,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile)
 		}
 	}
 }
@@ -222,6 +236,7 @@ func processMessage(
 	msgChan chan<- tui.Message,
 	program *tea.Program,
 	loopTotalTokens *int64,
+	logFile io.Writer,
 ) {
 	switch msg.Type {
 	case "loop_marker":
@@ -235,7 +250,7 @@ func processMessage(
 			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 				claudeLoop.SetSessionID(sessionID)
 			}
-			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens)
+			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -297,6 +312,7 @@ func handleParsedMessage(
 	msgChan chan<- tui.Message,
 	program *tea.Program,
 	loopTotalTokens *int64,
+	logFile io.Writer,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -345,6 +361,7 @@ func handleParsedMessage(
 				Role:    tui.RoleThinking,
 				Content: content.Thinking,
 			}
+			fmt.Fprintf(logFile, "[thinking] %s\n\n", content.Thinking)
 		}
 
 		// Display text content and scan for task references
@@ -354,6 +371,7 @@ func handleParsedMessage(
 					Role:    tui.RoleAssistant,
 					Content: text,
 				}
+				fmt.Fprintf(logFile, "[assistant] %s\n\n", text)
 				// Detect IMPLEMENTATION_PLAN.md task references
 				if ref := jsonParser.ExtractTaskReference(text); ref != nil {
 					taskLabel := fmt.Sprintf("#%d", ref.Number)
@@ -412,6 +430,7 @@ func handleParsedMessageCLI(
 	claudeLoop *loop.Loop,
 	jsonParser *parser.Parser,
 	tokenStats *stats.TokenStats,
+	logFile io.Writer,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -433,9 +452,13 @@ func handleParsedMessageCLI(
 	// Print assistant text and tool use
 	if parsed.Type == parser.MessageTypeAssistant {
 		content := jsonParser.ExtractContent(parsed)
+		if content.Thinking != "" {
+			fmt.Fprintf(logFile, "[thinking] %s\n\n", content.Thinking)
+		}
 		for _, text := range content.TextContent {
 			if text != "" {
 				fmt.Printf("[assistant] %s\n", text)
+				fmt.Fprintf(logFile, "[assistant] %s\n\n", text)
 			}
 		}
 		for _, item := range parsed.Message.Content {
@@ -455,7 +478,7 @@ func handleParsedMessageCLI(
 }
 
 // runCLI runs ralph in CLI mode: no TUI, output to stdout/stderr, exit on completion.
-func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenStats) int {
+func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenStats, logFile io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -499,7 +522,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 				if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 					claudeLoop.SetSessionID(sessionID)
 				}
-				handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats)
+				handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile)
 			}
 
 		case "error":
@@ -518,7 +541,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 
 // runPlanAndBuildCLI runs plan-and-build mode in CLI: planning (1 iteration) then building (N iterations)
 // with output to stdout/stderr and no TUI.
-func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
+func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFile io.Writer) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -571,7 +594,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 					planLoop.SetSessionID(sid)
 					sessionID = sid
 				}
-				handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats)
+				handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile)
 			}
 
 		case "error":
@@ -631,7 +654,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 				if sid := jsonParser.GetSessionID(parsed); sid != "" {
 					buildLoop.SetSessionID(sid)
 				}
-				handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats)
+				handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile)
 			}
 
 		case "error":
@@ -649,7 +672,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 
 // runPlanAndBuild runs plan-and-build mode: planning (1 iteration) then building (N iterations)
 // in a single TUI session with mode display transitions.
-func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats) {
+func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats, logFile io.Writer) {
 	// Set up channels for TUI communication
 	msgChan := make(chan tui.Message, 100)
 	doneChan := make(chan struct{})
@@ -691,7 +714,7 @@ func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats) {
 	jsonParser := parser.NewParser()
 
 	// Start the plan-and-build orchestration goroutine
-	go runPlanAndBuildPhases(ctx, cfg, jsonParser, tokenStats, msgChan, doneChan, program)
+	go runPlanAndBuildPhases(ctx, cfg, jsonParser, tokenStats, msgChan, doneChan, program, logFile)
 
 	// Run the TUI (blocks until user quits)
 	if _, err := program.Run(); err != nil {
@@ -709,6 +732,7 @@ func runPlanAndBuildPhases(
 	msgChan chan<- tui.Message,
 	doneChan chan struct{},
 	program *tea.Program,
+	logFile io.Writer,
 ) {
 	defer close(msgChan)
 
@@ -738,7 +762,7 @@ func runPlanAndBuildPhases(
 	planLoop.Start(ctx)
 
 	// Process plan loop output and wait for completion
-	sessionID := processPlanPhase(ctx, planLoop, jsonParser, tokenStats, msgChan, program)
+	sessionID := processPlanPhase(ctx, planLoop, jsonParser, tokenStats, msgChan, program, logFile)
 
 	// Check if context was cancelled
 	select {
@@ -779,7 +803,7 @@ func runPlanAndBuildPhases(
 	buildLoop.Start(ctx)
 
 	// Process build loop output
-	processBuildPhase(ctx, buildLoop, jsonParser, tokenStats, msgChan, doneChan, program)
+	processBuildPhase(ctx, buildLoop, jsonParser, tokenStats, msgChan, doneChan, program, logFile)
 }
 
 // processPlanPhase processes the plan loop output and returns the captured session ID
@@ -790,6 +814,7 @@ func processPlanPhase(
 	tokenStats *stats.TokenStats,
 	msgChan chan<- tui.Message,
 	program *tea.Program,
+	logFile io.Writer,
 ) string {
 	loopOutput := planLoop.Output()
 	var loopTotalTokens int64
@@ -814,7 +839,7 @@ func processPlanPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						planLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens)
+					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile)
 				}
 
 			case "error":
@@ -844,6 +869,7 @@ func processBuildPhase(
 	msgChan chan<- tui.Message,
 	doneChan chan struct{},
 	program *tea.Program,
+	logFile io.Writer,
 ) {
 	loopOutput := buildLoop.Output()
 	var loopTotalTokens int64
@@ -872,7 +898,7 @@ func processBuildPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						buildLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens)
+					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile)
 				}
 
 			case "error":
