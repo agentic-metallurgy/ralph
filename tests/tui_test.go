@@ -805,35 +805,6 @@ func TestViewportScrollPreservedOnTick(t *testing.T) {
 	}
 }
 
-// TestAgentCountDisplayed tests that agent count appears in the Loop Details panel
-func TestAgentCountDisplayed(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	// With 0 agents, should show "Active Agents:" label and "0"
-	if !strings.Contains(view, "Active Agents:") {
-		t.Error("View should contain 'Active Agents:' label")
-	}
-	if !strings.Contains(view, "0") {
-		t.Error("View should show agent count of 0")
-	}
-}
-
-// TestSendAgentUpdateCmd tests the SendAgentUpdate helper command
-func TestSendAgentUpdateCmd(t *testing.T) {
-	cmd := tui.SendAgentUpdate(5)
-
-	if cmd == nil {
-		t.Error("SendAgentUpdate should return a command")
-	}
-
-	result := cmd()
-	if result == nil {
-		t.Error("Command should return an agent update message")
-	}
-}
-
 // TestModeDisplayDefault tests that the mode row shows "-" by default
 func TestModeDisplayDefault(t *testing.T) {
 	model := tui.NewModel()

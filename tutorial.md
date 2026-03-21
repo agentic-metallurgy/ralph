@@ -39,7 +39,7 @@ From the project root:
 ralph --iterations 10      # default prompt, specs/ folder, 10 passes
 ```
 
-Ralph streams Claude's work into the TUI immediately; you can quit early with `q` or `Ctrl+C`. Stats persist to `.claude_stats`, so the next run resumes the elapsed-time counter and usage totals.
+Ralph streams Claude's work into the TUI immediately; you can quit early with `q` or `Ctrl+C`. Stats persist to `.ralph.claude_stats`, so the next run resumes the elapsed-time counter and usage totals.
 
 ## 7. Read the TUI
 The interface has three major regions:

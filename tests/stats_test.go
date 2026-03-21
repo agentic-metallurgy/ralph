@@ -117,7 +117,7 @@ func TestSave(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	statsFile := filepath.Join(tmpDir, ".claude_stats")
+	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
 
 	s := stats.NewTokenStats()
 	s.InputTokens = 1000
@@ -171,7 +171,7 @@ func TestLoadTokenStats_ExistingFile(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	statsFile := filepath.Join(tmpDir, ".claude_stats")
+	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
 
 	// Create a stats file with known values
 	statsData := `{
@@ -215,7 +215,7 @@ func TestLoadTokenStats_ExistingFile(t *testing.T) {
 
 func TestLoadTokenStats_NonExistentFile(t *testing.T) {
 	// Load from non-existent file should return empty stats
-	s, err := stats.LoadTokenStats("/nonexistent/path/.claude_stats")
+	s, err := stats.LoadTokenStats("/nonexistent/path/.ralph.claude_stats")
 	if err != nil {
 		t.Fatalf("Expected no error for non-existent file, got: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestLoadTokenStats_CorruptJSON(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	statsFile := filepath.Join(tmpDir, ".claude_stats")
+	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
 
 	// Write corrupt JSON
 	if err := os.WriteFile(statsFile, []byte("{invalid json"), 0644); err != nil {
@@ -256,7 +256,7 @@ func TestSaveAndLoad_RoundTrip(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	statsFile := filepath.Join(tmpDir, ".claude_stats")
+	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
 
 	// Create stats with specific values
 	original := stats.NewTokenStats()
@@ -366,7 +366,7 @@ func TestLoadTokenStats_PartialData(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	statsFile := filepath.Join(tmpDir, ".claude_stats")
+	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
 
 	// Create a minimal stats file
 	statsData := `{"input_tokens": 100, "output_tokens": 50}`
@@ -402,7 +402,7 @@ func TestSave_OverwritesExisting(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	statsFile := filepath.Join(tmpDir, ".claude_stats")
+	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
 
 	// First save
 	s1 := stats.NewTokenStats()
@@ -488,7 +488,7 @@ func TestSave_CreatesParentDirectory(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Path with non-existent subdirectory
-	statsFile := filepath.Join(tmpDir, "subdir", ".claude_stats")
+	statsFile := filepath.Join(tmpDir, "subdir", ".ralph.claude_stats")
 
 	s := stats.NewTokenStats()
 	s.InputTokens = 42
@@ -510,7 +510,7 @@ func TestLoadTokenStats_EmptyFile(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	statsFile := filepath.Join(tmpDir, ".claude_stats")
+	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
 
 	// Create empty file
 	if err := os.WriteFile(statsFile, []byte(""), 0644); err != nil {
@@ -546,7 +546,7 @@ func TestElapsedTime_SaveAndLoad(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	statsFile := filepath.Join(tmpDir, ".claude_stats")
+	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
 
 	s := stats.NewTokenStats()
 	s.TotalElapsedNs = int64(5445 * 1e9) // 1h30m45s

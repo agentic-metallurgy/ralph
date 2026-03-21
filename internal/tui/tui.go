@@ -144,7 +144,6 @@ type Model struct {
 	stats          *stats.TokenStats
 	currentLoop    int
 	totalLoops     int
-	activeAgents   int
 	currentTask    string // Current task (e.g., "#6 Change the lib/gold into lib/silver")
 	completedTasks int    // Number of completed tasks from plan
 	totalTasks     int    // Total number of tasks from plan
@@ -279,11 +278,6 @@ type loopUpdateMsg struct {
 // statsUpdateMsg is sent to update stats
 type statsUpdateMsg struct {
 	stats *stats.TokenStats
-}
-
-// agentUpdateMsg is sent to update active agent count
-type agentUpdateMsg struct {
-	count int
 }
 
 // taskUpdateMsg is sent to update the current IMPLEMENTATION_PLAN.md task
@@ -518,10 +512,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stats = msg.stats
 		return m, nil
 
-	case agentUpdateMsg:
-		m.activeAgents = msg.count
-		return m, nil
-
 	case taskUpdateMsg:
 		m.currentTask = msg.task
 		return m, nil
@@ -754,13 +744,6 @@ func (m Model) renderFooter() string {
 		statusStyle = valueStyle.Foreground(colorRed)
 	}
 
-	// Active Agents display
-	agentDisplay := fmt.Sprintf(" %d", m.activeAgents)
-	agentStyle := valueStyle
-	if m.activeAgents > 0 {
-		agentStyle = valueStyle.Foreground(colorGreen)
-	}
-
 	// Current Mode display
 	modeDisplay := " -"
 	if m.currentMode != "" {
@@ -782,7 +765,6 @@ func (m Model) renderFooter() string {
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Loop:"), valueStyle.Render(fmt.Sprintf(" %s", loopDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Time:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Active Agents:"), agentStyle.Render(agentDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Completed Tasks:"), valueStyle.Render(completedDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Task:"), valueStyle.Render(taskDisplay)),
 		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Mode:"), valueStyle.Render(modeDisplay)),
@@ -888,13 +870,6 @@ func SendLoopUpdate(current, total int) tea.Cmd {
 func SendStatsUpdate(s *stats.TokenStats) tea.Cmd {
 	return func() tea.Msg {
 		return statsUpdateMsg{stats: s}
-	}
-}
-
-// SendAgentUpdate is a helper command to update active agent count
-func SendAgentUpdate(count int) tea.Cmd {
-	return func() tea.Msg {
-		return agentUpdateMsg{count: count}
 	}
 }
 
