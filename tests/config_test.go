@@ -798,6 +798,130 @@ func TestBuildIterationsFieldDefault(t *testing.T) {
 	}
 }
 
+func TestIsAutoresearchMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		subcommand string
+		expected   bool
+	}{
+		{"empty subcommand", "", false},
+		{"plan subcommand", "plan", false},
+		{"build subcommand", "build", false},
+		{"plan-and-build subcommand", "plan-and-build", false},
+		{"autoresearch subcommand", "autoresearch", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Subcommand: tt.subcommand}
+			result := cfg.IsAutoresearchMode()
+			if result != tt.expected {
+				t.Errorf("IsAutoresearchMode() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestAutoresearchSubcommandDetected(t *testing.T) {
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"ralph", "autoresearch"}
+
+	cfg := config.ParseFlags()
+
+	if !cfg.IsAutoresearchMode() {
+		t.Fatal("Expected autoresearch mode to be detected")
+	}
+	if cfg.Subcommand != "autoresearch" {
+		t.Errorf("Expected Subcommand = 'autoresearch', got %q", cfg.Subcommand)
+	}
+	// Default iterations should be preserved
+	if cfg.Iterations != config.DefaultIterations {
+		t.Errorf("Expected default iterations %d, got %d", config.DefaultIterations, cfg.Iterations)
+	}
+}
+
+func TestAutoresearchWithFilenameArg(t *testing.T) {
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"ralph", "autoresearch", "myexperiment.md"}
+
+	cfg := config.ParseFlags()
+
+	if !cfg.IsAutoresearchMode() {
+		t.Fatal("Expected autoresearch mode to be detected")
+	}
+	if cfg.AutoresearchFile != "myexperiment.md" {
+		t.Errorf("Expected AutoresearchFile = 'myexperiment.md', got %q", cfg.AutoresearchFile)
+	}
+}
+
+func TestAutoresearchWithFilenameAndFlags(t *testing.T) {
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"ralph", "autoresearch", "--iterations", "10", "myexperiment.md"}
+
+	cfg := config.ParseFlags()
+
+	if !cfg.IsAutoresearchMode() {
+		t.Fatal("Expected autoresearch mode to be detected")
+	}
+	if cfg.Iterations != 10 {
+		t.Errorf("Expected iterations = 10, got %d", cfg.Iterations)
+	}
+	if cfg.AutoresearchFile != "myexperiment.md" {
+		t.Errorf("Expected AutoresearchFile = 'myexperiment.md', got %q", cfg.AutoresearchFile)
+	}
+}
+
+func TestValidateSkipsSpecFolderInAutoresearchMode(t *testing.T) {
+	cfg := config.NewConfig()
+	cfg.Subcommand = "autoresearch"
+	cfg.SpecFolder = "nonexistent-folder/"
+
+	// In autoresearch mode, spec folder validation should be skipped
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("Expected no validation error in autoresearch mode, got: %v", err)
+	}
+}
+
+func TestAutoresearchNoFilenameArgDefault(t *testing.T) {
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"ralph", "autoresearch"}
+
+	cfg := config.ParseFlags()
+
+	if cfg.AutoresearchFile != "" {
+		t.Errorf("Expected AutoresearchFile to be empty by default, got %q", cfg.AutoresearchFile)
+	}
+}
+
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))

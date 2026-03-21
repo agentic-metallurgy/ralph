@@ -395,6 +395,196 @@ func TestBuildPromptGoalWithTrailingPeriod(t *testing.T) {
 	}
 }
 
+func TestAutoresearchLoaderLoad(t *testing.T) {
+	loader := prompt.NewAutoresearchLoader("", "", "test experiment content")
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if !strings.Contains(content, "Autoresearch") {
+		t.Error("Expected autoresearch prompt to contain 'Autoresearch'")
+	}
+	if !strings.Contains(content, "test experiment content") {
+		t.Error("Expected experiment content to be substituted into prompt")
+	}
+	if strings.Contains(content, "$experiment_content") {
+		t.Error("Expected $experiment_content placeholder to be replaced")
+	}
+}
+
+func TestAutoresearchLoaderExperimentSubstitution(t *testing.T) {
+	experimentSpec := "## Goal\nOptimize latency\n## In-Scope Files\n- src/server.go"
+	loader := prompt.NewAutoresearchLoader("", "", experimentSpec)
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if !strings.Contains(content, "Optimize latency") {
+		t.Error("Expected experiment goal to appear in prompt")
+	}
+	if !strings.Contains(content, "src/server.go") {
+		t.Error("Expected in-scope files to appear in prompt")
+	}
+}
+
+func TestAutoresearchLoaderGoalSubstitution(t *testing.T) {
+	loader := prompt.NewAutoresearchLoader("", "Minimize API latency", "some content")
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if strings.Contains(content, "$ultimate_goal_placeholder_sentence") {
+		t.Error("Expected goal placeholder to be substituted")
+	}
+	if !strings.Contains(content, "Minimize API latency") {
+		t.Error("Expected goal text to appear in prompt")
+	}
+}
+
+func TestAutoresearchLoaderEmptyGoal(t *testing.T) {
+	loader := prompt.NewAutoresearchLoader("", "", "some content")
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if strings.Contains(content, "$ultimate_goal_placeholder_sentence") {
+		t.Error("Expected goal placeholder to be removed when goal is empty")
+	}
+}
+
+func TestAutoresearchLoaderIsAutoresearchMode(t *testing.T) {
+	buildLoader := prompt.NewLoader("", "", "")
+	if buildLoader.IsAutoresearchMode() {
+		t.Error("Build loader should not be in autoresearch mode")
+	}
+
+	planLoader := prompt.NewPlanLoader("", "", "")
+	if planLoader.IsAutoresearchMode() {
+		t.Error("Plan loader should not be in autoresearch mode")
+	}
+
+	arLoader := prompt.NewAutoresearchLoader("", "", "")
+	if !arLoader.IsAutoresearchMode() {
+		t.Error("Autoresearch loader should be in autoresearch mode")
+	}
+}
+
+func TestAutoresearchTemplateLoads(t *testing.T) {
+	content, err := prompt.GetEmbeddedAutoresearchTemplate()
+	if err != nil {
+		t.Fatalf("Expected no error loading template, got: %v", err)
+	}
+
+	if len(content) == 0 {
+		t.Error("Expected non-empty template content")
+	}
+	if !strings.Contains(content, "Experiment") {
+		t.Error("Expected template to contain 'Experiment'")
+	}
+	if !strings.Contains(content, "Goal") {
+		t.Error("Expected template to contain 'Goal'")
+	}
+	if !strings.Contains(content, "In-Scope Files") {
+		t.Error("Expected template to contain 'In-Scope Files'")
+	}
+	if !strings.Contains(content, "Evaluator") {
+		t.Error("Expected template to contain 'Evaluator'")
+	}
+}
+
+func TestAutoresearchPromptContainsIterationPlaceholders(t *testing.T) {
+	// The raw embedded prompt should contain $loop_iteration and $loop_total
+	// (these get substituted by the loop at runtime, not by the prompt loader)
+	loader := prompt.NewAutoresearchLoader("", "", "")
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if !strings.Contains(content, "$loop_iteration") {
+		t.Error("Expected autoresearch prompt to contain $loop_iteration placeholder")
+	}
+	if !strings.Contains(content, "$loop_total") {
+		t.Error("Expected autoresearch prompt to contain $loop_total placeholder")
+	}
+}
+
+func TestAutoresearchPromptContainsKeyElements(t *testing.T) {
+	loader := prompt.NewAutoresearchLoader("", "", "my experiment")
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	expectedPhrases := []string{
+		"Simplicity Criterion",
+		"First Run",
+		"results.tsv",
+		"What you CAN do",
+		"What you CANNOT do",
+		"Logging Results",
+		"tab-separated",
+	}
+
+	for _, phrase := range expectedPhrases {
+		if !strings.Contains(content, phrase) {
+			t.Errorf("Expected autoresearch prompt to contain %q", phrase)
+		}
+	}
+}
+
+func TestAutoresearchPromptDiffersFromBuildAndPlan(t *testing.T) {
+	arContent, err := prompt.GetEmbeddedAutoresearchPrompt()
+	if err != nil {
+		t.Fatalf("Error loading autoresearch prompt: %v", err)
+	}
+
+	buildContent, err := prompt.GetEmbeddedPrompt()
+	if err != nil {
+		t.Fatalf("Error loading build prompt: %v", err)
+	}
+
+	planContent, err := prompt.GetEmbeddedPlanPrompt()
+	if err != nil {
+		t.Fatalf("Error loading plan prompt: %v", err)
+	}
+
+	if arContent == buildContent {
+		t.Error("Autoresearch prompt should differ from build prompt")
+	}
+	if arContent == planContent {
+		t.Error("Autoresearch prompt should differ from plan prompt")
+	}
+}
+
+func TestAutoresearchLoaderWithOverride(t *testing.T) {
+	// Create a temporary override file
+	tmpFile, err := os.CreateTemp("", "ralph-ar-override-*.md")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	tmpFile.WriteString("custom autoresearch prompt with $experiment_content")
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	loader := prompt.NewAutoresearchLoader(tmpFile.Name(), "", "real experiment")
+	content, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if !strings.Contains(content, "real experiment") {
+		t.Error("Expected experiment content to be substituted in override file")
+	}
+	if strings.Contains(content, "$experiment_content") {
+		t.Error("Expected $experiment_content placeholder to be replaced in override")
+	}
+}
+
 func TestLoadEmptyFile(t *testing.T) {
 	// Create an empty temporary file
 	tmpFile, err := os.CreateTemp("", "ralph-empty-*.md")

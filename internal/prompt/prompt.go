@@ -9,20 +9,24 @@ import (
 	"strings"
 )
 
-//go:embed assets/prompt.md assets/plan_prompt.md
+//go:embed assets/prompt.md assets/plan_prompt.md assets/autoresearch_prompt.md assets/autoresearch_template.md
 var embeddedFS embed.FS
 
 const embeddedPromptPath = "assets/prompt.md"
 const embeddedPlanPromptPath = "assets/plan_prompt.md"
+const embeddedAutoresearchPromptPath = "assets/autoresearch_prompt.md"
+const embeddedAutoresearchTemplatePath = "assets/autoresearch_template.md"
 
 const defaultPlanFile = "IMPLEMENTATION_PLAN.md"
 
 // Loader provides methods for loading the loop prompt
 type Loader struct {
-	overridePath string
-	planMode     bool
-	goal         string
-	planFile     string
+	overridePath      string
+	planMode          bool
+	autoresearchMode  bool
+	goal              string
+	planFile          string
+	experimentContent string
 }
 
 // NewLoader creates a new prompt Loader.
@@ -51,6 +55,18 @@ func NewPlanLoader(overridePath, goal, planFile string) *Loader {
 	}
 }
 
+// NewAutoresearchLoader creates a prompt Loader for autoresearch mode.
+// If overridePath is empty, the embedded autoresearch prompt will be used.
+// The experimentContent is substituted into the $experiment_content placeholder.
+func NewAutoresearchLoader(overridePath, goal, experimentContent string) *Loader {
+	return &Loader{
+		overridePath:      overridePath,
+		autoresearchMode:  true,
+		goal:              goal,
+		experimentContent: experimentContent,
+	}
+}
+
 // Load returns the prompt content.
 // If an override path was configured, it loads from that file.
 // Otherwise, it returns the embedded default prompt (build or plan based on mode).
@@ -61,6 +77,8 @@ func (l *Loader) Load() (string, error) {
 
 	if l.overridePath != "" {
 		content, err = l.loadFromFile(l.overridePath)
+	} else if l.autoresearchMode {
+		content, err = l.loadEmbeddedAutoresearch()
 	} else if l.planMode {
 		content, err = l.loadEmbeddedPlan()
 	} else {
@@ -73,6 +91,9 @@ func (l *Loader) Load() (string, error) {
 
 	content = substituteGoal(content, l.goal)
 	content = substitutePlanFile(content, l.planFile)
+	if l.autoresearchMode {
+		content = substituteExperimentContent(content, l.experimentContent)
+	}
 
 	return content, nil
 }
@@ -140,6 +161,11 @@ func (l *Loader) IsPlanMode() bool {
 	return l.planMode
 }
 
+// IsAutoresearchMode returns true if the loader is configured for autoresearch mode
+func (l *Loader) IsAutoresearchMode() bool {
+	return l.autoresearchMode
+}
+
 // GetEmbeddedPrompt is a convenience function to get the embedded prompt directly
 func GetEmbeddedPrompt() (string, error) {
 	loader := NewLoader("", "", "")
@@ -154,4 +180,33 @@ func GetEmbeddedPlanPrompt() (string, error) {
 		return "", fmt.Errorf("failed to read embedded plan prompt: %w", err)
 	}
 	return string(content), nil
+}
+
+// GetEmbeddedAutoresearchPrompt is a convenience function to get the embedded autoresearch prompt
+func GetEmbeddedAutoresearchPrompt() (string, error) {
+	loader := NewAutoresearchLoader("", "", "")
+	return loader.Load()
+}
+
+// GetEmbeddedAutoresearchTemplate returns the embedded experiment template content
+func GetEmbeddedAutoresearchTemplate() (string, error) {
+	content, err := embeddedFS.ReadFile(embeddedAutoresearchTemplatePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read embedded autoresearch template: %w", err)
+	}
+	return string(content), nil
+}
+
+// loadEmbeddedAutoresearch returns the embedded autoresearch prompt
+func (l *Loader) loadEmbeddedAutoresearch() (string, error) {
+	content, err := embeddedFS.ReadFile(embeddedAutoresearchPromptPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read embedded autoresearch prompt: %w", err)
+	}
+	return string(content), nil
+}
+
+// substituteExperimentContent replaces the $experiment_content placeholder in the prompt content
+func substituteExperimentContent(content, experimentContent string) string {
+	return strings.Replace(content, "$experiment_content", experimentContent, 1)
 }

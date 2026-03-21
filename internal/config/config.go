@@ -22,18 +22,19 @@ const DefaultPlanFile = "IMPLEMENTATION_PLAN.md"
 
 // Config holds the configuration for the ralph-go application
 type Config struct {
-	Iterations      int
-	BuildIterations int // iterations for build phase in plan-and-build mode
-	SpecFile        string
-	SpecFolder      string
-	LoopPrompt      string
-	Goal            string
-	PlanFile        string
-	ShowPrompt      bool
-	ShowVersion     bool
-	NoTmux          bool
-	CLI             bool
-	Subcommand      string // "plan", "build", "plan-and-build", or "" (default: build mode)
+	Iterations       int
+	BuildIterations  int // iterations for build phase in plan-and-build mode
+	SpecFile         string
+	SpecFolder       string
+	LoopPrompt       string
+	Goal             string
+	PlanFile         string
+	AutoresearchFile string // path to custom experiment file for autoresearch mode
+	ShowPrompt       bool
+	ShowVersion      bool
+	NoTmux           bool
+	CLI              bool
+	Subcommand       string // "plan", "build", "plan-and-build", "autoresearch", or "" (default: build mode)
 }
 
 // NewConfig returns a new Config with default values
@@ -53,7 +54,7 @@ func NewConfig() *Config {
 func DetectSubcommand() string {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "plan", "build", "plan-and-build":
+		case "plan", "build", "plan-and-build", "autoresearch":
 			sub := os.Args[1]
 			os.Args = append(os.Args[:1], os.Args[2:]...)
 			return sub
@@ -83,7 +84,7 @@ func ParseFlags() *Config {
 
 	// Custom usage function to display flags with -- prefix
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [plan|build|plan-and-build] [flags]\n\nSubcommands:\n  plan\t\t\tRun in planning mode (uses plan prompt instead of build prompt)\n  build\t\t\tRun in build mode (default if no subcommand specified)\n  plan-and-build\tRun planning (1 iter) then building (default 5 iters)\n\nFlags:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s [plan|build|plan-and-build|autoresearch] [flags]\n\nSubcommands:\n  plan\t\t\tRun in planning mode (uses plan prompt instead of build prompt)\n  build\t\t\tRun in build mode (default if no subcommand specified)\n  plan-and-build\tRun planning (1 iter) then building (default 5 iters)\n  autoresearch\t\tRun optimization loop (looks for specs/experiment.md)\n\nFlags:\n", os.Args[0])
 		flag.VisitAll(func(f *flag.Flag) {
 			// Format: --flag-name type
 			//     description (default: value)
@@ -120,6 +121,11 @@ func ParseFlags() *Config {
 		}
 	}
 
+	// In autoresearch mode, capture optional positional argument as experiment file
+	if cfg.IsAutoresearchMode() && flag.NArg() > 0 {
+		cfg.AutoresearchFile = flag.Arg(0)
+	}
+
 	// In plan-and-build mode, plan is always 1 iteration, --iterations applies to build phase
 	if cfg.IsPlanAndBuildMode() {
 		if iterationsExplicit {
@@ -143,6 +149,11 @@ func (c *Config) IsPlanAndBuildMode() bool {
 	return c.Subcommand == "plan-and-build"
 }
 
+// IsAutoresearchMode returns true if the "autoresearch" subcommand was specified
+func (c *Config) IsAutoresearchMode() bool {
+	return c.Subcommand == "autoresearch"
+}
+
 // Validate checks if the configuration is valid.
 // It validates:
 // - Iterations must be greater than 0
@@ -158,9 +169,9 @@ func (c *Config) Validate() error {
 		if err := c.validateFileExists(c.SpecFile, "--spec-file"); err != nil {
 			return err
 		}
-	} else if c.SpecFolder != "" && c.LoopPrompt == "" {
+	} else if c.SpecFolder != "" && c.LoopPrompt == "" && !c.IsAutoresearchMode() {
 		// Only validate spec-folder when using the default embedded prompt.
-		// Custom prompts may not need specs at all.
+		// Custom prompts and autoresearch mode may not need specs at all.
 		if err := c.validateSpecsAvailable(c.SpecFolder); err != nil {
 			return err
 		}

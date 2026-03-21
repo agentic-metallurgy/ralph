@@ -38,6 +38,8 @@ func main() {
 		var showLoader *prompt.Loader
 		if cfg.IsPlanMode() {
 			showLoader = prompt.NewPlanLoader("", cfg.Goal, cfg.PlanFile)
+		} else if cfg.IsAutoresearchMode() {
+			showLoader = prompt.NewAutoresearchLoader("", cfg.Goal, "(experiment content will be loaded at runtime)")
 		} else {
 			showLoader = prompt.NewLoader("", cfg.Goal, cfg.PlanFile)
 		}
@@ -48,6 +50,36 @@ func main() {
 		}
 		fmt.Print(content)
 		return
+	}
+
+	// Handle autoresearch mode: create template and exit if experiment file doesn't exist
+	if cfg.IsAutoresearchMode() {
+		experimentFile := cfg.AutoresearchFile
+		if experimentFile == "" {
+			experimentFile = "specs/experiment.md"
+		}
+
+		info, statErr := os.Stat(experimentFile)
+		if os.IsNotExist(statErr) || (statErr == nil && info.Size() == 0) {
+			// Create template
+			templateContent, tmplErr := prompt.GetEmbeddedAutoresearchTemplate()
+			if tmplErr != nil {
+				fmt.Fprintf(os.Stderr, "Error loading template: %v\n", tmplErr)
+				os.Exit(1)
+			}
+			// Ensure specs/ directory exists
+			os.MkdirAll("specs", 0755)
+			templatePath := "specs/autoresearch_template.md"
+			if writeErr := os.WriteFile(templatePath, []byte(templateContent), 0644); writeErr != nil {
+				fmt.Fprintf(os.Stderr, "Error creating template: %v\n", writeErr)
+				os.Exit(1)
+			}
+			fmt.Printf("Created %s\nEdit it with your experiment details, then copy to %s and run `ralph autoresearch` again.\n", templatePath, experimentFile)
+			return
+		} else if statErr != nil {
+			fmt.Fprintf(os.Stderr, "Error checking experiment file: %v\n", statErr)
+			os.Exit(1)
+		}
 	}
 
 	// Wrap in tmux if not already inside one (skip in CLI mode)
@@ -66,7 +98,18 @@ func main() {
 
 	// Load the loop prompt (embedded or from override file)
 	var promptLoader *prompt.Loader
-	if cfg.IsPlanMode() {
+	if cfg.IsAutoresearchMode() {
+		experimentFile := cfg.AutoresearchFile
+		if experimentFile == "" {
+			experimentFile = "specs/experiment.md"
+		}
+		experimentContent, readErr := os.ReadFile(experimentFile)
+		if readErr != nil {
+			fmt.Fprintf(os.Stderr, "Error reading experiment file %s: %v\n", experimentFile, readErr)
+			os.Exit(1)
+		}
+		promptLoader = prompt.NewAutoresearchLoader(cfg.LoopPrompt, cfg.Goal, string(experimentContent))
+	} else if cfg.IsPlanMode() {
 		promptLoader = prompt.NewPlanLoader(cfg.LoopPrompt, cfg.Goal, cfg.PlanFile)
 	} else {
 		promptLoader = prompt.NewLoader(cfg.LoopPrompt, cfg.Goal, cfg.PlanFile)
@@ -149,6 +192,8 @@ func main() {
 	// Set current mode for TUI display
 	if cfg.IsPlanMode() {
 		model.SetCurrentMode("Planning")
+	} else if cfg.IsAutoresearchMode() {
+		model.SetCurrentMode("Researching")
 	} else {
 		model.SetCurrentMode("Building")
 	}
@@ -536,6 +581,8 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 	mode := "build"
 	if cfg.IsPlanMode() {
 		mode = "plan"
+	} else if cfg.IsAutoresearchMode() {
+		mode = "autoresearch"
 	}
 	fmt.Printf("ralph cli: starting %s mode with %d iterations\n", mode, cfg.Iterations)
 

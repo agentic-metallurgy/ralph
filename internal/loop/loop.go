@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -474,10 +476,14 @@ func (l *Loop) executeIteration(ctx context.Context, iteration int) error {
 		return fmt.Errorf("failed to start claude: %w", err)
 	}
 
+	// Prepare prompt with iteration-specific substitutions
+	promptToSend := strings.ReplaceAll(l.config.Prompt, "$loop_iteration", strconv.Itoa(iteration))
+	promptToSend = strings.ReplaceAll(promptToSend, "$loop_total", strconv.Itoa(l.GetIterations()))
+
 	// Write prompt to stdin
 	go func() {
 		defer stdin.Close()
-		io.WriteString(stdin, l.config.Prompt)
+		io.WriteString(stdin, promptToSend)
 	}()
 
 	// Wait for both streamOutput goroutines to finish before returning,

@@ -11,7 +11,7 @@
 - `internal/config/` — CLI flags, validation
 - `internal/loop/` — Claude CLI execution loop (start/stop/pause/resume)
 - `internal/parser/` — stream-json output parser
-- `internal/prompt/` — embedded prompt loader (assets/prompt.md, assets/plan_prompt.md)
+- `internal/prompt/` — embedded prompt loader (assets/prompt.md, assets/plan_prompt.md, assets/autoresearch_prompt.md)
 - `internal/stats/` — token usage tracking, persistence (.ralph.claude_stats)
 - `internal/tmux/` — auto-wrap in tmux session
 - `internal/tui/` — BubbleTea TUI (activity panel, footer, hotkeys)
@@ -24,6 +24,8 @@
 - `ralph build` — explicit build mode (identical to default)
 - `ralph plan` — planning mode (uses embedded plan prompt)
 - `ralph plan-and-build` — runs planning (1 iter) then building (default 5 iters) in one session
+- `ralph autoresearch` — optimization loop (looks for specs/experiment.md, creates template if missing)
+- `ralph autoresearch <file>` — optimization loop with custom experiment file
 
 ## Key Flags
 - `--iterations N` — loop count (default: 5)

@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,6 +112,15 @@ func TestHelperProcess(t *testing.T) {
 	case "claude-error":
 		os.Stderr.WriteString("Error: something went wrong\n")
 		os.Exit(1)
+	case "claude-stdin-capture":
+		// Read stdin and write to temp file for verification
+		data, _ := io.ReadAll(os.Stdin)
+		capturePath := os.Getenv("STDIN_CAPTURE_PATH")
+		if capturePath != "" {
+			os.WriteFile(capturePath, data, 0644)
+		}
+		os.Stdout.WriteString(`{"type":"system","session_id":"capture-session","subtype":"init"}` + "\n")
+		os.Stdout.WriteString(`{"type":"result","total_cost_usd":0.001}` + "\n")
 	case "echo":
 		// Simple echo command for basic testing
 		os.Stdout.WriteString(strings.Join(args[1:], " ") + "\n")
@@ -1745,5 +1755,113 @@ func TestSetResumeSessionIDOverwrite(t *testing.T) {
 
 	if !foundNew {
 		t.Error("Next iteration should use the last session ID set via SetResumeSessionID")
+	}
+}
+
+func TestLoopIterationPlaceholderSubstitution(t *testing.T) {
+	// Create temp file for stdin capture
+	tmpFile, err := os.CreateTemp("", "ralph-stdin-capture-*.txt")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	capturePath := tmpFile.Name()
+
+	// Create a command builder that captures stdin
+	stdinCaptureBuilder := func(ctx context.Context, prompt string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHelperProcess", "--", "claude-stdin-capture")
+		cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1", "STDIN_CAPTURE_PATH="+capturePath)
+		return cmd
+	}
+
+	// Prompt with iteration placeholders
+	promptWithPlaceholders := "Run iteration $loop_iteration of $loop_total"
+
+	cfg := loop.Config{
+		Iterations:     1,
+		Prompt:         promptWithPlaceholders,
+		CommandBuilder: stdinCaptureBuilder,
+		SleepDuration:  1 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+
+	// Drain output
+	for msg := range l.Output() {
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+
+	// Read captured stdin
+	captured, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("Failed to read captured stdin: %v", err)
+	}
+
+	capturedStr := string(captured)
+	if !strings.Contains(capturedStr, "Run iteration 1 of 1") {
+		t.Errorf("Expected $loop_iteration and $loop_total to be substituted, got: %q", capturedStr)
+	}
+	if strings.Contains(capturedStr, "$loop_iteration") {
+		t.Error("$loop_iteration placeholder was not substituted")
+	}
+	if strings.Contains(capturedStr, "$loop_total") {
+		t.Error("$loop_total placeholder was not substituted")
+	}
+}
+
+func TestLoopIterationSubstitutionDoesNotAffectNormalPrompts(t *testing.T) {
+	// Create temp file for stdin capture
+	tmpFile, err := os.CreateTemp("", "ralph-stdin-capture-normal-*.txt")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	capturePath := tmpFile.Name()
+
+	stdinCaptureBuilder := func(ctx context.Context, prompt string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestHelperProcess", "--", "claude-stdin-capture")
+		cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1", "STDIN_CAPTURE_PATH="+capturePath)
+		return cmd
+	}
+
+	// A normal prompt without placeholders should pass through unchanged
+	normalPrompt := "Build the feature as described in the spec"
+
+	cfg := loop.Config{
+		Iterations:     1,
+		Prompt:         normalPrompt,
+		CommandBuilder: stdinCaptureBuilder,
+		SleepDuration:  1 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+
+	for msg := range l.Output() {
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+
+	captured, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("Failed to read captured stdin: %v", err)
+	}
+
+	if string(captured) != normalPrompt {
+		t.Errorf("Normal prompt should pass through unchanged, got: %q", string(captured))
 	}
 }
