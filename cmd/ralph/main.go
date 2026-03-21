@@ -193,6 +193,7 @@ func processLoopOutput(
 	loopOutput := claudeLoop.Output()
 	activeAgentIDs := make(map[string]bool)
 	var loopTotalTokens int64 // per-loop token tracking for tmux status bar
+	var iterEstimate float64  // per-iteration estimated cost from token counts
 
 	for {
 		select {
@@ -209,7 +210,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens, &iterEstimate)
 		}
 	}
 }
@@ -224,10 +225,11 @@ func processMessage(
 	program *tea.Program,
 	activeAgentIDs map[string]bool,
 	loopTotalTokens *int64,
+	iterEstimate *float64,
 ) {
 	switch msg.Type {
 	case "loop_marker":
-		handleLoopMarker(msg, msgChan, program, loopTotalTokens)
+		handleLoopMarker(msg, msgChan, program, loopTotalTokens, iterEstimate)
 
 	case "output":
 		// Try to parse as JSON first
@@ -237,7 +239,7 @@ func processMessage(
 			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 				claudeLoop.SetSessionID(sessionID)
 			}
-			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, loopTotalTokens)
+			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, loopTotalTokens, iterEstimate)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -266,7 +268,7 @@ func processMessage(
 
 // handleLoopMarker processes a loop_marker message for TUI mode.
 // Shared by processMessage, processPlanPhase, and processBuildPhase.
-func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64) {
+func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64, iterEstimate *float64) {
 	program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
 	// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED)
 	isLoopStart := strings.Contains(msg.Content, "LOOP") &&
@@ -275,6 +277,7 @@ func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea
 		!strings.Contains(msg.Content, "RESUMED")
 	if isLoopStart {
 		*loopTotalTokens = 0
+		*iterEstimate = 0
 		program.Send(tui.SendLoopStarted()())
 		program.Send(tui.SendLoopStatsUpdate(0)())
 	}
@@ -300,6 +303,7 @@ func handleParsedMessage(
 	program *tea.Program,
 	activeAgentIDs map[string]bool,
 	loopTotalTokens *int64,
+	iterEstimate *float64,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -320,6 +324,15 @@ func handleParsedMessage(
 			usage.CacheCreationInputTokens,
 			usage.CacheReadInputTokens,
 		)
+		// Estimate cost from token counts and update in real-time
+		estimate := stats.EstimateCostFromTokens(
+			usage.InputTokens,
+			usage.OutputTokens,
+			usage.CacheCreationInputTokens,
+			usage.CacheReadInputTokens,
+		)
+		tokenStats.AddCost(estimate)
+		*iterEstimate += estimate
 		program.Send(tui.SendStatsUpdate(tokenStats)())
 		// Also track per-loop tokens for tmux status bar
 		loopTokens := usage.InputTokens + usage.OutputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
@@ -327,9 +340,16 @@ func handleParsedMessage(
 		program.Send(tui.SendLoopStatsUpdate(*loopTotalTokens)())
 	}
 
-	// Extract cost from result messages
+	// Extract cost from result messages — reconcile estimate with actual
 	if cost := jsonParser.GetCost(parsed); cost > 0 {
-		tokenStats.AddCost(cost)
+		if !jsonParser.IsSubagentMessage(parsed) {
+			// Main iteration result: replace accumulated estimate with actual cost
+			tokenStats.ReconcileCost(*iterEstimate, cost)
+			*iterEstimate = 0
+		} else {
+			// Subagent result: add actual cost directly
+			tokenStats.AddCost(cost)
+		}
 		program.Send(tui.SendStatsUpdate(tokenStats)())
 	}
 
@@ -832,6 +852,7 @@ func processPlanPhase(
 	loopOutput := planLoop.Output()
 	activeAgentIDs := make(map[string]bool)
 	var loopTotalTokens int64
+	var iterEstimate float64
 
 	for {
 		select {
@@ -845,7 +866,7 @@ func processPlanPhase(
 
 			switch msg.Type {
 			case "loop_marker":
-				handleLoopMarker(msg, msgChan, program, &loopTotalTokens)
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate)
 
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
@@ -853,7 +874,7 @@ func processPlanPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						planLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
+					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens, &iterEstimate)
 				}
 
 			case "error":
@@ -887,6 +908,7 @@ func processBuildPhase(
 	loopOutput := buildLoop.Output()
 	activeAgentIDs := make(map[string]bool)
 	var loopTotalTokens int64
+	var iterEstimate float64
 
 	for {
 		select {
@@ -904,7 +926,7 @@ func processBuildPhase(
 
 			switch msg.Type {
 			case "loop_marker":
-				handleLoopMarker(msg, msgChan, program, &loopTotalTokens)
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate)
 
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
@@ -912,7 +934,7 @@ func processBuildPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						buildLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens)
+					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, activeAgentIDs, &loopTotalTokens, &iterEstimate)
 				}
 
 			case "error":
