@@ -531,6 +531,8 @@ func TestGetCost(t *testing.T) {
 		expected float64
 	}{
 		{"result with cost", `{"type":"result","total_cost_usd":0.000123}`, 0.000123},
+		{"result with cost_usd", `{"type":"result","cost_usd":0.000456}`, 0.000456},
+		{"result with both costs prefers total_cost_usd", `{"type":"result","total_cost_usd":0.000123,"cost_usd":0.000456}`, 0.000123},
 		{"result no cost", `{"type":"result"}`, 0},
 		{"assistant message", `{"type":"assistant"}`, 0},
 	}

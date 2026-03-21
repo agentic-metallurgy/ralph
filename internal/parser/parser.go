@@ -66,6 +66,7 @@ type ParsedMessage struct {
 	SessionID       string         `json:"session_id,omitempty"`
 	Message         *InnerMessage  `json:"message,omitempty"`
 	TotalCostUSD    float64        `json:"total_cost_usd,omitempty"`
+	CostUSD         float64        `json:"cost_usd,omitempty"`
 	ParentToolUseID *string        `json:"parent_tool_use_id,omitempty"`
 	IsError         bool           `json:"is_error,omitempty"`
 	Error           string         `json:"error,omitempty"`
@@ -290,7 +291,10 @@ func (p *Parser) GetCost(msg *ParsedMessage) float64 {
 	if msg == nil || msg.Type != MessageTypeResult {
 		return 0
 	}
-	return msg.TotalCostUSD
+	if msg.TotalCostUSD != 0 {
+		return msg.TotalCostUSD
+	}
+	return msg.CostUSD
 }
 
 // GetSessionID returns the session ID from a system message, or empty string if not present
