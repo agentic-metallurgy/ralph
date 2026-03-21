@@ -283,11 +283,7 @@ func processMessage(
 func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64, iterEstimate *float64) {
 	program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
 	// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED)
-	isLoopStart := strings.Contains(msg.Content, "LOOP") &&
-		!strings.Contains(msg.Content, "STOPPED") &&
-		!strings.Contains(msg.Content, "COMPLETED") &&
-		!strings.Contains(msg.Content, "RESUMED")
-	if isLoopStart {
+	if isNewLoopStart(msg.Content) {
 		*loopTotalTokens = 0
 		*iterEstimate = 0
 		program.Send(tui.SendLoopStarted()())
@@ -981,6 +977,15 @@ func processBuildPhase(
 			}
 		}
 	}
+}
+
+// isNewLoopStart returns true if content represents a new loop iteration start
+// (contains "LOOP" but not STOPPED/COMPLETED/RESUMED).
+func isNewLoopStart(content string) bool {
+	return strings.Contains(content, "LOOP") &&
+		!strings.Contains(content, "STOPPED") &&
+		!strings.Contains(content, "COMPLETED") &&
+		!strings.Contains(content, "RESUMED")
 }
 
 // parseTaskCounts reads an IMPLEMENTATION_PLAN.md file and returns the number of
