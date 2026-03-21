@@ -12,7 +12,7 @@ Ralph is a simple loop: it keeps asking the AI assistant to work on your project
 
 ## 3. Install Ralph
 ```bash
-brew tap agentic-metallurgy/ralph
+brew tap agentic-metallurgy/tap
 brew install ralph
 ```
 
@@ -42,16 +42,15 @@ ralph --iterations 10      # default prompt, specs/ folder, 10 passes
 Ralph streams Claude's work into the TUI immediately; you can quit early with `q` or `Ctrl+C`. Stats persist to `.ralph.claude_stats`, so the next run resumes the elapsed-time counter and usage totals.
 
 ## 7. Read the TUI
-The interface has three major regions:
-- **Status + Activity Feed**: The top panel shows `RUNNING` or `STOPPED`. Inside, every message line is tagged with an emoji (🤖 assistant, 🔧 tool use, 📝 tool result, 🚀 loop marker, 🛑 stop). You can watch when Claude enters/exits loops, issues shell commands, or runs tests.
-- **Usage & Cost Panel**: Bottom-left shows total tokens, per-direction counts, and cumulative USD spend. Updated live via the JSON parser.
-- **Loop Details + Control Panel**: Bottom-middle displays loop progress (e.g., 3/10) and elapsed time. Bottom-right lets you move with ↑/↓ between `Stop Loop`, `Start Loop`, and `Quit`, then press Enter to trigger that action.
+The interface has two major regions:
+- **Status + Activity Feed**: The top panel shows `RUNNING` or `STOPPED`. Inside, every message line is tagged with an emoji (🤖 assistant, 🔧 tool use, 📝 user, 💰 system/cost, 💭 thinking, 🚀 loop marker, 🛑 stop, 💤 rate-limit hibernation). You can watch when Claude enters/exits loops, issues shell commands, or runs tests.
+- **Footer**: Two side-by-side panels — "Usage & Cost" (tokens, per-direction counts, cumulative USD) on the left, "Loop Details" (progress e.g. 3/10, elapsed time) on the right. Below both panels sits a hotkey bar showing available controls.
 
 ## 8. Pause, Edit, Resume
-1. Press ↓ until `Stop Loop` is highlighted, hit Enter. Ralph cancels the in-flight iteration, swaps the status color to red, and freezes the timer.
+1. Press `p` to pause the loop. Ralph cancels the in-flight iteration, swaps the status color to red, and freezes the timer.
 2. Modify `specs/default.md`, edit or delete `IMPLEMENTATION_PLAN.md`, then save your changes.
 3. Stage code changes manually if you want Claude to see a clean diff.
-4. Press ↓ to `Start Loop`, Enter. Ralph resumes from the same iteration number (it repeats the interrupted pass).
+4. Press `r` or `s` to resume the loop. Ralph resumes from the same iteration number (it repeats the interrupted pass). You can also use `+`/`-` to adjust the remaining iteration count.
 
 This workflow lets you steer Claude tightly: capture regressions, adjust specs, and rerun after manual fixes.
 
