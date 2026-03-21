@@ -453,6 +453,7 @@ func handleParsedMessageCLI(
 	jsonParser *parser.Parser,
 	tokenStats *stats.TokenStats,
 	activeAgentIDs map[string]bool,
+	iterEstimate *float64,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -467,9 +468,26 @@ func handleParsedMessageCLI(
 			usage.CacheCreationInputTokens,
 			usage.CacheReadInputTokens,
 		)
+		// Estimate cost from token counts and update in real-time
+		estimate := stats.EstimateCostFromTokens(
+			usage.InputTokens,
+			usage.OutputTokens,
+			usage.CacheCreationInputTokens,
+			usage.CacheReadInputTokens,
+		)
+		tokenStats.AddCost(estimate)
+		*iterEstimate += estimate
 	}
+	// Extract cost from result messages — reconcile estimate with actual
 	if cost := jsonParser.GetCost(parsed); cost > 0 {
-		tokenStats.AddCost(cost)
+		if !jsonParser.IsSubagentMessage(parsed) {
+			// Main iteration result: replace accumulated estimate with actual cost
+			tokenStats.ReconcileCost(*iterEstimate, cost)
+			*iterEstimate = 0
+		} else {
+			// Subagent result: add actual cost directly
+			tokenStats.AddCost(cost)
+		}
 	}
 	// Track parallel subagents
 	prevCount := len(activeAgentIDs)
@@ -529,6 +547,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 
 	jsonParser := parser.NewParser()
 	activeAgentIDs := make(map[string]bool)
+	var iterEstimate float64
 
 	mode := "build"
 	if cfg.IsPlanMode() {
@@ -545,6 +564,14 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 
 		switch msg.Type {
 		case "loop_marker":
+			// Reset per-iteration estimate on new loop start
+			isLoopStart := strings.Contains(msg.Content, "LOOP") &&
+				!strings.Contains(msg.Content, "STOPPED") &&
+				!strings.Contains(msg.Content, "COMPLETED") &&
+				!strings.Contains(msg.Content, "RESUMED")
+			if isLoopStart {
+				iterEstimate = 0
+			}
 			fmt.Printf("[loop] %s\n", msg.Content)
 
 		case "output":
@@ -553,7 +580,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 				if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 					claudeLoop.SetSessionID(sessionID)
 				}
-				handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, activeAgentIDs)
+				handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, activeAgentIDs, &iterEstimate)
 			}
 
 		case "error":
@@ -606,6 +633,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 	planLoop.Start(ctx)
 
 	var sessionID string
+	var planIterEstimate float64
 
 	// Process plan loop output
 	for msg := range planLoop.Output() {
@@ -617,6 +645,13 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 
 		switch msg.Type {
 		case "loop_marker":
+			isLoopStart := strings.Contains(msg.Content, "LOOP") &&
+				!strings.Contains(msg.Content, "STOPPED") &&
+				!strings.Contains(msg.Content, "COMPLETED") &&
+				!strings.Contains(msg.Content, "RESUMED")
+			if isLoopStart {
+				planIterEstimate = 0
+			}
 			fmt.Printf("[loop] %s\n", msg.Content)
 
 		case "output":
@@ -626,7 +661,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 					planLoop.SetSessionID(sid)
 					sessionID = sid
 				}
-				handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, activeAgentIDs)
+				handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, activeAgentIDs, &planIterEstimate)
 			}
 
 		case "error":
@@ -670,6 +705,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 
 	// Reset agent tracking for build phase
 	activeAgentIDs = make(map[string]bool)
+	var buildIterEstimate float64
 
 	// Process build loop output
 	for msg := range buildLoop.Output() {
@@ -681,6 +717,13 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 
 		switch msg.Type {
 		case "loop_marker":
+			isLoopStart := strings.Contains(msg.Content, "LOOP") &&
+				!strings.Contains(msg.Content, "STOPPED") &&
+				!strings.Contains(msg.Content, "COMPLETED") &&
+				!strings.Contains(msg.Content, "RESUMED")
+			if isLoopStart {
+				buildIterEstimate = 0
+			}
 			fmt.Printf("[loop] %s\n", msg.Content)
 
 		case "output":
@@ -689,7 +732,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats) int {
 				if sid := jsonParser.GetSessionID(parsed); sid != "" {
 					buildLoop.SetSessionID(sid)
 				}
-				handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, activeAgentIDs)
+				handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, activeAgentIDs, &buildIterEstimate)
 			}
 
 		case "error":
