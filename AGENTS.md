@@ -11,7 +11,7 @@
 - `internal/loop/` — Claude CLI execution loop (start/stop/pause/resume)
 - `internal/parser/` — stream-json output parser
 - `internal/prompt/` — embedded prompt loader (assets/prompt.md, assets/plan_prompt.md)
-- `internal/stats/` — token usage tracking, persistence (.claude_stats)
+- `internal/stats/` — token usage tracking, persistence (.ralph.claude_stats)
 - `internal/tmux/` — auto-wrap in tmux session
 - `internal/tui/` — BubbleTea TUI (activity panel, footer, hotkeys)
 - `tests/` — all test files

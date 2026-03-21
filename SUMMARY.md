@@ -14,7 +14,7 @@ Ralph repeatedly invokes the `claude` CLI in a loop (defaulting to 5 iterations)
 
 3. **Terminal UI** (`internal/tui/`): A full-screen TUI built with Bubble Tea and Lip Gloss (Tokyo Night theme). Displays a live activity feed of Claude's actions, a usage/cost panel, loop progress, elapsed time, and a control panel for stopping/resuming the loop.
 
-4. **Stats Tracker** (`internal/stats/`): Tracks cumulative token usage (input, output, cache) and cost across iterations, persisted to a `.claude_stats` JSON file between sessions.
+4. **Stats Tracker** (`internal/stats/`): Tracks cumulative token usage (input, output, cache) and cost across iterations, persisted to a `.ralph.claude_stats` JSON file between sessions.
 
 5. **Prompt Loader** (`internal/prompt/`): Loads the loop prompt from an embedded default (`prompt.md`) or from a user-provided override file.
 

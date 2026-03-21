@@ -20,7 +20,7 @@ import (
 	"github.com/cloudosai/ralph-go/internal/tui"
 )
 
-const statsFilePath = ".claude_stats"
+const statsFilePath = ".ralph.claude_stats"
 const logFilePath = ".ralph.log"
 const planFilePath = "IMPLEMENTATION_PLAN.md"
 

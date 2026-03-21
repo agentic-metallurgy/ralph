@@ -12,8 +12,8 @@
 *.test
 coverage.out
 
-# Stats file (persisted state)
-.claude_stats
+# Runtime files (stats, logs)
+.ralph.*
 
 # OS files
 .DS_Store
