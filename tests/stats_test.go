@@ -1,10 +1,16 @@
 package tests
 
 import (
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/cloudosai/ralph-go/internal/stats"
 )
@@ -649,5 +655,570 @@ func TestFormatTokens(t *testing.T) {
 				t.Errorf("FormatTokens(%d) = %q, expected %q", tt.count, result, tt.expected)
 			}
 		})
+	}
+}
+
+// --- DB Tests ---
+
+// helperInitTestDB creates a temp DB and returns it along with a cleanup function.
+func helperInitTestDB(t *testing.T) (*sql.DB, func()) {
+	t.Helper()
+	tmpDir, err := os.MkdirTemp("", "ralph-db-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	dbPath := filepath.Join(tmpDir, "test_stats.db")
+	db, err := stats.InitDB(dbPath)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		t.Fatalf("Failed to init DB: %v", err)
+	}
+	cleanup := func() {
+		db.Close()
+		os.RemoveAll(tmpDir)
+	}
+	return db, cleanup
+}
+
+func TestGenerateSessionID(t *testing.T) {
+	hexPattern := regexp.MustCompile(`^[0-9a-f]{6}$`)
+	seen := make(map[string]bool)
+
+	for i := 0; i < 10; i++ {
+		id, err := stats.GenerateSessionID()
+		if err != nil {
+			t.Fatalf("GenerateSessionID() returned error: %v", err)
+		}
+		if !hexPattern.MatchString(id) {
+			t.Errorf("GenerateSessionID() = %q, want 6 lowercase hex chars", id)
+		}
+		if seen[id] {
+			t.Errorf("GenerateSessionID() produced duplicate: %q", id)
+		}
+		seen[id] = true
+	}
+}
+
+func TestInitDB(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "ralph-db-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test_stats.db")
+
+	db, err := stats.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer db.Close()
+
+	// Verify tables exist
+	tables := make(map[string]bool)
+	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table'")
+	if err != nil {
+		t.Fatalf("Failed to query tables: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("Failed to scan table name: %v", err)
+		}
+		tables[name] = true
+	}
+
+	if !tables["checkpoints"] {
+		t.Error("Expected 'checkpoints' table to exist")
+	}
+	if !tables["loop_stats"] {
+		t.Error("Expected 'loop_stats' table to exist")
+	}
+
+	// Verify WAL mode
+	var journalMode string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("Failed to query journal_mode: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Errorf("Expected journal_mode 'wal', got %q", journalMode)
+	}
+
+	// Test idempotency — calling InitDB again on the same path should succeed
+	db.Close()
+	db2, err := stats.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("Second InitDB call failed (idempotency): %v", err)
+	}
+	db2.Close()
+}
+
+func TestInitDB_PrunesOldRows(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "ralph-db-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test_stats.db")
+
+	db, err := stats.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+
+	// Insert an old checkpoint row (8 days ago)
+	oldTimestamp := time.Now().UTC().Add(-8 * 24 * time.Hour).Format(time.RFC3339)
+	_, err = db.Exec(
+		`INSERT INTO checkpoints (loop_id, session_id, owner, repo, branch, delta_cost, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"old-1", "aaaaaa", "test", "repo", "main", 1.0, oldTimestamp,
+	)
+	if err != nil {
+		t.Fatalf("Failed to insert old row: %v", err)
+	}
+
+	// Also insert a recent row that should survive
+	recentTimestamp := time.Now().UTC().Format(time.RFC3339)
+	_, err = db.Exec(
+		`INSERT INTO checkpoints (loop_id, session_id, owner, repo, branch, delta_cost, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"recent-1", "bbbbbb", "test", "repo", "main", 2.0, recentTimestamp,
+	)
+	if err != nil {
+		t.Fatalf("Failed to insert recent row: %v", err)
+	}
+
+	db.Close()
+
+	// Re-init DB — should prune the old row
+	db2, err := stats.InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("Second InitDB failed: %v", err)
+	}
+	defer db2.Close()
+
+	var count int
+	if err := db2.QueryRow("SELECT COUNT(*) FROM checkpoints WHERE loop_id = 'old-1'").Scan(&count); err != nil {
+		t.Fatalf("Failed to query old row: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("Expected old row to be pruned, but found %d rows", count)
+	}
+
+	// Recent row should still be there
+	if err := db2.QueryRow("SELECT COUNT(*) FROM checkpoints WHERE loop_id = 'recent-1'").Scan(&count); err != nil {
+		t.Fatalf("Failed to query recent row: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Expected recent row to survive, but found %d rows", count)
+	}
+}
+
+func TestFlushCheckpoint(t *testing.T) {
+	db, cleanup := helperInitTestDB(t)
+	defer cleanup()
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	p := stats.CheckpointParams{
+		LoopID:            "abc123-1",
+		SessionID:         "abc123",
+		Owner:             "testowner",
+		Repo:              "testrepo",
+		Branch:            "main",
+		DeltaCost:         0.05,
+		DeltaInputTokens:  1000,
+		DeltaOutputTokens: 500,
+		DeltaCacheCreation: 200,
+		DeltaCacheRead:    100,
+		Timestamp:         ts,
+	}
+
+	if err := stats.FlushCheckpoint(db, p); err != nil {
+		t.Fatalf("FlushCheckpoint failed: %v", err)
+	}
+
+	// Query and verify
+	var loopID string
+	var deltaCost float64
+	var deltaInput int64
+	var timestamp string
+	err := db.QueryRow("SELECT loop_id, delta_cost, delta_input_tokens, timestamp FROM checkpoints WHERE loop_id = ?", "abc123-1").
+		Scan(&loopID, &deltaCost, &deltaInput, &timestamp)
+	if err != nil {
+		t.Fatalf("Failed to query checkpoint: %v", err)
+	}
+	if loopID != "abc123-1" {
+		t.Errorf("Expected loop_id 'abc123-1', got %q", loopID)
+	}
+	if deltaCost != 0.05 {
+		t.Errorf("Expected delta_cost 0.05, got %f", deltaCost)
+	}
+	if deltaInput != 1000 {
+		t.Errorf("Expected delta_input_tokens 1000, got %d", deltaInput)
+	}
+	if timestamp != ts {
+		t.Errorf("Expected timestamp %q, got %q", ts, timestamp)
+	}
+}
+
+func TestFlushCheckpoint_NilDB(t *testing.T) {
+	err := stats.FlushCheckpoint(nil, stats.CheckpointParams{
+		LoopID:    "test-1",
+		SessionID: "test00",
+		DeltaCost: 1.0,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		t.Errorf("FlushCheckpoint(nil, ...) should return nil, got %v", err)
+	}
+}
+
+func TestWriteLoopStats(t *testing.T) {
+	db, cleanup := helperInitTestDB(t)
+	defer cleanup()
+
+	p := stats.LoopStatsParams{
+		LoopID:              "abc123-1",
+		SessionID:           "abc123",
+		Owner:               "testowner",
+		Repo:                "testrepo",
+		Branch:              "main",
+		Description:         "feat: add widget",
+		TotalCost:           0.25,
+		InputTokens:         5000,
+		OutputTokens:        2000,
+		CacheCreationTokens: 500,
+		CacheReadTokens:     300,
+		TotalTokens:         7800,
+		StartTime:           "2026-03-22T10:00:00Z",
+		FinishTime:          "2026-03-22T10:05:00Z",
+	}
+
+	if err := stats.WriteLoopStats(db, p); err != nil {
+		t.Fatalf("WriteLoopStats failed: %v", err)
+	}
+
+	// Verify all fields
+	var loopID, sessID, owner, repo, branch, desc, startTime, finishTime string
+	var totalCost float64
+	var input, output, cacheCreation, cacheRead, total int64
+	err := db.QueryRow("SELECT * FROM loop_stats WHERE loop_id = ?", "abc123-1").
+		Scan(&loopID, &sessID, &owner, &repo, &branch, &desc, &totalCost,
+			&input, &output, &cacheCreation, &cacheRead, &total, &startTime, &finishTime)
+	if err != nil {
+		t.Fatalf("Failed to query loop_stats: %v", err)
+	}
+	if desc != "feat: add widget" {
+		t.Errorf("Expected description 'feat: add widget', got %q", desc)
+	}
+	if totalCost != 0.25 {
+		t.Errorf("Expected total_cost 0.25, got %f", totalCost)
+	}
+	if input != 5000 {
+		t.Errorf("Expected input_tokens 5000, got %d", input)
+	}
+
+	// Test INSERT OR REPLACE — update with different total_cost
+	p.TotalCost = 0.50
+	if err := stats.WriteLoopStats(db, p); err != nil {
+		t.Fatalf("WriteLoopStats (replace) failed: %v", err)
+	}
+
+	err = db.QueryRow("SELECT total_cost FROM loop_stats WHERE loop_id = ?", "abc123-1").Scan(&totalCost)
+	if err != nil {
+		t.Fatalf("Failed to query after replace: %v", err)
+	}
+	if totalCost != 0.50 {
+		t.Errorf("Expected updated total_cost 0.50, got %f", totalCost)
+	}
+
+	// Verify only one row exists (INSERT OR REPLACE, not INSERT)
+	var count int
+	db.QueryRow("SELECT COUNT(*) FROM loop_stats WHERE loop_id = ?", "abc123-1").Scan(&count)
+	if count != 1 {
+		t.Errorf("Expected 1 row after INSERT OR REPLACE, got %d", count)
+	}
+}
+
+func TestWriteLoopStats_NilDB(t *testing.T) {
+	err := stats.WriteLoopStats(nil, stats.LoopStatsParams{
+		LoopID:    "test-1",
+		SessionID: "test00",
+	})
+	if err != nil {
+		t.Errorf("WriteLoopStats(nil, ...) should return nil, got %v", err)
+	}
+}
+
+func TestQueryCalendarHourCost_Global(t *testing.T) {
+	db, cleanup := helperInitTestDB(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	ts := now.Format(time.RFC3339)
+
+	// Insert 3 checkpoint rows with known delta_costs
+	for i, cost := range []float64{0.10, 0.20, 0.30} {
+		err := stats.FlushCheckpoint(db, stats.CheckpointParams{
+			LoopID:    fmt.Sprintf("sess-1-%d", i),
+			SessionID: "sess01",
+			DeltaCost: cost,
+			Timestamp: ts,
+		})
+		if err != nil {
+			t.Fatalf("FlushCheckpoint failed: %v", err)
+		}
+	}
+
+	total, err := stats.QueryCalendarHourCost(db, "", "")
+	if err != nil {
+		t.Fatalf("QueryCalendarHourCost failed: %v", err)
+	}
+
+	expected := 0.60
+	tolerance := 0.0001
+	if diff := total - expected; diff < -tolerance || diff > tolerance {
+		t.Errorf("Expected global cost ~%f, got %f", expected, total)
+	}
+}
+
+func TestQueryCalendarHourCost_Scoped(t *testing.T) {
+	db, cleanup := helperInitTestDB(t)
+	defer cleanup()
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+
+	// Insert rows for two different repos
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "a-1", SessionID: "aaaaaa", Owner: "org1", Repo: "repo1", DeltaCost: 0.10, Timestamp: ts,
+	})
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "a-2", SessionID: "aaaaaa", Owner: "org1", Repo: "repo1", DeltaCost: 0.20, Timestamp: ts,
+	})
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "b-1", SessionID: "bbbbbb", Owner: "org2", Repo: "repo2", DeltaCost: 0.50, Timestamp: ts,
+	})
+
+	// Scoped to org1/repo1
+	cost, err := stats.QueryCalendarHourCost(db, "org1", "repo1")
+	if err != nil {
+		t.Fatalf("QueryCalendarHourCost scoped failed: %v", err)
+	}
+	expected := 0.30
+	tolerance := 0.0001
+	if diff := cost - expected; diff < -tolerance || diff > tolerance {
+		t.Errorf("Expected scoped cost ~%f, got %f", expected, cost)
+	}
+
+	// Scoped to org2/repo2
+	cost, err = stats.QueryCalendarHourCost(db, "org2", "repo2")
+	if err != nil {
+		t.Fatalf("QueryCalendarHourCost scoped failed: %v", err)
+	}
+	expected = 0.50
+	if diff := cost - expected; diff < -tolerance || diff > tolerance {
+		t.Errorf("Expected scoped cost ~%f, got %f", expected, cost)
+	}
+}
+
+func TestQueryCalendarHourCost_ExcludesOldRows(t *testing.T) {
+	db, cleanup := helperInitTestDB(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	oldTs := now.Add(-2 * time.Hour).Format(time.RFC3339)
+	currentTs := now.Format(time.RFC3339)
+
+	// Old row (2 hours ago)
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "old-1", SessionID: "aaaaaa", DeltaCost: 99.0, Timestamp: oldTs,
+	})
+	// Current row
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "new-1", SessionID: "bbbbbb", DeltaCost: 0.25, Timestamp: currentTs,
+	})
+
+	cost, err := stats.QueryCalendarHourCost(db, "", "")
+	if err != nil {
+		t.Fatalf("QueryCalendarHourCost failed: %v", err)
+	}
+
+	// Should only include the current-hour row
+	tolerance := 0.0001
+	if diff := cost - 0.25; diff < -tolerance || diff > tolerance {
+		t.Errorf("Expected cost ~0.25 (excluding old row), got %f", cost)
+	}
+}
+
+func TestConcurrentCheckpointAppends(t *testing.T) {
+	db, cleanup := helperInitTestDB(t)
+	defer cleanup()
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	var wg sync.WaitGroup
+	n := 10
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			err := stats.FlushCheckpoint(db, stats.CheckpointParams{
+				LoopID:    fmt.Sprintf("conc-%d", idx),
+				SessionID: "cccccc",
+				DeltaCost: float64(idx) * 0.01,
+				Timestamp: ts,
+			})
+			if err != nil {
+				t.Errorf("Concurrent FlushCheckpoint %d failed: %v", idx, err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify all rows are present
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM checkpoints WHERE session_id = 'cccccc'").Scan(&count); err != nil {
+		t.Fatalf("Failed to count rows: %v", err)
+	}
+	if count != n {
+		t.Errorf("Expected %d rows from concurrent appends, got %d", n, count)
+	}
+}
+
+func TestGetGitContext(t *testing.T) {
+	// In a git repo (current dir), should return without panic
+	owner, repo, branch := stats.GetGitContext()
+	// We don't assert specific values since it depends on the environment,
+	// but in this repo we expect non-empty values
+	t.Logf("GetGitContext: owner=%q repo=%q branch=%q", owner, repo, branch)
+
+	// Test in a non-git temp dir — should return empty strings without error
+	tmpDir, err := os.MkdirTemp("", "ralph-nogit-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Save and restore working dir
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	owner2, repo2, branch2 := stats.GetGitContext()
+	// In a non-git dir, all should be empty
+	if owner2 != "" || repo2 != "" || branch2 != "" {
+		t.Logf("Non-git dir returned: owner=%q repo=%q branch=%q (expected empty)", owner2, repo2, branch2)
+	}
+}
+
+func TestExportSessionTSV(t *testing.T) {
+	db, cleanup := helperInitTestDB(t)
+	defer cleanup()
+
+	// Write 2 loop_stats rows for the same session
+	stats.WriteLoopStats(db, stats.LoopStatsParams{
+		LoopID:              "abc123-1",
+		SessionID:           "abc123",
+		Owner:               "myorg",
+		Repo:                "myrepo",
+		Branch:              "main",
+		Description:         "feat: first loop",
+		TotalCost:           0.10,
+		InputTokens:         1000,
+		OutputTokens:        500,
+		CacheCreationTokens: 100,
+		CacheReadTokens:     50,
+		TotalTokens:         1650,
+		StartTime:           "2026-03-22T10:00:00Z",
+		FinishTime:          "2026-03-22T10:02:00Z",
+	})
+	stats.WriteLoopStats(db, stats.LoopStatsParams{
+		LoopID:              "abc123-2",
+		SessionID:           "abc123",
+		Owner:               "myorg",
+		Repo:                "myrepo",
+		Branch:              "main",
+		Description:         "feat: second loop",
+		TotalCost:           0.20,
+		InputTokens:         2000,
+		OutputTokens:        1000,
+		CacheCreationTokens: 200,
+		CacheReadTokens:     100,
+		TotalTokens:         3300,
+		StartTime:           "2026-03-22T10:02:00Z",
+		FinishTime:          "2026-03-22T10:05:00Z",
+	})
+
+	// Also write a row for a different session — should not appear
+	stats.WriteLoopStats(db, stats.LoopStatsParams{
+		LoopID:    "other-1",
+		SessionID: "other0",
+		TotalCost: 9.99,
+		StartTime: "2026-03-22T10:00:00Z",
+		FinishTime: "2026-03-22T10:01:00Z",
+	})
+
+	tsv, err := stats.ExportSessionTSV(db, "abc123")
+	if err != nil {
+		t.Fatalf("ExportSessionTSV failed: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(tsv), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("Expected 3 lines (1 header + 2 data), got %d: %q", len(lines), tsv)
+	}
+
+	// Verify header
+	if !strings.HasPrefix(lines[0], "loop_id\tsession_id\t") {
+		t.Errorf("Expected TSV header to start with 'loop_id\\tsession_id\\t', got %q", lines[0])
+	}
+
+	// Verify data lines contain correct loop_ids
+	if !strings.HasPrefix(lines[1], "abc123-1\t") {
+		t.Errorf("Expected first data line to start with 'abc123-1', got %q", lines[1])
+	}
+	if !strings.HasPrefix(lines[2], "abc123-2\t") {
+		t.Errorf("Expected second data line to start with 'abc123-2', got %q", lines[2])
+	}
+
+	// Verify the "other" session is not included
+	if strings.Contains(tsv, "other-1") {
+		t.Error("TSV should not contain rows from other sessions")
+	}
+}
+
+func TestExportSessionTSV_EmptySession(t *testing.T) {
+	db, cleanup := helperInitTestDB(t)
+	defer cleanup()
+
+	tsv, err := stats.ExportSessionTSV(db, "nonexistent")
+	if err != nil {
+		t.Fatalf("ExportSessionTSV failed: %v", err)
+	}
+	if tsv != "" {
+		t.Errorf("Expected empty string for non-existent session, got %q", tsv)
+	}
+}
+
+func TestQueryCalendarHourCost_NilDB(t *testing.T) {
+	cost, err := stats.QueryCalendarHourCost(nil, "", "")
+	if err != nil {
+		t.Errorf("QueryCalendarHourCost(nil, ...) should return nil error, got %v", err)
+	}
+	if cost != 0 {
+		t.Errorf("QueryCalendarHourCost(nil, ...) should return 0, got %f", cost)
+	}
+}
+
+func TestExportSessionTSV_NilDB(t *testing.T) {
+	tsv, err := stats.ExportSessionTSV(nil, "abc123")
+	if err != nil {
+		t.Errorf("ExportSessionTSV(nil, ...) should return nil error, got %v", err)
+	}
+	if tsv != "" {
+		t.Errorf("ExportSessionTSV(nil, ...) should return empty string, got %q", tsv)
 	}
 }
