@@ -247,9 +247,18 @@ func InitDB(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
+	// SQLite only supports one concurrent writer. Limiting to a single open
+	// connection lets Go's pool serialize writes instead of hitting SQLITE_BUSY.
+	db.SetMaxOpenConns(1)
+
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("setting WAL mode: %w", err)
+	}
+
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("setting busy timeout: %w", err)
 	}
 
 	const createCheckpoints = `CREATE TABLE IF NOT EXISTS checkpoints (
