@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -22,6 +24,164 @@ import (
 
 const statsFilePath = ".ralph.claude_stats"
 const logFilePath = ".ralph.log"
+
+// dbContext holds database connection and session metadata for stats tracking.
+type dbContext struct {
+	db        *sql.DB
+	sessionID string
+	owner     string
+	repo      string
+	branch    string
+}
+
+// loopTracker tracks per-loop state for DB checkpoint flushing.
+type loopTracker struct {
+	currentLoopID   string
+	loopStartTime   time.Time
+	loopStartCost   float64
+	loopStartSnap   stats.TokenStats
+	lastFlushedCost float64
+	lastFlushedSnap stats.TokenStats
+}
+
+// expandDBPath returns the full path to the stats database (~/.ralph/ralph_stats.db).
+func expandDBPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".ralph", "ralph_stats.db")
+}
+
+// initDBContext initializes the database and session context. Best-effort: returns
+// a dbContext with nil db on any error so callers can proceed without stats.
+func initDBContext() *dbContext {
+	dbPath := expandDBPath()
+	if dbPath == "" {
+		fmt.Fprintf(os.Stderr, "Warning: Could not determine home directory for stats DB\n")
+		return &dbContext{}
+	}
+
+	db, err := stats.InitDB(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not initialize stats DB: %v\n", err)
+		return &dbContext{}
+	}
+
+	sessionID, err := stats.GenerateSessionID()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not generate session ID: %v\n", err)
+		sessionID = "000000"
+	}
+
+	owner, repo, branch := stats.GetGitContext()
+
+	return &dbContext{
+		db:        db,
+		sessionID: sessionID,
+		owner:     owner,
+		repo:      repo,
+		branch:    branch,
+	}
+}
+
+// exportSessionTSV exports session stats as TSV and writes to a file in the current directory.
+func exportSessionTSV(dbCtx *dbContext) {
+	if dbCtx == nil || dbCtx.db == nil {
+		return
+	}
+	tsv, err := stats.ExportSessionTSV(dbCtx.db, dbCtx.sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not export session TSV: %v\n", err)
+		return
+	}
+	if tsv == "" {
+		return
+	}
+	filename := dbCtx.sessionID + ".tsv"
+	if err := os.WriteFile(filename, []byte(tsv), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not write TSV file: %v\n", err)
+	}
+}
+
+// startNewLoop completes the previous loop (if any) and begins tracking a new one.
+func (lt *loopTracker) startNewLoop(dbCtx *dbContext, tokenStats *stats.TokenStats, loopNum int) {
+	if lt.currentLoopID != "" {
+		lt.completeLoop(dbCtx, tokenStats)
+	}
+	snap := tokenStats.Snapshot()
+	lt.currentLoopID = fmt.Sprintf("%s-%d", dbCtx.sessionID, loopNum)
+	lt.loopStartTime = time.Now().UTC()
+	lt.loopStartCost = snap.TotalCostUSD
+	lt.loopStartSnap = snap
+	lt.lastFlushedCost = snap.TotalCostUSD
+	lt.lastFlushedSnap = snap
+}
+
+// flushDelta computes delta stats since last flush and writes a checkpoint row.
+func (lt *loopTracker) flushDelta(dbCtx *dbContext, tokenStats *stats.TokenStats) {
+	if dbCtx == nil || dbCtx.db == nil || lt.currentLoopID == "" {
+		return
+	}
+	snap := tokenStats.Snapshot()
+	deltaCost := snap.TotalCostUSD - lt.lastFlushedCost
+	deltaInput := snap.InputTokens - lt.lastFlushedSnap.InputTokens
+	if deltaCost <= 0 && deltaInput == 0 {
+		return
+	}
+	err := stats.FlushCheckpoint(dbCtx.db, stats.CheckpointParams{
+		LoopID:             lt.currentLoopID,
+		SessionID:          dbCtx.sessionID,
+		Owner:              dbCtx.owner,
+		Repo:               dbCtx.repo,
+		Branch:             dbCtx.branch,
+		DeltaCost:          deltaCost,
+		DeltaInputTokens:   snap.InputTokens - lt.lastFlushedSnap.InputTokens,
+		DeltaOutputTokens:  snap.OutputTokens - lt.lastFlushedSnap.OutputTokens,
+		DeltaCacheCreation: snap.CacheCreationTokens - lt.lastFlushedSnap.CacheCreationTokens,
+		DeltaCacheRead:     snap.CacheReadTokens - lt.lastFlushedSnap.CacheReadTokens,
+		Timestamp:          time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: checkpoint flush failed: %v\n", err)
+	}
+	lt.lastFlushedCost = snap.TotalCostUSD
+	lt.lastFlushedSnap = snap
+}
+
+// completeLoop flushes remaining delta and writes the loop_stats summary row.
+func (lt *loopTracker) completeLoop(dbCtx *dbContext, tokenStats *stats.TokenStats) {
+	if dbCtx == nil || dbCtx.db == nil || lt.currentLoopID == "" {
+		return
+	}
+	lt.flushDelta(dbCtx, tokenStats)
+	snap := tokenStats.Snapshot()
+	now := time.Now().UTC().Format(time.RFC3339)
+	loopInput := snap.InputTokens - lt.loopStartSnap.InputTokens
+	loopOutput := snap.OutputTokens - lt.loopStartSnap.OutputTokens
+	loopCacheCreation := snap.CacheCreationTokens - lt.loopStartSnap.CacheCreationTokens
+	loopCacheRead := snap.CacheReadTokens - lt.loopStartSnap.CacheReadTokens
+	err := stats.WriteLoopStats(dbCtx.db, stats.LoopStatsParams{
+		LoopID:              lt.currentLoopID,
+		SessionID:           dbCtx.sessionID,
+		Owner:               dbCtx.owner,
+		Repo:                dbCtx.repo,
+		Branch:              dbCtx.branch,
+		Description:         stats.GetLatestCommitTitle(),
+		TotalCost:           snap.TotalCostUSD - lt.loopStartCost,
+		InputTokens:         loopInput,
+		OutputTokens:        loopOutput,
+		CacheCreationTokens: loopCacheCreation,
+		CacheReadTokens:     loopCacheRead,
+		TotalTokens:         loopInput + loopOutput + loopCacheCreation + loopCacheRead,
+		StartTime:           lt.loopStartTime.Format(time.RFC3339),
+		FinishTime:          now,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: loop stats write failed: %v\n", err)
+	}
+	lt.currentLoopID = ""
+}
 
 func main() {
 	// Parse command-line flags and get configuration
@@ -127,6 +287,12 @@ func main() {
 		tokenStats = stats.NewTokenStats()
 	}
 
+	// Initialize DB context for stats tracking (best-effort)
+	dbCtx := initDBContext()
+	if dbCtx.db != nil {
+		defer dbCtx.db.Close()
+	}
+
 	// Open log file (truncated each run); fall back to io.Discard on error
 	var logFile io.Writer
 	logFileHandle, err := os.Create(logFilePath)
@@ -142,22 +308,24 @@ func main() {
 	if cfg.CLI {
 		var exitCode int
 		if cfg.IsPlanAndBuildMode() {
-			exitCode = runPlanAndBuildCLI(cfg, tokenStats, logFile)
+			exitCode = runPlanAndBuildCLI(cfg, tokenStats, logFile, dbCtx)
 		} else {
-			exitCode = runCLI(cfg, promptContent, tokenStats, logFile)
+			exitCode = runCLI(cfg, promptContent, tokenStats, logFile, dbCtx)
 		}
 		if err := tokenStats.Save(statsFilePath); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
 		}
+		exportSessionTSV(dbCtx)
 		os.Exit(exitCode)
 	}
 
 	// Plan-and-build mode: run planning (1 iteration) then building (N iterations) in single TUI session
 	if cfg.IsPlanAndBuildMode() {
-		runPlanAndBuild(cfg, tokenStats, logFile)
+		runPlanAndBuild(cfg, tokenStats, logFile, dbCtx)
 		if err := tokenStats.Save(statsFilePath); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
 		}
+		exportSessionTSV(dbCtx)
 		return
 	}
 
@@ -218,7 +386,7 @@ func main() {
 	jsonParser := parser.NewParser()
 
 	// Start the processing goroutine
-	go processLoopOutput(ctx, claudeLoop, jsonParser, tokenStats, msgChan, doneChan, program, logFile)
+	go processLoopOutput(ctx, claudeLoop, jsonParser, tokenStats, msgChan, doneChan, program, logFile, dbCtx)
 
 	// Start the loop execution
 	claudeLoop.Start(ctx)
@@ -233,6 +401,7 @@ func main() {
 	if err := tokenStats.Save(statsFilePath); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
 	}
+	exportSessionTSV(dbCtx)
 }
 
 // processLoopOutput reads from the loop's output channel, parses JSON, and updates the TUI
@@ -245,20 +414,30 @@ func processLoopOutput(
 	doneChan chan struct{},
 	program *tea.Program,
 	logFile io.Writer,
+	dbCtx *dbContext,
 ) {
 	defer close(msgChan)
 
 	loopOutput := claudeLoop.Output()
 	var loopTotalTokens int64 // per-loop token tracking for tmux status bar
 	var iterEstimate float64  // per-iteration estimated cost from token counts
+	lt := &loopTracker{}
+
+	// Start per-minute checkpoint ticker
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			lt.completeLoop(dbCtx, tokenStats)
 			return
+		case <-ticker.C:
+			lt.flushDelta(dbCtx, tokenStats)
 		case msg, ok := <-loopOutput:
 			if !ok {
 				// Loop has finished
+				lt.completeLoop(dbCtx, tokenStats)
 				select {
 				case <-doneChan:
 				default:
@@ -267,7 +446,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, dbCtx, lt)
 		}
 	}
 }
@@ -283,10 +462,12 @@ func processMessage(
 	loopTotalTokens *int64,
 	logFile io.Writer,
 	iterEstimate *float64,
+	dbCtx *dbContext,
+	lt *loopTracker,
 ) {
 	switch msg.Type {
 	case "loop_marker":
-		handleLoopMarker(msg, msgChan, program, loopTotalTokens, iterEstimate)
+		handleLoopMarker(msg, msgChan, program, loopTotalTokens, iterEstimate, dbCtx, lt, tokenStats)
 
 	case "output":
 		// Try to parse as JSON first
@@ -312,6 +493,7 @@ func processMessage(
 		}
 
 	case "complete":
+		lt.completeLoop(dbCtx, tokenStats)
 		msgChan <- tui.Message{
 			Role:    tui.RoleSystem,
 			Content: msg.Content,
@@ -325,10 +507,11 @@ func processMessage(
 
 // handleLoopMarker processes a loop_marker message for TUI mode.
 // Shared by processMessage, processPlanPhase, and processBuildPhase.
-func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64, iterEstimate *float64) {
+func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64, iterEstimate *float64, dbCtx *dbContext, lt *loopTracker, tokenStats *stats.TokenStats) {
 	program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
 	// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED)
 	if isNewLoopStart(msg.Content) {
+		lt.startNewLoop(dbCtx, tokenStats, msg.Loop)
 		*loopTotalTokens = 0
 		*iterEstimate = 0
 		program.Send(tui.SendLoopStarted()())
@@ -556,7 +739,7 @@ func handleParsedMessageCLI(
 }
 
 // runCLI runs ralph in CLI mode: no TUI, output to stdout/stderr, exit on completion.
-func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenStats, logFile io.Writer) int {
+func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenStats, logFile io.Writer, dbCtx *dbContext) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -577,6 +760,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 
 	jsonParser := parser.NewParser()
 	var iterEstimate float64
+	lt := &loopTracker{}
 
 	mode := "build"
 	if cfg.IsPlanMode() {
@@ -586,51 +770,58 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 	}
 	fmt.Printf("ralph cli: starting %s mode with %d iterations\n", mode, cfg.Iterations)
 
-	for msg := range claudeLoop.Output() {
+	// Start per-minute checkpoint ticker
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	loopOutput := claudeLoop.Output()
+	for {
 		select {
 		case <-ctx.Done():
+			lt.completeLoop(dbCtx, tokenStats)
 			return 1
-		default:
-		}
-
-		switch msg.Type {
-		case "loop_marker":
-			// Reset per-iteration estimate on new loop start
-			isLoopStart := strings.Contains(msg.Content, "LOOP") &&
-				!strings.Contains(msg.Content, "STOPPED") &&
-				!strings.Contains(msg.Content, "COMPLETED") &&
-				!strings.Contains(msg.Content, "RESUMED")
-			if isLoopStart {
-				iterEstimate = 0
+		case <-ticker.C:
+			lt.flushDelta(dbCtx, tokenStats)
+		case msg, ok := <-loopOutput:
+			if !ok {
+				lt.completeLoop(dbCtx, tokenStats)
+				return 0
 			}
-			fmt.Printf("[loop] %s\n", msg.Content)
 
-		case "output":
-			parsed := jsonParser.ParseLine(msg.Content)
-			if parsed != nil {
-				if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
-					claudeLoop.SetSessionID(sessionID)
+			switch msg.Type {
+			case "loop_marker":
+				if isNewLoopStart(msg.Content) {
+					lt.startNewLoop(dbCtx, tokenStats, msg.Loop)
+					iterEstimate = 0
 				}
-				handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate)
+				fmt.Printf("[loop] %s\n", msg.Content)
+
+			case "output":
+				parsed := jsonParser.ParseLine(msg.Content)
+				if parsed != nil {
+					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
+						claudeLoop.SetSessionID(sessionID)
+					}
+					handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate)
+				}
+
+			case "error":
+				fmt.Fprintf(os.Stderr, "[error] %s\n", msg.Content)
+
+			case "complete":
+				lt.completeLoop(dbCtx, tokenStats)
+				fmt.Printf("[complete] %s\n", msg.Content)
+				// In CLI mode, exit on completion instead of waiting
+				cancel()
+				return 0
 			}
-
-		case "error":
-			fmt.Fprintf(os.Stderr, "[error] %s\n", msg.Content)
-
-		case "complete":
-			fmt.Printf("[complete] %s\n", msg.Content)
-			// In CLI mode, exit on completion instead of waiting
-			cancel()
-			return 0
 		}
 	}
-
-	return 0
 }
 
 // runPlanAndBuildCLI runs plan-and-build mode in CLI: planning (1 iteration) then building (N iterations)
 // with output to stdout/stderr and no TUI.
-func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFile io.Writer) int {
+func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFile io.Writer, dbCtx *dbContext) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -664,45 +855,59 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 
 	var sessionID string
 	var planIterEstimate float64
+	planLt := &loopTracker{}
+
+	// Start per-minute checkpoint ticker for plan phase
+	planTicker := time.NewTicker(time.Minute)
 
 	// Process plan loop output
-	for msg := range planLoop.Output() {
+	planOutput := planLoop.Output()
+planLoop:
+	for {
 		select {
 		case <-ctx.Done():
+			planLt.completeLoop(dbCtx, tokenStats)
+			planTicker.Stop()
 			return 1
-		default:
-		}
-
-		switch msg.Type {
-		case "loop_marker":
-			isLoopStart := strings.Contains(msg.Content, "LOOP") &&
-				!strings.Contains(msg.Content, "STOPPED") &&
-				!strings.Contains(msg.Content, "COMPLETED") &&
-				!strings.Contains(msg.Content, "RESUMED")
-			if isLoopStart {
-				planIterEstimate = 0
+		case <-planTicker.C:
+			planLt.flushDelta(dbCtx, tokenStats)
+		case msg, ok := <-planOutput:
+			if !ok {
+				planLt.completeLoop(dbCtx, tokenStats)
+				break planLoop
 			}
-			fmt.Printf("[loop] %s\n", msg.Content)
 
-		case "output":
-			parsed := jsonParser.ParseLine(msg.Content)
-			if parsed != nil {
-				if sid := jsonParser.GetSessionID(parsed); sid != "" {
-					planLoop.SetSessionID(sid)
-					sessionID = sid
+			switch msg.Type {
+			case "loop_marker":
+				if isNewLoopStart(msg.Content) {
+					planLt.startNewLoop(dbCtx, tokenStats, msg.Loop)
+					planIterEstimate = 0
 				}
-				handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, &planIterEstimate)
+				fmt.Printf("[loop] %s\n", msg.Content)
+
+			case "output":
+				parsed := jsonParser.ParseLine(msg.Content)
+				if parsed != nil {
+					if sid := jsonParser.GetSessionID(parsed); sid != "" {
+						planLoop.SetSessionID(sid)
+						sessionID = sid
+					}
+					handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, &planIterEstimate)
+				}
+
+			case "error":
+				fmt.Fprintf(os.Stderr, "[error] %s\n", msg.Content)
+
+			case "complete":
+				planLt.completeLoop(dbCtx, tokenStats)
+				fmt.Printf("[complete] %s\n", msg.Content)
+				// Get final session ID
+				sessionID = planLoop.GetSessionID()
+				break planLoop
 			}
-
-		case "error":
-			fmt.Fprintf(os.Stderr, "[error] %s\n", msg.Content)
-
-		case "complete":
-			fmt.Printf("[complete] %s\n", msg.Content)
-			// Get final session ID
-			sessionID = planLoop.GetSessionID()
 		}
 	}
+	planTicker.Stop()
 
 	// Check if context was cancelled
 	select {
@@ -734,51 +939,60 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 	buildLoop.Start(ctx)
 
 	var buildIterEstimate float64
+	buildLt := &loopTracker{}
+
+	// Start per-minute checkpoint ticker for build phase
+	buildTicker := time.NewTicker(time.Minute)
+	defer buildTicker.Stop()
 
 	// Process build loop output
-	for msg := range buildLoop.Output() {
+	buildOutput := buildLoop.Output()
+	for {
 		select {
 		case <-ctx.Done():
+			buildLt.completeLoop(dbCtx, tokenStats)
 			return 1
-		default:
-		}
-
-		switch msg.Type {
-		case "loop_marker":
-			isLoopStart := strings.Contains(msg.Content, "LOOP") &&
-				!strings.Contains(msg.Content, "STOPPED") &&
-				!strings.Contains(msg.Content, "COMPLETED") &&
-				!strings.Contains(msg.Content, "RESUMED")
-			if isLoopStart {
-				buildIterEstimate = 0
+		case <-buildTicker.C:
+			buildLt.flushDelta(dbCtx, tokenStats)
+		case msg, ok := <-buildOutput:
+			if !ok {
+				buildLt.completeLoop(dbCtx, tokenStats)
+				return 0
 			}
-			fmt.Printf("[loop] %s\n", msg.Content)
 
-		case "output":
-			parsed := jsonParser.ParseLine(msg.Content)
-			if parsed != nil {
-				if sid := jsonParser.GetSessionID(parsed); sid != "" {
-					buildLoop.SetSessionID(sid)
+			switch msg.Type {
+			case "loop_marker":
+				if isNewLoopStart(msg.Content) {
+					buildLt.startNewLoop(dbCtx, tokenStats, msg.Loop)
+					buildIterEstimate = 0
 				}
-				handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, &buildIterEstimate)
+				fmt.Printf("[loop] %s\n", msg.Content)
+
+			case "output":
+				parsed := jsonParser.ParseLine(msg.Content)
+				if parsed != nil {
+					if sid := jsonParser.GetSessionID(parsed); sid != "" {
+						buildLoop.SetSessionID(sid)
+					}
+					handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, &buildIterEstimate)
+				}
+
+			case "error":
+				fmt.Fprintf(os.Stderr, "[error] %s\n", msg.Content)
+
+			case "complete":
+				buildLt.completeLoop(dbCtx, tokenStats)
+				fmt.Printf("[complete] %s\n", msg.Content)
+				cancel()
+				return 0
 			}
-
-		case "error":
-			fmt.Fprintf(os.Stderr, "[error] %s\n", msg.Content)
-
-		case "complete":
-			fmt.Printf("[complete] %s\n", msg.Content)
-			cancel()
-			return 0
 		}
 	}
-
-	return 0
 }
 
 // runPlanAndBuild runs plan-and-build mode: planning (1 iteration) then building (N iterations)
 // in a single TUI session with mode display transitions.
-func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats, logFile io.Writer) {
+func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats, logFile io.Writer, dbCtx *dbContext) {
 	// Set up channels for TUI communication
 	msgChan := make(chan tui.Message, 100)
 	doneChan := make(chan struct{})
@@ -820,7 +1034,7 @@ func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats, logFile i
 	jsonParser := parser.NewParser()
 
 	// Start the plan-and-build orchestration goroutine
-	go runPlanAndBuildPhases(ctx, cfg, jsonParser, tokenStats, msgChan, doneChan, program, logFile)
+	go runPlanAndBuildPhases(ctx, cfg, jsonParser, tokenStats, msgChan, doneChan, program, logFile, dbCtx)
 
 	// Run the TUI (blocks until user quits)
 	if _, err := program.Run(); err != nil {
@@ -839,6 +1053,7 @@ func runPlanAndBuildPhases(
 	doneChan chan struct{},
 	program *tea.Program,
 	logFile io.Writer,
+	dbCtx *dbContext,
 ) {
 	defer close(msgChan)
 
@@ -868,7 +1083,7 @@ func runPlanAndBuildPhases(
 	planLoop.Start(ctx)
 
 	// Process plan loop output and wait for completion
-	sessionID := processPlanPhase(ctx, planLoop, jsonParser, tokenStats, msgChan, program, logFile)
+	sessionID := processPlanPhase(ctx, planLoop, jsonParser, tokenStats, msgChan, program, logFile, dbCtx)
 
 	// Check if context was cancelled
 	select {
@@ -909,7 +1124,7 @@ func runPlanAndBuildPhases(
 	buildLoop.Start(ctx)
 
 	// Process build loop output
-	processBuildPhase(ctx, buildLoop, jsonParser, tokenStats, msgChan, doneChan, program, logFile)
+	processBuildPhase(ctx, buildLoop, jsonParser, tokenStats, msgChan, doneChan, program, logFile, dbCtx)
 }
 
 // processPlanPhase processes the plan loop output and returns the captured session ID
@@ -921,24 +1136,34 @@ func processPlanPhase(
 	msgChan chan<- tui.Message,
 	program *tea.Program,
 	logFile io.Writer,
+	dbCtx *dbContext,
 ) string {
 	loopOutput := planLoop.Output()
 	var loopTotalTokens int64
 	var iterEstimate float64
+	lt := &loopTracker{}
+
+	// Start per-minute checkpoint ticker
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			lt.completeLoop(dbCtx, tokenStats)
 			return planLoop.GetSessionID()
+		case <-ticker.C:
+			lt.flushDelta(dbCtx, tokenStats)
 		case msg, ok := <-loopOutput:
 			if !ok {
 				// Plan loop finished
+				lt.completeLoop(dbCtx, tokenStats)
 				return planLoop.GetSessionID()
 			}
 
 			switch msg.Type {
 			case "loop_marker":
-				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate)
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate, dbCtx, lt, tokenStats)
 
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
@@ -956,6 +1181,7 @@ func processPlanPhase(
 				}
 
 			case "complete":
+				lt.completeLoop(dbCtx, tokenStats)
 				msgChan <- tui.Message{
 					Role:    tui.RoleSystem,
 					Content: "Planning phase completed - transitioning to build phase...",
@@ -977,17 +1203,27 @@ func processBuildPhase(
 	doneChan chan struct{},
 	program *tea.Program,
 	logFile io.Writer,
+	dbCtx *dbContext,
 ) {
 	loopOutput := buildLoop.Output()
 	var loopTotalTokens int64
 	var iterEstimate float64
+	lt := &loopTracker{}
+
+	// Start per-minute checkpoint ticker
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			lt.completeLoop(dbCtx, tokenStats)
 			return
+		case <-ticker.C:
+			lt.flushDelta(dbCtx, tokenStats)
 		case msg, ok := <-loopOutput:
 			if !ok {
+				lt.completeLoop(dbCtx, tokenStats)
 				select {
 				case <-doneChan:
 				default:
@@ -998,7 +1234,7 @@ func processBuildPhase(
 
 			switch msg.Type {
 			case "loop_marker":
-				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate)
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate, dbCtx, lt, tokenStats)
 
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
@@ -1016,6 +1252,7 @@ func processBuildPhase(
 				}
 
 			case "complete":
+				lt.completeLoop(dbCtx, tokenStats)
 				msgChan <- tui.Message{
 					Role:    tui.RoleSystem,
 					Content: msg.Content,
