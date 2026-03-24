@@ -793,6 +793,22 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 		Iterations: cfg.Iterations,
 		Prompt:     promptContent,
 	})
+
+	// Startup budget check — wait until next hour if budget already exceeded
+	if cfg.MaxCostPerHour > 0 && dbCtx != nil && dbCtx.db != nil {
+		cost, err := stats.QueryCalendarHourCost(dbCtx.db, dbCtx.owner, dbCtx.repo)
+		if err == nil && cost >= cfg.MaxCostPerHour {
+			nextHour := time.Now().UTC().Truncate(time.Hour).Add(time.Hour)
+			fmt.Printf("[pacing] Cost budget already exceeded ($%.4f/$%.2f/hr), waiting until %s UTC\n", cost, cfg.MaxCostPerHour, nextHour.Format(time.Kitchen))
+			select {
+			case <-ctx.Done():
+				return 1
+			case <-time.After(time.Until(nextHour)):
+			}
+			fmt.Println("[pacing] Cost cycle reset, resuming")
+		}
+	}
+
 	claudeLoop.Start(ctx)
 
 	jsonParser := parser.NewParser()
@@ -819,6 +835,9 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 			return 1
 		case <-ticker.C:
 			lt.flushDelta(dbCtx, tokenStats)
+			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, cfg.MaxCostPerHour, claudeLoop); exceeded {
+				fmt.Printf("[hibernate] Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s\n", hourCost, cfg.MaxCostPerHour, nextHour.Format(time.Kitchen))
+			}
 		case msg, ok := <-loopOutput:
 			if !ok {
 				lt.completeLoop(dbCtx, tokenStats)
