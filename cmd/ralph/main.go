@@ -893,6 +893,21 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 
 	fmt.Println("ralph cli: starting plan-and-build mode")
 
+	// Startup budget check — wait until next hour if budget already exceeded
+	if cfg.MaxCostPerHour > 0 && dbCtx != nil && dbCtx.db != nil {
+		cost, err := stats.QueryCalendarHourCost(dbCtx.db, dbCtx.owner, dbCtx.repo)
+		if err == nil && cost >= cfg.MaxCostPerHour {
+			nextHour := time.Now().UTC().Truncate(time.Hour).Add(time.Hour)
+			fmt.Printf("[pacing] Cost budget already exceeded ($%.4f/$%.2f/hr), waiting until %s UTC\n", cost, cfg.MaxCostPerHour, nextHour.Format(time.Kitchen))
+			select {
+			case <-ctx.Done():
+				return 1
+			case <-time.After(time.Until(nextHour)):
+			}
+			fmt.Println("[pacing] Cost cycle reset, resuming")
+		}
+	}
+
 	// Phase 1: Planning
 	fmt.Printf("[phase] Planning (%d iteration)\n", cfg.Iterations)
 
@@ -927,6 +942,9 @@ planLoop:
 			return 1
 		case <-planTicker.C:
 			planLt.flushDelta(dbCtx, tokenStats)
+			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, cfg.MaxCostPerHour, planLoop); exceeded {
+				fmt.Printf("[hibernate] Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s\n", hourCost, cfg.MaxCostPerHour, nextHour.Format(time.Kitchen))
+			}
 		case msg, ok := <-planOutput:
 			if !ok {
 				planLt.completeLoop(dbCtx, tokenStats)
@@ -1010,6 +1028,9 @@ planLoop:
 			return 1
 		case <-buildTicker.C:
 			buildLt.flushDelta(dbCtx, tokenStats)
+			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, cfg.MaxCostPerHour, buildLoop); exceeded {
+				fmt.Printf("[hibernate] Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s\n", hourCost, cfg.MaxCostPerHour, nextHour.Format(time.Kitchen))
+			}
 		case msg, ok := <-buildOutput:
 			if !ok {
 				buildLt.completeLoop(dbCtx, tokenStats)
