@@ -406,7 +406,7 @@ func main() {
 	jsonParser := parser.NewParser()
 
 	// Start the processing goroutine
-	go processLoopOutput(ctx, claudeLoop, jsonParser, tokenStats, msgChan, doneChan, program, logFile, dbCtx)
+	go processLoopOutput(ctx, claudeLoop, jsonParser, tokenStats, msgChan, doneChan, program, logFile, dbCtx, cfg.MaxCostPerHour)
 
 	// Start the loop execution
 	claudeLoop.Start(ctx)
@@ -435,6 +435,7 @@ func processLoopOutput(
 	program *tea.Program,
 	logFile io.Writer,
 	dbCtx *dbContext,
+	maxCostPerHour float64,
 ) {
 	defer close(msgChan)
 
@@ -442,6 +443,15 @@ func processLoopOutput(
 	var loopTotalTokens int64 // per-loop token tracking for tmux status bar
 	var iterEstimate float64  // per-iteration estimated cost from token counts
 	lt := &loopTracker{}
+
+	// Startup budget check — hibernate before first iteration if budget already exceeded
+	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, claudeLoop); exceeded {
+		program.Send(tui.SendHibernate(nextHour)())
+		msgChan <- tui.Message{
+			Role:    tui.RoleHibernate,
+			Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr) at startup, pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
+		}
+	}
 
 	// Start per-minute checkpoint ticker
 	ticker := time.NewTicker(time.Minute)
@@ -454,6 +464,13 @@ func processLoopOutput(
 			return
 		case <-ticker.C:
 			lt.flushDelta(dbCtx, tokenStats)
+			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, claudeLoop); exceeded {
+				program.Send(tui.SendHibernate(nextHour)())
+				msgChan <- tui.Message{
+					Role:    tui.RoleHibernate,
+					Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
+				}
+			}
 		case msg, ok := <-loopOutput:
 			if !ok {
 				// Loop has finished
