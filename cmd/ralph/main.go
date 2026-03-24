@@ -183,6 +183,26 @@ func (lt *loopTracker) completeLoop(dbCtx *dbContext, tokenStats *stats.TokenSta
 	lt.currentLoopID = ""
 }
 
+// checkCostPacing queries the current calendar-hour cost and hibernates the loop
+// if it exceeds maxCostPerHour. Returns whether the budget was exceeded, the
+// current hour's cost, and the next hour boundary (for caller notifications).
+func checkCostPacing(dbCtx *dbContext, maxCostPerHour float64, claudeLoop *loop.Loop) (exceeded bool, hourCost float64, nextHour time.Time) {
+	if maxCostPerHour <= 0 || dbCtx == nil || dbCtx.db == nil {
+		return false, 0, time.Time{}
+	}
+	cost, err := stats.QueryCalendarHourCost(dbCtx.db, dbCtx.owner, dbCtx.repo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: cost pacing query failed: %v\n", err)
+		return false, 0, time.Time{}
+	}
+	if cost < maxCostPerHour {
+		return false, cost, time.Time{}
+	}
+	next := time.Now().UTC().Truncate(time.Hour).Add(time.Hour)
+	claudeLoop.Hibernate(next)
+	return true, cost, next
+}
+
 func main() {
 	// Parse command-line flags and get configuration
 	cfg := config.ParseFlags()
