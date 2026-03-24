@@ -1,9 +1,12 @@
 package main
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/cloudosai/ralph-go/internal/config"
 )
 
 func TestParseTaskCountsNoFile(t *testing.T) {
@@ -224,6 +227,34 @@ func TestCheckCostPacingNilDB(t *testing.T) {
 	exceeded, _, _ = checkCostPacing(nil, 1.0, nil)
 	if exceeded {
 		t.Error("expected exceeded=false when dbCtx is nil")
+	}
+}
+
+func TestMaxCostPerHourFlag(t *testing.T) {
+	// Save and restore global state
+	origArgs := os.Args
+	origCommandLine := flag.CommandLine
+	defer func() {
+		os.Args = origArgs
+		flag.CommandLine = origCommandLine
+	}()
+
+	// Reset flag state so ParseFlags can register new flags
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	os.Args = []string{"ralph", "--max-cost-per-hour=1.50", "--show-prompt"}
+
+	cfg := config.ParseFlags()
+	if cfg.MaxCostPerHour != 1.50 {
+		t.Errorf("expected MaxCostPerHour=1.50, got %f", cfg.MaxCostPerHour)
+	}
+
+	// Test default (0 = no limit)
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	os.Args = []string{"ralph", "--show-prompt"}
+
+	cfg = config.ParseFlags()
+	if cfg.MaxCostPerHour != 0 {
+		t.Errorf("expected MaxCostPerHour=0 (default), got %f", cfg.MaxCostPerHour)
 	}
 }
 
