@@ -1160,7 +1160,7 @@ func runPlanAndBuildPhases(
 	planLoop.Start(ctx)
 
 	// Process plan loop output and wait for completion
-	sessionID := processPlanPhase(ctx, planLoop, jsonParser, tokenStats, msgChan, program, logFile, dbCtx)
+	sessionID := processPlanPhase(ctx, planLoop, jsonParser, tokenStats, msgChan, program, logFile, dbCtx, cfg.MaxCostPerHour)
 
 	// Check if context was cancelled
 	select {
@@ -1201,7 +1201,7 @@ func runPlanAndBuildPhases(
 	buildLoop.Start(ctx)
 
 	// Process build loop output
-	processBuildPhase(ctx, buildLoop, jsonParser, tokenStats, msgChan, doneChan, program, logFile, dbCtx)
+	processBuildPhase(ctx, buildLoop, jsonParser, tokenStats, msgChan, doneChan, program, logFile, dbCtx, cfg.MaxCostPerHour)
 }
 
 // processPlanPhase processes the plan loop output and returns the captured session ID
@@ -1214,11 +1214,21 @@ func processPlanPhase(
 	program *tea.Program,
 	logFile io.Writer,
 	dbCtx *dbContext,
+	maxCostPerHour float64,
 ) string {
 	loopOutput := planLoop.Output()
 	var loopTotalTokens int64
 	var iterEstimate float64
 	lt := &loopTracker{}
+
+	// Startup budget check — hibernate before first iteration if budget already exceeded
+	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, planLoop); exceeded {
+		program.Send(tui.SendHibernate(nextHour)())
+		msgChan <- tui.Message{
+			Role:    tui.RoleHibernate,
+			Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr) at startup, pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
+		}
+	}
 
 	// Start per-minute checkpoint ticker
 	ticker := time.NewTicker(time.Minute)
@@ -1231,6 +1241,13 @@ func processPlanPhase(
 			return planLoop.GetSessionID()
 		case <-ticker.C:
 			lt.flushDelta(dbCtx, tokenStats)
+			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, planLoop); exceeded {
+				program.Send(tui.SendHibernate(nextHour)())
+				msgChan <- tui.Message{
+					Role:    tui.RoleHibernate,
+					Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
+				}
+			}
 		case msg, ok := <-loopOutput:
 			if !ok {
 				// Plan loop finished
@@ -1281,11 +1298,21 @@ func processBuildPhase(
 	program *tea.Program,
 	logFile io.Writer,
 	dbCtx *dbContext,
+	maxCostPerHour float64,
 ) {
 	loopOutput := buildLoop.Output()
 	var loopTotalTokens int64
 	var iterEstimate float64
 	lt := &loopTracker{}
+
+	// Startup budget check — hibernate before first iteration if budget already exceeded
+	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, buildLoop); exceeded {
+		program.Send(tui.SendHibernate(nextHour)())
+		msgChan <- tui.Message{
+			Role:    tui.RoleHibernate,
+			Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr) at startup, pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
+		}
+	}
 
 	// Start per-minute checkpoint ticker
 	ticker := time.NewTicker(time.Minute)
@@ -1298,6 +1325,13 @@ func processBuildPhase(
 			return
 		case <-ticker.C:
 			lt.flushDelta(dbCtx, tokenStats)
+			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, buildLoop); exceeded {
+				program.Send(tui.SendHibernate(nextHour)())
+				msgChan <- tui.Message{
+					Role:    tui.RoleHibernate,
+					Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
+				}
+			}
 		case msg, ok := <-loopOutput:
 			if !ok {
 				lt.completeLoop(dbCtx, tokenStats)
