@@ -187,6 +187,46 @@ func TestParseTaskCountsReflectsFileChanges(t *testing.T) {
 	}
 }
 
+func TestCheckCostPacingDisabled(t *testing.T) {
+	// maxCostPerHour=0 means disabled — should be a no-op
+	exceeded, hourCost, nextHour := checkCostPacing(&dbContext{}, 0, nil)
+	if exceeded {
+		t.Error("expected exceeded=false when maxCostPerHour=0")
+	}
+	if hourCost != 0 {
+		t.Errorf("expected hourCost=0, got %f", hourCost)
+	}
+	if !nextHour.IsZero() {
+		t.Errorf("expected zero nextHour, got %v", nextHour)
+	}
+
+	// Negative value also means disabled
+	exceeded, _, _ = checkCostPacing(&dbContext{}, -1.0, nil)
+	if exceeded {
+		t.Error("expected exceeded=false when maxCostPerHour<0")
+	}
+}
+
+func TestCheckCostPacingNilDB(t *testing.T) {
+	// dbCtx with nil db — should be a no-op
+	exceeded, hourCost, nextHour := checkCostPacing(&dbContext{db: nil}, 1.0, nil)
+	if exceeded {
+		t.Error("expected exceeded=false when db is nil")
+	}
+	if hourCost != 0 {
+		t.Errorf("expected hourCost=0, got %f", hourCost)
+	}
+	if !nextHour.IsZero() {
+		t.Errorf("expected zero nextHour, got %v", nextHour)
+	}
+
+	// Nil dbCtx entirely
+	exceeded, _, _ = checkCostPacing(nil, 1.0, nil)
+	if exceeded {
+		t.Error("expected exceeded=false when dbCtx is nil")
+	}
+}
+
 func TestHandleLoopMarkerReturnsTrue(t *testing.T) {
 	// Verify the isLoopStart detection logic matches what handleLoopMarker uses
 	tests := []struct {
