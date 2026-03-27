@@ -589,6 +589,18 @@ func handleParsedMessage(
 		return // Don't process further
 	}
 
+	// Check for API 529 (overloaded) error — enter hibernate state with initial backoff
+	if jsonParser.IsAPIOverloaded(parsed) {
+		resetsAt := time.Now().Add(30 * time.Second)
+		claudeLoop.Hibernate(resetsAt)
+		program.Send(tui.SendHibernate(resetsAt)())
+		msgChan <- tui.Message{
+			Role:    tui.RoleHibernate,
+			Content: fmt.Sprintf("API overloaded (529), hibernating until %s", resetsAt.Format(time.Kitchen)),
+		}
+		return // Don't process further
+	}
+
 	// Extract usage information
 	if usage := jsonParser.GetUsage(parsed); usage != nil {
 		tokenStats.AddUsage(
@@ -717,6 +729,12 @@ func handleParsedMessageCLI(
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
 		claudeLoop.Hibernate(resetsAt)
 		fmt.Printf("[hibernate] Rate limited until %s\n", resetsAt.Format(time.Kitchen))
+	}
+	// Check for API 529 (overloaded) error — enter hibernate state with initial backoff
+	if jsonParser.IsAPIOverloaded(parsed) {
+		resetsAt := time.Now().Add(30 * time.Second)
+		claudeLoop.Hibernate(resetsAt)
+		fmt.Printf("[hibernate] API overloaded (529), hibernating until %s\n", resetsAt.Format(time.Kitchen))
 	}
 	// Track stats
 	if usage := jsonParser.GetUsage(parsed); usage != nil {

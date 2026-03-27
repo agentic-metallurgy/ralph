@@ -1564,6 +1564,89 @@ func TestExtractContentThinkingItemWithToolUse(t *testing.T) {
 
 // TestParseLineThinkingContentItemParsed tests that the ThinkingText field
 // is correctly parsed from JSON
+// TestIsAPIOverloaded529InError tests detection of 529 in error string
+func TestIsAPIOverloaded529InError(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"assistant","is_error":true,"error":"API error 529: Overloaded"}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	if !p.IsAPIOverloaded(msg) {
+		t.Error("Expected IsAPIOverloaded=true for error containing '529'")
+	}
+}
+
+// TestIsAPIOverloadedOverloadedKeyword tests detection of "overloaded" keyword
+func TestIsAPIOverloadedOverloadedKeyword(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"assistant","is_error":true,"error":"overloaded"}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	if !p.IsAPIOverloaded(msg) {
+		t.Error("Expected IsAPIOverloaded=true for error containing 'overloaded'")
+	}
+}
+
+// TestIsAPIOverloadedCaseInsensitive tests case-insensitive matching
+func TestIsAPIOverloadedCaseInsensitive(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"assistant","is_error":true,"error":"Server Overloaded"}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	if !p.IsAPIOverloaded(msg) {
+		t.Error("Expected IsAPIOverloaded=true for error containing 'Overloaded' (case-insensitive)")
+	}
+}
+
+// TestIsAPIOverloadedNotError tests that non-error messages return false
+func TestIsAPIOverloadedNotError(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	if p.IsAPIOverloaded(msg) {
+		t.Error("Expected IsAPIOverloaded=false for non-error message")
+	}
+}
+
+// TestIsAPIOverloadedNilMessage tests nil message returns false
+func TestIsAPIOverloadedNilMessage(t *testing.T) {
+	p := parser.NewParser()
+	if p.IsAPIOverloaded(nil) {
+		t.Error("Expected IsAPIOverloaded=false for nil message")
+	}
+}
+
+// TestIsAPIOverloadedDifferentError tests that non-529/overloaded errors return false
+func TestIsAPIOverloadedDifferentError(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"assistant","is_error":true,"error":"authentication_error"}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	if p.IsAPIOverloaded(msg) {
+		t.Error("Expected IsAPIOverloaded=false for non-529 error")
+	}
+}
+
 func TestParseLineThinkingContentItemParsed(t *testing.T) {
 	p := parser.NewParser()
 
