@@ -443,6 +443,7 @@ func processLoopOutput(
 	var loopTotalTokens int64 // per-loop token tracking for tmux status bar
 	var iterEstimate float64  // per-iteration estimated cost from token counts
 	lt := &loopTracker{}
+	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
 	// Startup budget check — hibernate before first iteration if budget already exceeded
 	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, claudeLoop); exceeded {
@@ -483,7 +484,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, dbCtx, lt)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, dbCtx, lt, apiBackoff)
 		}
 	}
 }
@@ -501,10 +502,15 @@ func processMessage(
 	iterEstimate *float64,
 	dbCtx *dbContext,
 	lt *loopTracker,
+	apiBackoff *loop.Backoff,
 ) {
 	switch msg.Type {
 	case "loop_marker":
 		handleLoopMarker(msg, msgChan, program, loopTotalTokens, iterEstimate, dbCtx, lt, tokenStats)
+		// Reset 529 backoff on successful new loop start (iteration completed without 529)
+		if isNewLoopStart(msg.Content) {
+			apiBackoff.Reset()
+		}
 
 	case "output":
 		// Try to parse as JSON first
@@ -514,7 +520,7 @@ func processMessage(
 			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 				claudeLoop.SetSessionID(sessionID)
 			}
-			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile, iterEstimate)
+			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile, iterEstimate, apiBackoff)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -577,6 +583,7 @@ func handleParsedMessage(
 	loopTotalTokens *int64,
 	logFile io.Writer,
 	iterEstimate *float64,
+	apiBackoff *loop.Backoff,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -589,14 +596,23 @@ func handleParsedMessage(
 		return // Don't process further
 	}
 
-	// Check for API 529 (overloaded) error — enter hibernate state with initial backoff
+	// Check for API 529 (overloaded) error — enter hibernate state with exponential backoff
 	if jsonParser.IsAPIOverloaded(parsed) {
-		resetsAt := time.Now().Add(30 * time.Second)
+		backoffDuration, retryNum, exceeded := apiBackoff.Next()
+		if exceeded {
+			msgChan <- tui.Message{
+				Role:    tui.RoleHibernate,
+				Content: fmt.Sprintf("API overloaded (529): max retries (%d) exceeded, stopping loop", apiBackoff.MaxRetries()),
+			}
+			claudeLoop.Stop()
+			return
+		}
+		resetsAt := time.Now().Add(backoffDuration)
 		claudeLoop.Hibernate(resetsAt)
 		program.Send(tui.SendHibernate(resetsAt)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
-			Content: fmt.Sprintf("API overloaded (529), hibernating until %s", resetsAt.Format(time.Kitchen)),
+			Content: fmt.Sprintf("API overloaded (529), retry %d/%d, hibernating %s until %s", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen)),
 		}
 		return // Don't process further
 	}
@@ -724,17 +740,24 @@ func handleParsedMessageCLI(
 	tokenStats *stats.TokenStats,
 	logFile io.Writer,
 	iterEstimate *float64,
+	apiBackoff *loop.Backoff,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
 		claudeLoop.Hibernate(resetsAt)
 		fmt.Printf("[hibernate] Rate limited until %s\n", resetsAt.Format(time.Kitchen))
 	}
-	// Check for API 529 (overloaded) error — enter hibernate state with initial backoff
+	// Check for API 529 (overloaded) error — enter hibernate state with exponential backoff
 	if jsonParser.IsAPIOverloaded(parsed) {
-		resetsAt := time.Now().Add(30 * time.Second)
+		backoffDuration, retryNum, exceeded := apiBackoff.Next()
+		if exceeded {
+			fmt.Printf("[hibernate] API overloaded (529): max retries (%d) exceeded, stopping loop\n", apiBackoff.MaxRetries())
+			claudeLoop.Stop()
+			return
+		}
+		resetsAt := time.Now().Add(backoffDuration)
 		claudeLoop.Hibernate(resetsAt)
-		fmt.Printf("[hibernate] API overloaded (529), hibernating until %s\n", resetsAt.Format(time.Kitchen))
+		fmt.Printf("[hibernate] API overloaded (529), retry %d/%d, hibernating %s until %s\n", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen))
 	}
 	// Track stats
 	if usage := jsonParser.GetUsage(parsed); usage != nil {
@@ -832,6 +855,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 	jsonParser := parser.NewParser()
 	var iterEstimate float64
 	lt := &loopTracker{}
+	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
 	mode := "build"
 	if cfg.IsPlanMode() {
@@ -867,6 +891,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 				if isNewLoopStart(msg.Content) {
 					lt.startNewLoop(dbCtx, tokenStats, msg.Loop)
 					iterEstimate = 0
+					apiBackoff.Reset()
 				}
 				fmt.Printf("[loop] %s\n", msg.Content)
 
@@ -876,7 +901,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						claudeLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate)
+					handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate, apiBackoff)
 				}
 
 			case "error":
@@ -945,6 +970,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 	var sessionID string
 	var planIterEstimate float64
 	planLt := &loopTracker{}
+	planBackoff := loop.NewBackoff() // exponential backoff for API 529 errors (plan phase)
 
 	// Start per-minute checkpoint ticker for plan phase
 	planTicker := time.NewTicker(time.Minute)
@@ -984,7 +1010,7 @@ planLoop:
 						planLoop.SetSessionID(sid)
 						sessionID = sid
 					}
-					handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, &planIterEstimate)
+					handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, &planIterEstimate, planBackoff)
 				}
 
 			case "error":
@@ -1032,6 +1058,7 @@ planLoop:
 
 	var buildIterEstimate float64
 	buildLt := &loopTracker{}
+	buildBackoff := loop.NewBackoff() // exponential backoff for API 529 errors (build phase)
 
 	// Start per-minute checkpoint ticker for build phase
 	buildTicker := time.NewTicker(time.Minute)
@@ -1069,7 +1096,7 @@ planLoop:
 					if sid := jsonParser.GetSessionID(parsed); sid != "" {
 						buildLoop.SetSessionID(sid)
 					}
-					handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, &buildIterEstimate)
+					handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, &buildIterEstimate, buildBackoff)
 				}
 
 			case "error":
@@ -1238,6 +1265,7 @@ func processPlanPhase(
 	var loopTotalTokens int64
 	var iterEstimate float64
 	lt := &loopTracker{}
+	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
 	// Startup budget check — hibernate before first iteration if budget already exceeded
 	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, planLoop); exceeded {
@@ -1276,6 +1304,9 @@ func processPlanPhase(
 			switch msg.Type {
 			case "loop_marker":
 				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate, dbCtx, lt, tokenStats)
+				if isNewLoopStart(msg.Content) {
+					apiBackoff.Reset()
+				}
 
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
@@ -1283,7 +1314,7 @@ func processPlanPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						planLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate)
+					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, apiBackoff)
 				}
 
 			case "error":
@@ -1322,6 +1353,7 @@ func processBuildPhase(
 	var loopTotalTokens int64
 	var iterEstimate float64
 	lt := &loopTracker{}
+	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
 	// Startup budget check — hibernate before first iteration if budget already exceeded
 	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, buildLoop); exceeded {
@@ -1364,6 +1396,9 @@ func processBuildPhase(
 			switch msg.Type {
 			case "loop_marker":
 				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate, dbCtx, lt, tokenStats)
+				if isNewLoopStart(msg.Content) {
+					apiBackoff.Reset()
+				}
 
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
@@ -1371,7 +1406,7 @@ func processBuildPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						buildLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate)
+					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, apiBackoff)
 				}
 
 			case "error":
