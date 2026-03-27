@@ -327,6 +327,17 @@ func (p *Parser) IsRateLimitRejected(msg *ParsedMessage) (bool, time.Time) {
 	return true, time.Unix(msg.RateLimitInfo.ResetsAt, 0)
 }
 
+// IsAPIOverloaded checks if message indicates an API 529 (overloaded) error.
+// Returns true if the message has is_error set and the error string contains
+// "529" or "overloaded" (case-insensitive).
+func (p *Parser) IsAPIOverloaded(msg *ParsedMessage) bool {
+	if msg == nil || !msg.IsError {
+		return false
+	}
+	errLower := strings.ToLower(msg.Error)
+	return strings.Contains(errLower, "529") || strings.Contains(errLower, "overloaded")
+}
+
 // IsSubagentMessage returns true if the message originates from a subagent
 // (i.e., has a non-nil, non-empty parent_tool_use_id)
 func (p *Parser) IsSubagentMessage(msg *ParsedMessage) bool {
