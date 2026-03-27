@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1863,5 +1864,262 @@ func TestLoopIterationSubstitutionDoesNotAffectNormalPrompts(t *testing.T) {
 
 	if string(captured) != normalPrompt {
 		t.Errorf("Normal prompt should pass through unchanged, got: %q", string(captured))
+	}
+}
+
+// ============================================================================
+// Backoff Tests
+// ============================================================================
+
+// TestBackoffDefaultValues tests that NewBackoff creates a Backoff with correct defaults
+func TestBackoffDefaultValues(t *testing.T) {
+	b := loop.NewBackoff()
+
+	if b.MaxRetries() != loop.DefaultMaxRetries {
+		t.Errorf("Expected max retries %d, got %d", loop.DefaultMaxRetries, b.MaxRetries())
+	}
+	if b.ConsecutiveHits() != 0 {
+		t.Errorf("Expected 0 consecutive hits, got %d", b.ConsecutiveHits())
+	}
+}
+
+// TestBackoffExponentialProgression tests that backoff durations increase exponentially
+func TestBackoffExponentialProgression(t *testing.T) {
+	b := loop.NewBackoffWithOptions(
+		loop.WithInitialBackoff(1*time.Second),
+		loop.WithMaxBackoff(1*time.Minute),
+		loop.WithMaxRetries(6),
+		loop.WithJitterFraction(0), // disable jitter for deterministic testing
+	)
+
+	// Expected progression: 1s, 2s, 4s, 8s, 16s, 32s
+	expected := []time.Duration{
+		1 * time.Second,
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+		16 * time.Second,
+		32 * time.Second,
+	}
+
+	for i, want := range expected {
+		got, retryNum, exceeded := b.Next()
+		if exceeded {
+			t.Fatalf("Retry %d: unexpected exceeded=true", i+1)
+		}
+		if retryNum != i+1 {
+			t.Errorf("Retry %d: expected retryNum=%d, got %d", i+1, i+1, retryNum)
+		}
+		if got != want {
+			t.Errorf("Retry %d: expected backoff %v, got %v", i+1, want, got)
+		}
+	}
+}
+
+// TestBackoffMaxCap tests that backoff duration is capped at maxBackoff
+func TestBackoffMaxCap(t *testing.T) {
+	b := loop.NewBackoffWithOptions(
+		loop.WithInitialBackoff(1*time.Second),
+		loop.WithMaxBackoff(5*time.Second),
+		loop.WithMaxRetries(10),
+		loop.WithJitterFraction(0),
+	)
+
+	// 1s, 2s, 4s, then capped at 5s for the rest
+	for i := 0; i < 10; i++ {
+		got, _, exceeded := b.Next()
+		if exceeded {
+			t.Fatalf("Retry %d: unexpected exceeded=true", i+1)
+		}
+		if got > 5*time.Second {
+			t.Errorf("Retry %d: backoff %v exceeds max 5s", i+1, got)
+		}
+	}
+}
+
+// TestBackoffExceededAfterMaxRetries tests that Next returns exceeded=true after max retries
+func TestBackoffExceededAfterMaxRetries(t *testing.T) {
+	b := loop.NewBackoffWithOptions(
+		loop.WithMaxRetries(3),
+		loop.WithJitterFraction(0),
+	)
+
+	// Exhaust retries
+	for i := 0; i < 3; i++ {
+		_, _, exceeded := b.Next()
+		if exceeded {
+			t.Fatalf("Retry %d: should not be exceeded yet", i+1)
+		}
+	}
+
+	// Next call should exceed
+	_, retryNum, exceeded := b.Next()
+	if !exceeded {
+		t.Error("Expected exceeded=true after max retries")
+	}
+	if retryNum != 4 {
+		t.Errorf("Expected retryNum=4, got %d", retryNum)
+	}
+}
+
+// TestBackoffReset tests that Reset clears consecutive hits
+func TestBackoffReset(t *testing.T) {
+	b := loop.NewBackoffWithOptions(
+		loop.WithInitialBackoff(1*time.Second),
+		loop.WithMaxRetries(3),
+		loop.WithJitterFraction(0),
+	)
+
+	// Hit twice
+	b.Next()
+	b.Next()
+	if b.ConsecutiveHits() != 2 {
+		t.Errorf("Expected 2 consecutive hits, got %d", b.ConsecutiveHits())
+	}
+
+	// Reset
+	b.Reset()
+	if b.ConsecutiveHits() != 0 {
+		t.Errorf("Expected 0 consecutive hits after reset, got %d", b.ConsecutiveHits())
+	}
+
+	// Next call should start from retry 1 with initial backoff
+	got, retryNum, exceeded := b.Next()
+	if exceeded {
+		t.Fatal("Should not be exceeded after reset")
+	}
+	if retryNum != 1 {
+		t.Errorf("Expected retryNum=1 after reset, got %d", retryNum)
+	}
+	if got != 1*time.Second {
+		t.Errorf("Expected initial backoff 1s after reset, got %v", got)
+	}
+}
+
+// TestBackoffJitterWithinBounds tests that jitter stays within ±fraction bounds
+func TestBackoffJitterWithinBounds(t *testing.T) {
+	b := loop.NewBackoffWithOptions(
+		loop.WithInitialBackoff(10*time.Second),
+		loop.WithMaxRetries(100),
+		loop.WithJitterFraction(0.2), // ±20%
+	)
+
+	base := 10 * time.Second
+	minAllowed := time.Duration(float64(base) * 0.8)
+	maxAllowed := time.Duration(float64(base) * 1.2)
+
+	// Run many iterations of first retry to check jitter bounds
+	for i := 0; i < 50; i++ {
+		b.Reset()
+		got, _, _ := b.Next()
+		if got < minAllowed || got > maxAllowed {
+			t.Errorf("Iteration %d: backoff %v outside jitter bounds [%v, %v]", i, got, minAllowed, maxAllowed)
+		}
+	}
+}
+
+// TestBackoffWithCustomOptions tests NewBackoffWithOptions functional options
+func TestBackoffWithCustomOptions(t *testing.T) {
+	b := loop.NewBackoffWithOptions(
+		loop.WithInitialBackoff(5*time.Second),
+		loop.WithMaxBackoff(30*time.Second),
+		loop.WithMaxRetries(4),
+		loop.WithJitterFraction(0),
+	)
+
+	if b.MaxRetries() != 4 {
+		t.Errorf("Expected max retries 4, got %d", b.MaxRetries())
+	}
+
+	// First backoff should be 5s (no jitter)
+	got, _, _ := b.Next()
+	if got != 5*time.Second {
+		t.Errorf("Expected initial backoff 5s, got %v", got)
+	}
+}
+
+// TestBackoffConsecutiveHitsTracking tests that ConsecutiveHits increments correctly
+func TestBackoffConsecutiveHitsTracking(t *testing.T) {
+	b := loop.NewBackoffWithOptions(
+		loop.WithMaxRetries(10),
+	)
+
+	for i := 1; i <= 5; i++ {
+		b.Next()
+		if b.ConsecutiveHits() != i {
+			t.Errorf("After %d calls, expected %d consecutive hits, got %d", i, i, b.ConsecutiveHits())
+		}
+	}
+}
+
+// ============================================================================
+// Retry Behavior Integration Test
+// ============================================================================
+
+// TestHibernateRetryDecrementIteration tests that hibernation causes the loop
+// to retry the same iteration (i-- behavior), not skip it.
+// Uses the medium-slow mock so the iteration is still running when we hibernate.
+func TestHibernateRetryDecrementIteration(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockMediumSlowCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for first iteration to start (system message arrives before sleep)
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"type":"system"`) {
+			break
+		}
+	}
+
+	// Hibernate briefly while the iteration is still running (medium-slow takes ~200ms)
+	l.Hibernate(time.Now().Add(50 * time.Millisecond))
+
+	// Verify: hibernate/wake cycle occurs, loop retries and completes all iterations
+	loopStartPattern := regexp.MustCompile(`LOOP \d+/\d+`)
+	loopStartCount := 0
+	hibernateFound := false
+	wakingFound := false
+	completed := false
+	for msg := range output {
+		if msg.Type == "loop_marker" {
+			if loopStartPattern.MatchString(msg.Content) {
+				loopStartCount++
+			}
+			if strings.Contains(msg.Content, "HIBERNATING") {
+				hibernateFound = true
+			}
+			if strings.Contains(msg.Content, "WAKING") {
+				wakingFound = true
+			}
+		}
+		if msg.Type == "complete" {
+			completed = true
+			cancel()
+		}
+	}
+
+	if !hibernateFound {
+		t.Error("Expected HIBERNATING marker")
+	}
+	if !wakingFound {
+		t.Error("Expected WAKING marker after backoff period")
+	}
+	if !completed {
+		t.Error("Expected COMPLETED marker — loop should finish all iterations after retry")
+	}
+	// After the initial drain (which consumed LOOP 1/2), we should see at least 2 more
+	// LOOP markers: the retried iteration and the second iteration
+	if loopStartCount < 2 {
+		t.Errorf("Expected at least 2 loop starts after hibernate (retry + next), got %d", loopStartCount)
 	}
 }
