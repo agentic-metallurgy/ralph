@@ -15,7 +15,7 @@ const (
 )
 
 // Version is set at build time via -ldflags
-var Version = "v2026.3.22"
+var Version = "v2026.3.28"
 
 // DefaultPlanFile is the default implementation plan filename
 const DefaultPlanFile = "IMPLEMENTATION_PLAN.md"
