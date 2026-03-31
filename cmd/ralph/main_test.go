@@ -2,11 +2,15 @@ package main
 
 import (
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/cloudosai/ralph-go/internal/config"
+	"github.com/cloudosai/ralph-go/internal/loop"
+	"github.com/cloudosai/ralph-go/internal/parser"
+	"github.com/cloudosai/ralph-go/internal/stats"
 )
 
 func TestParseTaskCountsNoFile(t *testing.T) {
@@ -276,5 +280,171 @@ func TestHandleLoopMarkerReturnsTrue(t *testing.T) {
 		if isLoopStart != tt.expected {
 			t.Errorf("isNewLoopStart(%q) = %v, want %v", tt.content, isLoopStart, tt.expected)
 		}
+	}
+}
+
+// makeNoopResult creates a low-cost main-agent result message (no tool use, cost below threshold)
+func makeNoopResult(cost float64) *parser.ParsedMessage {
+	return &parser.ParsedMessage{
+		Type:         parser.MessageTypeResult,
+		TotalCostUSD: cost,
+	}
+}
+
+// makeProductiveResult creates a main-agent result with tool use in the preceding assistant message
+func makeAssistantWithToolUse() *parser.ParsedMessage {
+	return &parser.ParsedMessage{
+		Type: parser.MessageTypeAssistant,
+		Message: &parser.InnerMessage{
+			Content: []parser.ContentItem{
+				{Type: parser.ContentTypeToolUse, Name: "Read", ID: "tool_1"},
+			},
+		},
+	}
+}
+
+func TestExitLoopDetection_ConsecutiveNoops(t *testing.T) {
+	// Two consecutive no-op iterations should trigger loop stop
+	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	jsonParser := parser.NewParser()
+	tokenStats := stats.NewTokenStats()
+	apiBackoff := loop.NewBackoff()
+
+	var iterEstimate float64
+	var subagentCostAccum float64
+	var iterToolUseCount int
+	var noopStreak int
+
+	// First no-op iteration result
+	handleParsedMessageCLI(
+		makeNoopResult(0.005), claudeLoop, jsonParser, tokenStats, io.Discard,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+	)
+
+	if noopStreak != 1 {
+		t.Errorf("expected noopStreak=1 after first no-op, got %d", noopStreak)
+	}
+
+	// Simulate new loop start — reset iterToolUseCount but not noopStreak
+	iterToolUseCount = 0
+	iterEstimate = 0
+	subagentCostAccum = 0
+
+	// Second no-op iteration result — should trigger stop
+	handleParsedMessageCLI(
+		makeNoopResult(0.003), claudeLoop, jsonParser, tokenStats, io.Discard,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+	)
+
+	if noopStreak != 2 {
+		t.Errorf("expected noopStreak=2, got %d", noopStreak)
+	}
+
+	// The loop should have been stopped
+	if claudeLoop.IsRunning() {
+		t.Error("expected loop to be stopped after 2 consecutive no-op iterations")
+	}
+}
+
+func TestExitLoopDetection_ProductiveIterationResetsStreak(t *testing.T) {
+	// A productive iteration (with tool use) should reset the noop streak
+	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	jsonParser := parser.NewParser()
+	tokenStats := stats.NewTokenStats()
+	apiBackoff := loop.NewBackoff()
+
+	var iterEstimate float64
+	var subagentCostAccum float64
+	var iterToolUseCount int
+	var noopStreak int
+
+	// First no-op iteration
+	handleParsedMessageCLI(
+		makeNoopResult(0.005), claudeLoop, jsonParser, tokenStats, io.Discard,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+	)
+	if noopStreak != 1 {
+		t.Fatalf("expected noopStreak=1, got %d", noopStreak)
+	}
+
+	// Simulate new loop start
+	iterToolUseCount = 0
+	iterEstimate = 0
+	subagentCostAccum = 0
+
+	// Productive iteration: assistant message with tool use, then result with higher cost
+	handleParsedMessageCLI(
+		makeAssistantWithToolUse(), claudeLoop, jsonParser, tokenStats, io.Discard,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+	)
+
+	handleParsedMessageCLI(
+		makeNoopResult(0.50), claudeLoop, jsonParser, tokenStats, io.Discard,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+	)
+
+	if noopStreak != 0 {
+		t.Errorf("expected noopStreak reset to 0 after productive iteration, got %d", noopStreak)
+	}
+}
+
+func TestExitLoopDetection_HighCostNoToolsIsNotNoop(t *testing.T) {
+	// A high-cost iteration with no tool use (e.g., planning/thinking) should NOT be a noop
+	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	jsonParser := parser.NewParser()
+	tokenStats := stats.NewTokenStats()
+	apiBackoff := loop.NewBackoff()
+
+	var iterEstimate float64
+	var subagentCostAccum float64
+	var iterToolUseCount int
+	var noopStreak int
+
+	// High cost result with no tool use — this is legitimate thinking work
+	handleParsedMessageCLI(
+		makeNoopResult(0.50), claudeLoop, jsonParser, tokenStats, io.Discard,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+	)
+
+	if noopStreak != 0 {
+		t.Errorf("expected noopStreak=0 for high-cost iteration, got %d", noopStreak)
+	}
+}
+
+func TestExitLoopDetection_SubagentResultIgnored(t *testing.T) {
+	// Subagent result messages should not affect noop detection
+	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	jsonParser := parser.NewParser()
+	tokenStats := stats.NewTokenStats()
+	apiBackoff := loop.NewBackoff()
+
+	var iterEstimate float64
+	var subagentCostAccum float64
+	var iterToolUseCount int
+	var noopStreak int
+
+	parentID := "parent-123"
+	subagentResult := &parser.ParsedMessage{
+		Type:            parser.MessageTypeResult,
+		TotalCostUSD:    0.001,
+		ParentToolUseID: &parentID,
+	}
+
+	handleParsedMessageCLI(
+		subagentResult, claudeLoop, jsonParser, tokenStats, io.Discard,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+	)
+
+	if noopStreak != 0 {
+		t.Errorf("expected noopStreak=0 after subagent result, got %d", noopStreak)
+	}
+}
+
+func TestExitLoopDetection_ThresholdConstant(t *testing.T) {
+	if NoopIterationThreshold < 1 {
+		t.Error("NoopIterationThreshold must be at least 1")
+	}
+	if noopCostThreshold <= 0 {
+		t.Error("noopCostThreshold must be positive")
 	}
 }
