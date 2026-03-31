@@ -729,8 +729,8 @@ func handleParsedMessage(
 
 	case parser.MessageTypeResult:
 		// Result messages are handled above for cost extraction
-		// Optionally show completion message
-		if parsed.TotalCostUSD > 0 {
+		// Only show "Iteration cost" for the main agent result, not subagent results
+		if parsed.TotalCostUSD > 0 && !jsonParser.IsSubagentMessage(parsed) {
 			msgChan <- tui.Message{
 				Role:    tui.RoleSystem,
 				Content: fmt.Sprintf("Iteration cost: $%.6f", parsed.TotalCostUSD),
@@ -822,7 +822,7 @@ func handleParsedMessageCLI(
 			}
 		}
 	}
-	if parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 {
+	if parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 && !jsonParser.IsSubagentMessage(parsed) {
 		fmt.Printf("[cost] Iteration cost: $%.6f\n", parsed.TotalCostUSD)
 	}
 }

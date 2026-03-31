@@ -1667,3 +1667,55 @@ func TestParseLineThinkingContentItemParsed(t *testing.T) {
 		t.Errorf("Expected ThinkingText 'My thoughts', got %q", item.ThinkingText)
 	}
 }
+
+// TestIterationCostDisplaySuppressedForSubagent verifies that the "Iteration cost"
+// display logic correctly distinguishes subagent results from main results.
+// In both TUI and CLI modes, cost display should only fire for non-subagent results.
+func TestIterationCostDisplaySuppressedForSubagent(t *testing.T) {
+	p := parser.NewParser()
+
+	tests := []struct {
+		name          string
+		line          string
+		shouldDisplay bool // true if "Iteration cost" should be shown
+	}{
+		{
+			"main result with cost — should display",
+			`{"type":"result","total_cost_usd":3.32}`,
+			true,
+		},
+		{
+			"subagent result with cost — should suppress",
+			`{"type":"result","total_cost_usd":0.22,"parent_tool_use_id":"toolu_sub1"}`,
+			false,
+		},
+		{
+			"main result with zero cost — should suppress",
+			`{"type":"result","total_cost_usd":0}`,
+			false,
+		},
+		{
+			"non-result message — should suppress",
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}`,
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := p.ParseLine(tt.line)
+			if parsed == nil {
+				if tt.shouldDisplay {
+					t.Fatal("Expected parsed message, got nil")
+				}
+				return
+			}
+			// Mirror the display condition from handleParsedMessage (TUI) and handleParsedMessageCLI (CLI):
+			// parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 && !jsonParser.IsSubagentMessage(parsed)
+			wouldDisplay := parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 && !p.IsSubagentMessage(parsed)
+			if wouldDisplay != tt.shouldDisplay {
+				t.Errorf("Expected shouldDisplay=%v, got %v", tt.shouldDisplay, wouldDisplay)
+			}
+		})
+	}
+}
