@@ -396,7 +396,7 @@ func QueryRollingHourCost(db *sql.DB, owner, repo string) (float64, error) {
 	if owner != "" && repo != "" {
 		err := db.QueryRow(
 			`SELECT COALESCE(SUM(delta_cost), 0) FROM checkpoints
-			 WHERE timestamp >= datetime('now', '-60 minutes')
+			 WHERE timestamp >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-60 minutes')
 			   AND owner = ? AND repo = ?`,
 			owner, repo,
 		).Scan(&cost)
@@ -405,7 +405,7 @@ func QueryRollingHourCost(db *sql.DB, owner, repo string) (float64, error) {
 
 	err := db.QueryRow(
 		`SELECT COALESCE(SUM(delta_cost), 0) FROM checkpoints
-		 WHERE timestamp >= datetime('now', '-60 minutes')`,
+		 WHERE timestamp >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-60 minutes')`,
 	).Scan(&cost)
 	return cost, err
 }
@@ -425,13 +425,13 @@ func QueryRollingWakeTime(db *sql.DB, owner, repo string, limit float64) (time.T
 	var args []interface{}
 	if owner != "" && repo != "" {
 		query = `SELECT delta_cost, timestamp FROM checkpoints
-				 WHERE timestamp >= datetime('now', '-60 minutes')
+				 WHERE timestamp >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-60 minutes')
 				   AND owner = ? AND repo = ?
 				 ORDER BY timestamp ASC`
 		args = []interface{}{owner, repo}
 	} else {
 		query = `SELECT delta_cost, timestamp FROM checkpoints
-				 WHERE timestamp >= datetime('now', '-60 minutes')
+				 WHERE timestamp >= strftime('%Y-%m-%dT%H:%M:%S', 'now', '-60 minutes')
 				 ORDER BY timestamp ASC`
 	}
 
