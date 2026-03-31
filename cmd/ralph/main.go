@@ -192,14 +192,14 @@ func (lt *loopTracker) completeLoop(dbCtx *dbContext, tokenStats *stats.TokenSta
 	lt.currentLoopID = ""
 }
 
-// checkCostPacing queries the current calendar-hour cost and hibernates the loop
+// checkCostPacing queries the rolling 60-minute window cost and hibernates the loop
 // if it exceeds maxCostPerHour. Returns whether the budget was exceeded, the
-// current hour's cost, and the next hour boundary (for caller notifications).
+// current hour's cost, and the wake time (for caller notifications).
 func checkCostPacing(dbCtx *dbContext, maxCostPerHour float64, claudeLoop *loop.Loop) (exceeded bool, hourCost float64, nextHour time.Time) {
 	if maxCostPerHour <= 0 || dbCtx == nil || dbCtx.db == nil {
 		return false, 0, time.Time{}
 	}
-	cost, err := stats.QueryCalendarHourCost(dbCtx.db, dbCtx.owner, dbCtx.repo)
+	cost, err := stats.QueryRollingHourCost(dbCtx.db, dbCtx.owner, dbCtx.repo)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: cost pacing query failed: %v\n", err)
 		return false, 0, time.Time{}
@@ -207,7 +207,10 @@ func checkCostPacing(dbCtx *dbContext, maxCostPerHour float64, claudeLoop *loop.
 	if cost < maxCostPerHour {
 		return false, cost, time.Time{}
 	}
-	next := time.Now().UTC().Truncate(time.Hour).Add(time.Hour)
+	next, err := stats.QueryRollingWakeTime(dbCtx.db, dbCtx.owner, dbCtx.repo, maxCostPerHour)
+	if err != nil {
+		next = time.Now().UTC().Add(60 * time.Minute)
+	}
 	claudeLoop.Hibernate(next)
 	return true, cost, next
 }
@@ -893,16 +896,19 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 		Prompt:     promptContent,
 	})
 
-	// Startup budget check — wait until next hour if budget already exceeded
+	// Startup budget check — wait until rolling window drops below limit
 	if cfg.MaxCostPerHour > 0 && dbCtx != nil && dbCtx.db != nil {
-		cost, err := stats.QueryCalendarHourCost(dbCtx.db, dbCtx.owner, dbCtx.repo)
+		cost, err := stats.QueryRollingHourCost(dbCtx.db, dbCtx.owner, dbCtx.repo)
 		if err == nil && cost >= cfg.MaxCostPerHour {
-			nextHour := time.Now().UTC().Truncate(time.Hour).Add(time.Hour)
-			fmt.Printf("[pacing] Cost budget already exceeded ($%.4f/$%.2f/hr), waiting until %s UTC\n", cost, cfg.MaxCostPerHour, nextHour.Format(time.Kitchen))
+			wakeTime, wakeErr := stats.QueryRollingWakeTime(dbCtx.db, dbCtx.owner, dbCtx.repo, cfg.MaxCostPerHour)
+			if wakeErr != nil {
+				wakeTime = time.Now().UTC().Add(60 * time.Minute)
+			}
+			fmt.Printf("[pacing] Cost budget already exceeded ($%.4f/$%.2f/hr), waiting until %s UTC\n", cost, cfg.MaxCostPerHour, wakeTime.Format(time.Kitchen))
 			select {
 			case <-ctx.Done():
 				return 1
-			case <-time.After(time.Until(nextHour)):
+			case <-time.After(time.Until(wakeTime)):
 			}
 			fmt.Println("[pacing] Cost cycle reset, resuming")
 		}
@@ -999,16 +1005,19 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 
 	fmt.Println("ralph cli: starting plan-and-build mode")
 
-	// Startup budget check — wait until next hour if budget already exceeded
+	// Startup budget check — wait until rolling window drops below limit
 	if cfg.MaxCostPerHour > 0 && dbCtx != nil && dbCtx.db != nil {
-		cost, err := stats.QueryCalendarHourCost(dbCtx.db, dbCtx.owner, dbCtx.repo)
+		cost, err := stats.QueryRollingHourCost(dbCtx.db, dbCtx.owner, dbCtx.repo)
 		if err == nil && cost >= cfg.MaxCostPerHour {
-			nextHour := time.Now().UTC().Truncate(time.Hour).Add(time.Hour)
-			fmt.Printf("[pacing] Cost budget already exceeded ($%.4f/$%.2f/hr), waiting until %s UTC\n", cost, cfg.MaxCostPerHour, nextHour.Format(time.Kitchen))
+			wakeTime, wakeErr := stats.QueryRollingWakeTime(dbCtx.db, dbCtx.owner, dbCtx.repo, cfg.MaxCostPerHour)
+			if wakeErr != nil {
+				wakeTime = time.Now().UTC().Add(60 * time.Minute)
+			}
+			fmt.Printf("[pacing] Cost budget already exceeded ($%.4f/$%.2f/hr), waiting until %s UTC\n", cost, cfg.MaxCostPerHour, wakeTime.Format(time.Kitchen))
 			select {
 			case <-ctx.Done():
 				return 1
-			case <-time.After(time.Until(nextHour)):
+			case <-time.After(time.Until(wakeTime)):
 			}
 			fmt.Println("[pacing] Cost cycle reset, resuming")
 		}

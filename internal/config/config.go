@@ -34,7 +34,7 @@ type Config struct {
 	ShowVersion      bool
 	NoTmux           bool
 	CLI             bool
-	MaxCostPerHour  float64 // maximum USD cost per calendar hour (0 = no limit)
+	MaxCostPerHour  float64 // maximum USD cost per rolling hour (0 = no limit)
 	Subcommand      string  // "plan", "build", "plan-and-build", "autoresearch", or "" (default: build mode)
 }
 
@@ -82,7 +82,7 @@ func ParseFlags() *Config {
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
 	flag.BoolVar(&cfg.NoTmux, "no-tmux", false, "Run without tmux wrapper")
 	flag.BoolVar(&cfg.CLI, "cli", false, "Run without TUI, output to stdout/stderr, exit when complete")
-	flag.Float64Var(&cfg.MaxCostPerHour, "max-cost-per-hour", 0, "Maximum USD cost per calendar hour (0 = no limit)")
+	flag.Float64Var(&cfg.MaxCostPerHour, "max-cost-per-hour", 0, "Maximum USD cost per rolling hour (0 = no limit)")
 
 	// Custom usage function to display flags with -- prefix
 	flag.Usage = func() {

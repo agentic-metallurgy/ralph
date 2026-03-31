@@ -952,7 +952,7 @@ func TestWriteLoopStats_NilDB(t *testing.T) {
 	}
 }
 
-func TestQueryCalendarHourCost_Global(t *testing.T) {
+func TestQueryRollingHourCost_Global(t *testing.T) {
 	db, cleanup := helperInitTestDB(t)
 	defer cleanup()
 
@@ -972,9 +972,9 @@ func TestQueryCalendarHourCost_Global(t *testing.T) {
 		}
 	}
 
-	total, err := stats.QueryCalendarHourCost(db, "", "")
+	total, err := stats.QueryRollingHourCost(db, "", "")
 	if err != nil {
-		t.Fatalf("QueryCalendarHourCost failed: %v", err)
+		t.Fatalf("QueryRollingHourCost failed: %v", err)
 	}
 
 	expected := 0.60
@@ -984,7 +984,7 @@ func TestQueryCalendarHourCost_Global(t *testing.T) {
 	}
 }
 
-func TestQueryCalendarHourCost_Scoped(t *testing.T) {
+func TestQueryRollingHourCost_Scoped(t *testing.T) {
 	db, cleanup := helperInitTestDB(t)
 	defer cleanup()
 
@@ -1002,9 +1002,9 @@ func TestQueryCalendarHourCost_Scoped(t *testing.T) {
 	})
 
 	// Scoped to org1/repo1
-	cost, err := stats.QueryCalendarHourCost(db, "org1", "repo1")
+	cost, err := stats.QueryRollingHourCost(db, "org1", "repo1")
 	if err != nil {
-		t.Fatalf("QueryCalendarHourCost scoped failed: %v", err)
+		t.Fatalf("QueryRollingHourCost scoped failed: %v", err)
 	}
 	expected := 0.30
 	tolerance := 0.0001
@@ -1013,9 +1013,9 @@ func TestQueryCalendarHourCost_Scoped(t *testing.T) {
 	}
 
 	// Scoped to org2/repo2
-	cost, err = stats.QueryCalendarHourCost(db, "org2", "repo2")
+	cost, err = stats.QueryRollingHourCost(db, "org2", "repo2")
 	if err != nil {
-		t.Fatalf("QueryCalendarHourCost scoped failed: %v", err)
+		t.Fatalf("QueryRollingHourCost scoped failed: %v", err)
 	}
 	expected = 0.50
 	if diff := cost - expected; diff < -tolerance || diff > tolerance {
@@ -1023,7 +1023,7 @@ func TestQueryCalendarHourCost_Scoped(t *testing.T) {
 	}
 }
 
-func TestQueryCalendarHourCost_ExcludesOldRows(t *testing.T) {
+func TestQueryRollingHourCost_ExcludesOldRows(t *testing.T) {
 	db, cleanup := helperInitTestDB(t)
 	defer cleanup()
 
@@ -1031,7 +1031,7 @@ func TestQueryCalendarHourCost_ExcludesOldRows(t *testing.T) {
 	oldTs := now.Add(-2 * time.Hour).Format(time.RFC3339)
 	currentTs := now.Format(time.RFC3339)
 
-	// Old row (2 hours ago)
+	// Old row (2 hours ago — outside the 60-minute rolling window)
 	stats.FlushCheckpoint(db, stats.CheckpointParams{
 		LoopID: "old-1", SessionID: "aaaaaa", DeltaCost: 99.0, Timestamp: oldTs,
 	})
@@ -1040,12 +1040,12 @@ func TestQueryCalendarHourCost_ExcludesOldRows(t *testing.T) {
 		LoopID: "new-1", SessionID: "bbbbbb", DeltaCost: 0.25, Timestamp: currentTs,
 	})
 
-	cost, err := stats.QueryCalendarHourCost(db, "", "")
+	cost, err := stats.QueryRollingHourCost(db, "", "")
 	if err != nil {
-		t.Fatalf("QueryCalendarHourCost failed: %v", err)
+		t.Fatalf("QueryRollingHourCost failed: %v", err)
 	}
 
-	// Should only include the current-hour row
+	// Should only include the row within the rolling window
 	tolerance := 0.0001
 	if diff := cost - 0.25; diff < -tolerance || diff > tolerance {
 		t.Errorf("Expected cost ~0.25 (excluding old row), got %f", cost)
@@ -1203,13 +1203,126 @@ func TestExportSessionTSV_EmptySession(t *testing.T) {
 	}
 }
 
-func TestQueryCalendarHourCost_NilDB(t *testing.T) {
-	cost, err := stats.QueryCalendarHourCost(nil, "", "")
+func TestQueryRollingHourCost_NilDB(t *testing.T) {
+	cost, err := stats.QueryRollingHourCost(nil, "", "")
 	if err != nil {
-		t.Errorf("QueryCalendarHourCost(nil, ...) should return nil error, got %v", err)
+		t.Errorf("QueryRollingHourCost(nil, ...) should return nil error, got %v", err)
 	}
 	if cost != 0 {
-		t.Errorf("QueryCalendarHourCost(nil, ...) should return 0, got %f", cost)
+		t.Errorf("QueryRollingHourCost(nil, ...) should return 0, got %f", cost)
+	}
+}
+
+func TestQueryRollingWakeTime_Basic(t *testing.T) {
+	db, cleanup := helperInitTestDB(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	// Insert 3 checkpoints at slightly different times within the window
+	// Oldest first: 0.10 at now-30min, 0.20 at now-20min, 0.30 at now-10min
+	// Total = 0.60, limit = 0.25
+	// Walking oldest to newest, subtracting:
+	//   0.60 - 0.10 = 0.50 (still >= 0.25)
+	//   0.50 - 0.20 = 0.30 (still >= 0.25)
+	//   0.30 - 0.30 = 0.00 (< 0.25) → wake = ts3 + 60min
+	ts1 := now.Add(-30 * time.Minute).Format(time.RFC3339)
+	ts2 := now.Add(-20 * time.Minute).Format(time.RFC3339)
+	ts3 := now.Add(-10 * time.Minute).Format(time.RFC3339)
+
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "w-1", SessionID: "ww0001", DeltaCost: 0.10, Timestamp: ts1,
+	})
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "w-2", SessionID: "ww0001", DeltaCost: 0.20, Timestamp: ts2,
+	})
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "w-3", SessionID: "ww0001", DeltaCost: 0.30, Timestamp: ts3,
+	})
+
+	wakeTime, err := stats.QueryRollingWakeTime(db, "", "", 0.25)
+	if err != nil {
+		t.Fatalf("QueryRollingWakeTime failed: %v", err)
+	}
+
+	// Expected: ts3 + 60min = now - 10min + 60min = now + 50min
+	expectedWake := now.Add(-10 * time.Minute).Add(60 * time.Minute)
+	diff := wakeTime.Sub(expectedWake)
+	if diff < -5*time.Second || diff > 5*time.Second {
+		t.Errorf("Expected wake time ~%v, got %v (diff=%v)", expectedWake, wakeTime, diff)
+	}
+}
+
+func TestQueryRollingWakeTime_Scoped(t *testing.T) {
+	db, cleanup := helperInitTestDB(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	ts1 := now.Add(-30 * time.Minute).Format(time.RFC3339)
+	ts2 := now.Add(-20 * time.Minute).Format(time.RFC3339)
+
+	// Insert rows for two repos
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "s-1", SessionID: "ss0001", Owner: "org1", Repo: "repo1", DeltaCost: 0.40, Timestamp: ts1,
+	})
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "s-2", SessionID: "ss0001", Owner: "org1", Repo: "repo1", DeltaCost: 0.30, Timestamp: ts2,
+	})
+	// Different repo — should not affect org1/repo1 wake time
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "s-3", SessionID: "ss0001", Owner: "org2", Repo: "repo2", DeltaCost: 5.00, Timestamp: ts1,
+	})
+
+	// Scoped to org1/repo1: total=0.70, limit=0.25
+	// 0.70 - 0.40 = 0.30 (>= 0.25)
+	// 0.30 - 0.30 = 0.00 (< 0.25) → wake = ts2 + 60min
+	wakeTime, err := stats.QueryRollingWakeTime(db, "org1", "repo1", 0.25)
+	if err != nil {
+		t.Fatalf("QueryRollingWakeTime scoped failed: %v", err)
+	}
+
+	expectedWake := now.Add(-20 * time.Minute).Add(60 * time.Minute)
+	diff := wakeTime.Sub(expectedWake)
+	if diff < -5*time.Second || diff > 5*time.Second {
+		t.Errorf("Expected scoped wake time ~%v, got %v (diff=%v)", expectedWake, wakeTime, diff)
+	}
+}
+
+func TestQueryRollingWakeTime_FallbackNoDB(t *testing.T) {
+	wakeTime, err := stats.QueryRollingWakeTime(nil, "", "", 1.0)
+	if err != nil {
+		t.Errorf("QueryRollingWakeTime(nil, ...) should return nil error, got %v", err)
+	}
+	if !wakeTime.IsZero() {
+		t.Errorf("QueryRollingWakeTime(nil, ...) should return zero time, got %v", wakeTime)
+	}
+}
+
+func TestQueryRollingWakeTime_FallbackSingleLargeCheckpoint(t *testing.T) {
+	db, cleanup := helperInitTestDB(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	ts := now.Add(-10 * time.Minute).Format(time.RFC3339)
+
+	// One checkpoint with cost=5.0, limit=1.0
+	// After subtracting this single row: 5.0 - 5.0 = 0.0 < 1.0
+	// But since there's only one row and removing it brings total to 0,
+	// wake time = ts + 60min
+	stats.FlushCheckpoint(db, stats.CheckpointParams{
+		LoopID: "big-1", SessionID: "bb0001", DeltaCost: 5.0, Timestamp: ts,
+	})
+
+	wakeTime, err := stats.QueryRollingWakeTime(db, "", "", 1.0)
+	if err != nil {
+		t.Fatalf("QueryRollingWakeTime failed: %v", err)
+	}
+
+	// With a single row, subtracting it: 5.0 - 5.0 = 0.0 < 1.0
+	// So wake time = ts + 60min = now - 10min + 60min = now + 50min
+	expectedWake := now.Add(-10 * time.Minute).Add(60 * time.Minute)
+	diff := wakeTime.Sub(expectedWake)
+	if diff < -5*time.Second || diff > 5*time.Second {
+		t.Errorf("Expected fallback wake time ~%v, got %v (diff=%v)", expectedWake, wakeTime, diff)
 	}
 }
 
