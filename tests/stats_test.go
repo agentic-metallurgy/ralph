@@ -1222,3 +1222,43 @@ func TestExportSessionTSV_NilDB(t *testing.T) {
 		t.Errorf("ExportSessionTSV(nil, ...) should return empty string, got %q", tsv)
 	}
 }
+
+func TestReconcileCostThreadSafe(t *testing.T) {
+	s := stats.NewTokenStats()
+
+	// Seed with some initial cost so ReconcileCost has something to work with
+	s.AddCost(10.0)
+
+	const goroutines = 100
+	const iterations = 1000
+	var wg sync.WaitGroup
+
+	// Half the goroutines call ReconcileCost, the other half call Snapshot
+	wg.Add(goroutines)
+	for i := 0; i < goroutines/2; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				s.ReconcileCost(0.001, 0.001)
+			}
+		}()
+	}
+	for i := 0; i < goroutines/2; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				snap := s.Snapshot()
+				_ = snap.TotalCostUSD // read the field
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// The exact final value isn't important — the test's value is that
+	// it passes under `go test -race` without data race warnings.
+	snap := s.Snapshot()
+	if snap.TotalCostUSD < 0 {
+		t.Errorf("TotalCostUSD should not be negative, got %f", snap.TotalCostUSD)
+	}
+}
