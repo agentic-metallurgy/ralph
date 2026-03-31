@@ -154,8 +154,8 @@ func TestStatusBarNilSafe(t *testing.T) {
 
 // TestFormatStatusRight tests the status bar format string
 func TestFormatStatusRight(t *testing.T) {
-	result := tmux.FormatStatusRight("#1/5", "128.58m", "07:18:00")
-	expected := "[current loop: #1/5   tokens: 128.58m   elapsed: 07:18:00]"
+	result := tmux.FormatStatusRight("ralph", "main", "1/5", "07:18:00")
+	expected := "[ralph | main | loop: 1/5, uptime: 07:18:00]"
 	if result != expected {
 		t.Errorf("FormatStatusRight() = %q, want %q", result, expected)
 	}
@@ -163,11 +163,11 @@ func TestFormatStatusRight(t *testing.T) {
 
 // TestFormatStatusRight_ZeroValues tests formatting with zero/default values
 func TestFormatStatusRight_ZeroValues(t *testing.T) {
-	result := tmux.FormatStatusRight("#0/0", "0", "00:00:00")
+	result := tmux.FormatStatusRight("", "", "0/0", "00:00:00")
 	if result == "" {
 		t.Error("FormatStatusRight should return non-empty string for zero values")
 	}
-	expected := "[current loop: #0/0   tokens: 0   elapsed: 00:00:00]"
+	expected := "[ |  | loop: 0/0, uptime: 00:00:00]"
 	if result != expected {
 		t.Errorf("FormatStatusRight() = %q, want %q", result, expected)
 	}

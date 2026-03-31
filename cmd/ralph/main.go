@@ -372,6 +372,7 @@ func main() {
 	model.SetLoopProgress(0, cfg.Iterations)
 	model.SetLoop(claudeLoop)
 	model.SetTmuxStatusBar(tmuxBar)
+	model.SetGitContext(dbCtx.repo, dbCtx.branch)
 
 	// Parse implementation plan for task counts
 	completedTasks, totalTasks := parseTaskCounts(cfg.PlanFile)
@@ -1128,6 +1129,7 @@ func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats, logFile i
 	model.SetBaseElapsed(time.Duration(tokenStats.TotalElapsedNs))
 	model.SetLoopProgress(0, cfg.Iterations)
 	model.SetTmuxStatusBar(tmuxBar)
+	model.SetGitContext(dbCtx.repo, dbCtx.branch)
 
 	// Parse implementation plan for task counts
 	completedTasks, totalTasks := parseTaskCounts(cfg.PlanFile)

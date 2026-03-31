@@ -3,17 +3,17 @@ package tests
 // ============================================================================
 // BDD Test Suite: Tmux Status Bar Content (Task 8)
 //
-// User goal: while ralph is running inside tmux, the status bar shows current
-// loop progress, per-loop token count, and per-loop elapsed time so the user
-// can monitor build progress at a glance without looking at the TUI.
+// User goal: while ralph is running inside tmux, the status bar shows repo name,
+// branch, loop progress, and session uptime so the user can monitor build
+// progress at a glance without looking at the TUI.
 //
 // updateTmuxStatusBar() is called on every tick and formats the content as:
 //
-//	[current loop: #N/M   tokens: X   elapsed: HH:MM:SS]
+//	[repo | branch | loop: N/M, uptime: HH:MM:SS]
 //
 // During hibernation it shows:
 //
-//	[current loop: RATE LIMITED   tokens: 💤 MM:SS   elapsed: ]
+//	[repo | branch | RATE LIMITED 💤 MM:SS]
 //
 // These tests inject a FakeStatusBarForTest, trigger a tick, and assert the
 // content passed to the fake bar matches expectations.
@@ -62,8 +62,8 @@ func TestBDD_TmuxStatusBar_LoopProgressShownOnTick(t *testing.T) {
 	triggerTick(m)
 
 	// Then: loop progress shown
-	if !strings.Contains(fakeBar.LastContent, "#2/5") {
-		t.Errorf("Expected #2/5 in tmux bar, got: %q", fakeBar.LastContent)
+	if !strings.Contains(fakeBar.LastContent, "2/5") {
+		t.Errorf("Expected 2/5 in tmux bar, got: %q", fakeBar.LastContent)
 	}
 }
 
@@ -83,38 +83,41 @@ func TestBDD_TmuxStatusBar_DefaultProgressShownBeforeLoopSet(t *testing.T) {
 	triggerTick(m)
 
 	// Then: default loop progress shown
-	if !strings.Contains(fakeBar.LastContent, "#0/0") {
-		t.Errorf("Expected #0/0 in tmux bar before loop is set, got: %q", fakeBar.LastContent)
+	if !strings.Contains(fakeBar.LastContent, "0/0") {
+		t.Errorf("Expected 0/0 in tmux bar before loop is set, got: %q", fakeBar.LastContent)
 	}
 }
 
-// --- Scenario 3: Per-loop token count shown ---
+// --- Scenario 3: Repo and branch shown ---
 
-// TestBDD_TmuxStatusBar_PerLoopTokenCountShownOnTick
+// TestBDD_TmuxStatusBar_RepoBranchShownOnTick
 //
-// Given: a model with 2500 per-loop tokens accumulated
+// Given: a model with git context set (repo="myrepo", branch="feat-x")
 // When: a tick occurs
-// Then: the tmux bar content includes "2.5k" (per-loop, not cumulative)
-func TestBDD_TmuxStatusBar_PerLoopTokenCountShownOnTick(t *testing.T) {
+// Then: the tmux bar content includes the repo and branch names
+func TestBDD_TmuxStatusBar_RepoBranchShownOnTick(t *testing.T) {
 	m, fakeBar := setupModelWithFakeBar(1, 3)
 
-	// Given: 2500 tokens in current loop
-	m, _ = sendTuiMsg(m, tui.SendLoopStatsUpdate(2500))
+	// Given: git context set
+	m.SetGitContext("myrepo", "feat-x")
 
 	// When: tick
 	triggerTick(m)
 
-	// Then: per-loop token count shown
-	if !strings.Contains(fakeBar.LastContent, "2.5k") {
-		t.Errorf("Expected 2.5k in tmux bar, got: %q", fakeBar.LastContent)
+	// Then: repo and branch shown
+	if !strings.Contains(fakeBar.LastContent, "myrepo") {
+		t.Errorf("Expected 'myrepo' in tmux bar, got: %q", fakeBar.LastContent)
+	}
+	if !strings.Contains(fakeBar.LastContent, "feat-x") {
+		t.Errorf("Expected 'feat-x' in tmux bar, got: %q", fakeBar.LastContent)
 	}
 }
 
-// --- Scenario 4: Per-loop elapsed time shown ---
+// --- Scenario 4: Session uptime shown ---
 
 // TestBDD_TmuxStatusBar_ElapsedTimeShownOnTick
 //
-// Given: a model where 65 seconds have elapsed in the current loop (mocked time)
+// Given: a model where 65 seconds of session uptime have elapsed (mocked time)
 // When: a tick occurs
 // Then: the tmux bar content includes "00:01:05"
 func TestBDD_TmuxStatusBar_ElapsedTimeShownOnTick(t *testing.T) {
@@ -215,31 +218,34 @@ func TestBDD_TmuxStatusBar_NoUpdateWhenBarNotSet(t *testing.T) {
 
 // TestBDD_TmuxStatusBar_FullFormatContainsAllFields
 //
-// Given: a model with loop at #3/7, 1000 tokens, 0 elapsed
+// Given: a model with loop at 3/7, git context set, 0 elapsed
 // When: a tick occurs
-// Then: the tmux bar uses the expected format with all three fields present
+// Then: the tmux bar uses the expected format with all fields present
 func TestBDD_TmuxStatusBar_FullFormatContainsAllFields(t *testing.T) {
 	m, fakeBar := setupModelWithFakeBar(3, 7)
-	m, _ = sendTuiMsg(m, tui.SendLoopStatsUpdate(1000))
+	m.SetGitContext("ralph", "main")
 
 	// When: tick
 	triggerTick(m)
 
-	// Then: all three fields present in correct format
+	// Then: all fields present in correct format
 	content := fakeBar.LastContent
-	if !strings.Contains(content, "current loop:") {
-		t.Errorf("Expected 'current loop:' label in tmux bar, got: %q", content)
+	if !strings.Contains(content, "loop:") {
+		t.Errorf("Expected 'loop:' label in tmux bar, got: %q", content)
 	}
-	if !strings.Contains(content, "tokens:") {
-		t.Errorf("Expected 'tokens:' label in tmux bar, got: %q", content)
+	if !strings.Contains(content, "uptime:") {
+		t.Errorf("Expected 'uptime:' label in tmux bar, got: %q", content)
 	}
-	if !strings.Contains(content, "elapsed:") {
-		t.Errorf("Expected 'elapsed:' label in tmux bar, got: %q", content)
+	if !strings.Contains(content, "3/7") {
+		t.Errorf("Expected '3/7' in tmux bar, got: %q", content)
 	}
-	if !strings.Contains(content, "#3/7") {
-		t.Errorf("Expected '#3/7' in tmux bar, got: %q", content)
+	if !strings.Contains(content, " | ") {
+		t.Errorf("Expected ' | ' separator in tmux bar, got: %q", content)
 	}
-	if !strings.Contains(content, "1k") {
-		t.Errorf("Expected '1k' token count in tmux bar, got: %q", content)
+	if !strings.Contains(content, "ralph") {
+		t.Errorf("Expected 'ralph' repo name in tmux bar, got: %q", content)
+	}
+	if !strings.Contains(content, "main") {
+		t.Errorf("Expected 'main' branch name in tmux bar, got: %q", content)
 	}
 }
