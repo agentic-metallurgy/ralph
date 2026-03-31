@@ -383,10 +383,10 @@ func WriteLoopStats(db *sql.DB, p LoopStatsParams) error {
 	return err
 }
 
-// QueryCalendarHourCost returns the sum of delta_cost for the current calendar hour.
+// QueryRollingHourCost returns the sum of delta_cost for the rolling 60-minute window.
 // If owner and repo are non-empty, the query is scoped to that project.
 // Returns (0, nil) if db is nil.
-func QueryCalendarHourCost(db *sql.DB, owner, repo string) (float64, error) {
+func QueryRollingHourCost(db *sql.DB, owner, repo string) (float64, error) {
 	if db == nil {
 		return 0, nil
 	}
@@ -395,7 +395,7 @@ func QueryCalendarHourCost(db *sql.DB, owner, repo string) (float64, error) {
 	if owner != "" && repo != "" {
 		err := db.QueryRow(
 			`SELECT COALESCE(SUM(delta_cost), 0) FROM checkpoints
-			 WHERE timestamp >= strftime('%Y-%m-%dT%H:00:00', 'now')
+			 WHERE timestamp >= datetime('now', '-60 minutes')
 			   AND owner = ? AND repo = ?`,
 			owner, repo,
 		).Scan(&cost)
@@ -404,7 +404,7 @@ func QueryCalendarHourCost(db *sql.DB, owner, repo string) (float64, error) {
 
 	err := db.QueryRow(
 		`SELECT COALESCE(SUM(delta_cost), 0) FROM checkpoints
-		 WHERE timestamp >= strftime('%Y-%m-%dT%H:00:00', 'now')`,
+		 WHERE timestamp >= datetime('now', '-60 minutes')`,
 	).Scan(&cost)
 	return cost, err
 }
