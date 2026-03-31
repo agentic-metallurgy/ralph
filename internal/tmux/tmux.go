@@ -63,9 +63,9 @@ func (s *StatusBar) Restore() {
 }
 
 // FormatStatusRight builds the tmux status bar content string.
-func FormatStatusRight(loopDisplay, tokenDisplay, timeDisplay string) string {
-	return fmt.Sprintf("[current loop: %s   tokens: %s   elapsed: %s]",
-		loopDisplay, tokenDisplay, timeDisplay)
+func FormatStatusRight(repo, branch, loopDisplay, timeDisplay string) string {
+	return fmt.Sprintf("[%s | %s | loop: %s, uptime: %s]",
+		repo, branch, loopDisplay, timeDisplay)
 }
 
 // IsInsideTmux returns true if the current process is running inside a tmux session.

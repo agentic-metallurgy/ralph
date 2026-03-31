@@ -167,6 +167,8 @@ type Model struct {
 	tmuxBar           tmuxBarUpdater
 	hibernating       bool      // whether loop is hibernating due to rate limit
 	hibernateUntil    time.Time // when rate limit resets
+	repoName          string    // git repo name for tmux status bar
+	branchName        string    // git branch name for tmux status bar
 }
 
 // NewModel creates and returns a new initialized Model
@@ -221,6 +223,12 @@ func (m *Model) SetBaseElapsed(d time.Duration) {
 // SetTmuxStatusBar sets the tmux status bar manager for live tmux status updates
 func (m *Model) SetTmuxStatusBar(sb tmuxBarUpdater) {
 	m.tmuxBar = sb
+}
+
+// SetGitContext sets the repo and branch names for the tmux status bar
+func (m *Model) SetGitContext(repo, branch string) {
+	m.repoName = repo
+	m.branchName = branch
 }
 
 // SetCompletedTasks sets the completed/total task counts from the implementation plan
@@ -833,26 +841,24 @@ func (m Model) updateTmuxStatusBar() {
 		}
 		mins := int(remaining.Minutes())
 		secs := int(remaining.Seconds()) % 60
-		hibernateDisplay := fmt.Sprintf("💤 %02d:%02d", mins, secs)
-		m.tmuxBar.Update(tmux.FormatStatusRight("RATE LIMITED", hibernateDisplay, ""))
+		hibernateDisplay := fmt.Sprintf("RATE LIMITED 💤 %02d:%02d", mins, secs)
+		m.tmuxBar.Update(tmux.FormatStatusRight(m.repoName, m.branchName, hibernateDisplay, ""))
 		return
 	}
 
-	loopDisplay := "#0/0"
+	loopDisplay := "0/0"
 	if m.totalLoops > 0 {
-		loopDisplay = fmt.Sprintf("#%d/%d", m.currentLoop, m.totalLoops)
+		loopDisplay = fmt.Sprintf("%d/%d", m.currentLoop, m.totalLoops)
 	}
 
-	// Per-loop tokens and elapsed time (not cumulative)
-	tokenDisplay := stats.FormatTokens(m.loopTotalTokens)
-
-	loopElapsed := m.getLoopElapsed()
-	hours := int(loopElapsed.Hours())
-	minutes := int(loopElapsed.Minutes()) % 60
-	seconds := int(loopElapsed.Seconds()) % 60
+	// Total session uptime
+	elapsed := m.getElapsed()
+	hours := int(elapsed.Hours())
+	minutes := int(elapsed.Minutes()) % 60
+	seconds := int(elapsed.Seconds()) % 60
 	timeDisplay := fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 
-	m.tmuxBar.Update(tmux.FormatStatusRight(loopDisplay, tokenDisplay, timeDisplay))
+	m.tmuxBar.Update(tmux.FormatStatusRight(m.repoName, m.branchName, loopDisplay, timeDisplay))
 }
 
 // SendMessage is a helper command to send a message to the TUI
