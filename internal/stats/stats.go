@@ -79,6 +79,8 @@ func (t *TokenStats) AddCost(costUSD float64) {
 // ReconcileCost replaces an estimated cost delta with the actual cost.
 // It subtracts the estimated amount and adds the actual amount.
 func (t *TokenStats) ReconcileCost(estimatedDelta, actualCost float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.TotalCostUSD -= estimatedDelta
 	t.TotalCostUSD += actualCost
 }

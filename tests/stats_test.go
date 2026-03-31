@@ -1222,3 +1222,171 @@ func TestExportSessionTSV_NilDB(t *testing.T) {
 		t.Errorf("ExportSessionTSV(nil, ...) should return empty string, got %q", tsv)
 	}
 }
+
+func TestReconcileCostThreadSafe(t *testing.T) {
+	s := stats.NewTokenStats()
+
+	// Seed with some initial cost so ReconcileCost has something to work with
+	s.AddCost(10.0)
+
+	const goroutines = 100
+	const iterations = 1000
+	var wg sync.WaitGroup
+
+	// Half the goroutines call ReconcileCost, the other half call Snapshot
+	wg.Add(goroutines)
+	for i := 0; i < goroutines/2; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				s.ReconcileCost(0.001, 0.001)
+			}
+		}()
+	}
+	for i := 0; i < goroutines/2; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				snap := s.Snapshot()
+				_ = snap.TotalCostUSD // read the field
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// The exact final value isn't important — the test's value is that
+	// it passes under `go test -race` without data race warnings.
+	snap := s.Snapshot()
+	if snap.TotalCostUSD < 0 {
+		t.Errorf("TotalCostUSD should not be negative, got %f", snap.TotalCostUSD)
+	}
+}
+
+// TestSubagentCostNoDoubleCount simulates an iteration with one subagent and verifies
+// that the final TotalCostUSD equals the main result's total_cost_usd (no double-counting).
+// Worked example from research: subagent $0.22 + main $3.32 = reported $3.32 (not $3.54).
+func TestSubagentCostNoDoubleCount(t *testing.T) {
+	s := stats.NewTokenStats()
+	tolerance := 0.0000001
+
+	// Phase 1: Token estimates stream in (main + subagent usage messages)
+	// Subagent estimates: $0.20, Main estimates: $3.00
+	var iterEstimate float64
+	var subagentCostAccum float64
+
+	subagentEstimate := 0.20
+	mainEstimate := 3.00
+
+	s.AddCost(subagentEstimate)
+	iterEstimate += subagentEstimate
+
+	s.AddCost(mainEstimate)
+	iterEstimate += mainEstimate
+
+	// TotalCostUSD should be $3.20 at this point
+	snap := s.Snapshot()
+	if diff := snap.TotalCostUSD - 3.20; diff < -tolerance || diff > tolerance {
+		t.Errorf("After estimates: TotalCostUSD = %f, expected 3.20", snap.TotalCostUSD)
+	}
+
+	// Phase 2: Subagent result arrives with total_cost_usd = $0.22
+	subagentActual := 0.22
+	s.AddCost(subagentActual)
+	subagentCostAccum += subagentActual
+
+	// Phase 3: Main result arrives with total_cost_usd = $3.32 (includes subagent)
+	mainActual := 3.32
+	s.ReconcileCost(iterEstimate+subagentCostAccum, mainActual)
+
+	// Final TotalCostUSD should equal $3.32 (the main result's actual cost)
+	snap = s.Snapshot()
+	if diff := snap.TotalCostUSD - mainActual; diff < -tolerance || diff > tolerance {
+		t.Errorf("After reconciliation: TotalCostUSD = %f, expected %f (no double-counting)", snap.TotalCostUSD, mainActual)
+	}
+}
+
+// TestSubagentCostMultipleSubagents covers two subagent results in one iteration.
+// Each subagent's cost is accumulated, final total equals the main result's total_cost_usd.
+func TestSubagentCostMultipleSubagents(t *testing.T) {
+	s := stats.NewTokenStats()
+	tolerance := 0.0000001
+
+	var iterEstimate float64
+	var subagentCostAccum float64
+
+	// Token estimates stream in
+	estimates := []float64{0.10, 0.15, 2.50} // subagent1, subagent2, main
+	for _, est := range estimates {
+		s.AddCost(est)
+		iterEstimate += est
+	}
+
+	// Subagent 1 result: $0.12
+	sub1Actual := 0.12
+	s.AddCost(sub1Actual)
+	subagentCostAccum += sub1Actual
+
+	// Subagent 2 result: $0.18
+	sub2Actual := 0.18
+	s.AddCost(sub2Actual)
+	subagentCostAccum += sub2Actual
+
+	// Main result: $3.00 (includes both subagents)
+	mainActual := 3.00
+	s.ReconcileCost(iterEstimate+subagentCostAccum, mainActual)
+
+	snap := s.Snapshot()
+	if diff := snap.TotalCostUSD - mainActual; diff < -tolerance || diff > tolerance {
+		t.Errorf("After reconciliation with 2 subagents: TotalCostUSD = %f, expected %f", snap.TotalCostUSD, mainActual)
+	}
+}
+
+// TestSubagentCostAccumResetsOnNewLoop verifies that resetting subagentCostAccum
+// on new loop start prevents cross-iteration leakage.
+func TestSubagentCostAccumResetsOnNewLoop(t *testing.T) {
+	s := stats.NewTokenStats()
+	tolerance := 0.0000001
+
+	// --- Iteration 1 ---
+	var iterEstimate float64
+	var subagentCostAccum float64
+
+	s.AddCost(1.00) // main estimate
+	iterEstimate += 1.00
+
+	s.AddCost(0.10) // subagent estimate
+	iterEstimate += 0.10
+
+	s.AddCost(0.12) // subagent result actual
+	subagentCostAccum += 0.12
+
+	s.ReconcileCost(iterEstimate+subagentCostAccum, 1.15) // main result
+	snap := s.Snapshot()
+	if diff := snap.TotalCostUSD - 1.15; diff < -tolerance || diff > tolerance {
+		t.Errorf("After iteration 1: TotalCostUSD = %f, expected 1.15", snap.TotalCostUSD)
+	}
+
+	// --- New loop start: reset accumulators ---
+	iterEstimate = 0
+	subagentCostAccum = 0
+
+	// --- Iteration 2 ---
+	s.AddCost(2.00) // main estimate
+	iterEstimate += 2.00
+
+	s.AddCost(0.20) // subagent estimate
+	iterEstimate += 0.20
+
+	s.AddCost(0.25) // subagent result actual
+	subagentCostAccum += 0.25
+
+	s.ReconcileCost(iterEstimate+subagentCostAccum, 2.30) // main result
+	snap = s.Snapshot()
+
+	// Expected: iteration1 (1.15) + iteration2 (2.30) = 3.45
+	expected := 1.15 + 2.30
+	if diff := snap.TotalCostUSD - expected; diff < -tolerance || diff > tolerance {
+		t.Errorf("After iteration 2: TotalCostUSD = %f, expected %f (no cross-iteration leakage)", snap.TotalCostUSD, expected)
+	}
+}
