@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -407,6 +408,72 @@ func QueryRollingHourCost(db *sql.DB, owner, repo string) (float64, error) {
 		 WHERE timestamp >= datetime('now', '-60 minutes')`,
 	).Scan(&cost)
 	return cost, err
+}
+
+// QueryRollingWakeTime returns the earliest time at which the rolling 60-minute window
+// cost sum will drop below limit. It walks checkpoints oldest-first, subtracting each
+// row's delta_cost from the total. When the remaining cost drops below limit, the wake
+// time is that row's timestamp + 60 minutes. If no single row's aging-out is sufficient,
+// returns time.Now().Add(60 * time.Minute) as a fallback.
+// Returns (time.Time{}, nil) if db is nil.
+func QueryRollingWakeTime(db *sql.DB, owner, repo string, limit float64) (time.Time, error) {
+	if db == nil {
+		return time.Time{}, nil
+	}
+
+	var query string
+	var args []interface{}
+	if owner != "" && repo != "" {
+		query = `SELECT delta_cost, timestamp FROM checkpoints
+				 WHERE timestamp >= datetime('now', '-60 minutes')
+				   AND owner = ? AND repo = ?
+				 ORDER BY timestamp ASC`
+		args = []interface{}{owner, repo}
+	} else {
+		query = `SELECT delta_cost, timestamp FROM checkpoints
+				 WHERE timestamp >= datetime('now', '-60 minutes')
+				 ORDER BY timestamp ASC`
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer rows.Close()
+
+	type checkpoint struct {
+		deltaCost float64
+		timestamp string
+	}
+
+	var checkpoints []checkpoint
+	var totalCost float64
+	for rows.Next() {
+		var cp checkpoint
+		if err := rows.Scan(&cp.deltaCost, &cp.timestamp); err != nil {
+			return time.Time{}, err
+		}
+		totalCost += cp.deltaCost
+		checkpoints = append(checkpoints, cp)
+	}
+	if err := rows.Err(); err != nil {
+		return time.Time{}, err
+	}
+
+	// Walk oldest to newest, subtracting each row's cost
+	for _, cp := range checkpoints {
+		totalCost -= cp.deltaCost
+		if totalCost < limit {
+			ts, err := time.Parse(time.RFC3339, cp.timestamp)
+			if err != nil {
+				return time.Time{}, fmt.Errorf("failed to parse checkpoint timestamp %q: %w", cp.timestamp, err)
+			}
+			return ts.Add(60 * time.Minute), nil
+		}
+	}
+
+	// Fallback: no single row's aging-out is sufficient
+	return time.Now().UTC().Add(60 * time.Minute), nil
 }
 
 // ExportSessionTSV returns a TSV-formatted string of loop_stats rows for the given session.
