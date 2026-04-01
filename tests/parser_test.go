@@ -1658,6 +1658,8 @@ func TestIsAuthenticationErrorTrue(t *testing.T) {
 		{"unauthorized", `{"type":"assistant","is_error":true,"error":"unauthorized"}`},
 		{"invalid_api_key", `{"type":"assistant","is_error":true,"error":"invalid_api_key"}`},
 		{"login_required", `{"type":"assistant","is_error":true,"error":"please login"}`},
+		// Real claude output: assistant message has error field but no is_error
+		{"authentication_failed_no_is_error", `{"type":"assistant","message":{"content":[{"type":"text","text":"Invalid API key"}]},"error":"authentication_failed"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1681,7 +1683,7 @@ func TestIsAuthenticationErrorFalse(t *testing.T) {
 	}{
 		{"overloaded", `{"type":"assistant","is_error":true,"error":"529 overloaded"}`},
 		{"rate_limit", `{"type":"assistant","is_error":true,"error":"rate_limit"}`},
-		{"not_error", `{"type":"assistant","is_error":false,"error":"authentication_error"}`},
+		{"empty_error", `{"type":"assistant","is_error":false,"error":""}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

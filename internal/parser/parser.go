@@ -339,10 +339,11 @@ func (p *Parser) IsAPIOverloaded(msg *ParsedMessage) bool {
 }
 
 // IsAuthenticationError checks if message indicates an authentication error.
-// Returns true if the message has is_error set and the error string contains
-// "authentication", "unauthorized", "invalid_api_key", or "login".
+// Returns true if the error string contains auth-related keywords.
+// Checks both is_error messages (result type) and assistant messages where
+// the error field is set without is_error (e.g. "authentication_failed").
 func (p *Parser) IsAuthenticationError(msg *ParsedMessage) bool {
-	if msg == nil || !msg.IsError {
+	if msg == nil || msg.Error == "" {
 		return false
 	}
 	errLower := strings.ToLower(msg.Error)

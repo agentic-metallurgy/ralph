@@ -972,6 +972,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 	var subagentCostAccum float64
 	var iterToolUseCount int
 	var noopStreak int
+	var authFailed bool
 	lt := &loopTracker{}
 	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
@@ -1001,6 +1002,9 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 		case msg, ok := <-loopOutput:
 			if !ok {
 				lt.completeLoop(dbCtx, tokenStats)
+				if authFailed {
+					return 1
+				}
 				return 0
 			}
 
@@ -1022,12 +1026,16 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 						claudeLoop.SetSessionID(sessionID)
 					}
 					handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff)
+					if jsonParser.IsAuthenticationError(parsed) {
+						authFailed = true
+					}
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						fmt.Fprintf(os.Stderr, "[error] Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.\n")
 					} else {
 						fmt.Fprintf(os.Stderr, "[error] Authentication failed: please set ANTHROPIC_API_KEY or run `claude /login`.\n")
 					}
+					authFailed = true
 					claudeLoop.Stop()
 				}
 
@@ -1039,6 +1047,9 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 				fmt.Printf("[complete] %s\n", msg.Content)
 				// In CLI mode, exit on completion instead of waiting
 				cancel()
+				if authFailed {
+					return 1
+				}
 				return 0
 			}
 		}

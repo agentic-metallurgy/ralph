@@ -40,3 +40,28 @@ func (m *RalphCi) TestWithCoverage(ctx context.Context, source *dagger.Directory
 		WithExec([]string{"go", "tool", "cover", "-func=coverage.out"}).
 		Stdout(ctx)
 }
+
+// integrationContainer returns a Go container with Node.js and the Claude CLI installed
+func (m *RalphCi) integrationContainer(source *dagger.Directory) *dagger.Container {
+	return dag.Container().
+		From("golang:1.25.3-alpine").
+		WithExec([]string{"apk", "add", "--no-cache", "nodejs", "npm"}).
+		WithExec([]string{"npm", "install", "-g", "@anthropic-ai/claude-code"}).
+		WithMountedDirectory("/src", source).
+		WithWorkdir("/src")
+}
+
+// IntegrationTest runs integration tests that require the Claude CLI.
+// These tests use a deliberately invalid API key to verify error handling —
+// no real API key or credits are needed.
+func (m *RalphCi) IntegrationTest(ctx context.Context, source *dagger.Directory) (string, error) {
+	return m.integrationContainer(source).
+		WithEnvVariable("ANTHROPIC_API_KEY", "sk-ant-test-invalid-key").
+		WithExec([]string{
+			"go", "test", "-v", "-tags=integration",
+			"-timeout=120s",
+			"-run", "TestIntegration",
+			"./tests/",
+		}).
+		Stdout(ctx)
+}
