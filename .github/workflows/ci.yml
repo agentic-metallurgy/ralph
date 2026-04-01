@@ -82,11 +82,131 @@ jobs:
         with:
           go-version: "1.25"
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          version: "~> v2"
-          args: release --clean
+      - name: Get version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cross-compile binaries
+        env:
+          VERSION: ${{ steps.version.outputs.tag }}
+          LDFLAGS: "-s -w -X github.com/cloudosai/ralph-go/internal/config.Version=${{ steps.version.outputs.tag }}"
+        run: |
+          mkdir -p dist/bin
+
+          for GOOS in darwin linux; do
+            for GOARCH in amd64 arm64; do
+              echo "Building ralph_${VERSION#v}_${GOOS}_${GOARCH}..."
+              CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH \
+                go build -ldflags "$LDFLAGS" -o "dist/ralph" ./cmd/ralph
+
+              # Create tar.gz archive
+              tar -czf "dist/ralph_${VERSION#v}_${GOOS}_${GOARCH}.tar.gz" -C dist ralph
+
+              # Create standalone binary
+              mv "dist/ralph" "dist/bin/ralph_${VERSION#v}_${GOOS}_${GOARCH}"
+            done
+          done
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum ralph_*.tar.gz > checksums.txt
+          cd bin
+          sha256sum ralph_* >> ../checksums.txt
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get previous tag
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${{ steps.version.outputs.tag }}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git log --pretty=format:"* %s (%h)" "${PREV_TAG}..HEAD" | grep -v "^docs:" | grep -v "^test:")
+          else
+            CHANGELOG="Initial release"
+          fi
+          # Write to file to avoid escaping issues
+          echo "$CHANGELOG" > /tmp/changelog.md
+
+      - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --notes-file /tmp/changelog.md \
+            dist/ralph_*.tar.gz \
+            dist/bin/ralph_* \
+            dist/checksums.txt
+
+      - name: Update Homebrew formula
+        env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # Compute sha256 for each archive
+          SHA_DARWIN_AMD64=$(sha256sum "dist/ralph_${VERSION}_darwin_amd64.tar.gz" | awk '{print $1}')
+          SHA_DARWIN_ARM64=$(sha256sum "dist/ralph_${VERSION}_darwin_arm64.tar.gz" | awk '{print $1}')
+          SHA_LINUX_AMD64=$(sha256sum "dist/ralph_${VERSION}_linux_amd64.tar.gz" | awk '{print $1}')
+          SHA_LINUX_ARM64=$(sha256sum "dist/ralph_${VERSION}_linux_arm64.tar.gz" | awk '{print $1}')
+
+          BASE_URL="https://github.com/agentic-metallurgy/ralph/releases/download/${TAG}"
+
+          cat > /tmp/ralph.rb <<FORMULA
+          # typed: false
+          # frozen_string_literal: true
+
+          class Ralph < Formula
+            desc "Ralph - AI agent loop runner"
+            homepage "https://github.com/agentic-metallurgy/ralph"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.intel?
+                url "${BASE_URL}/ralph_${VERSION}_darwin_amd64.tar.gz"
+                sha256 "${SHA_DARWIN_AMD64}"
+              end
+              if Hardware::CPU.arm?
+                url "${BASE_URL}/ralph_${VERSION}_darwin_arm64.tar.gz"
+                sha256 "${SHA_DARWIN_ARM64}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
+                url "${BASE_URL}/ralph_${VERSION}_linux_amd64.tar.gz"
+                sha256 "${SHA_LINUX_AMD64}"
+              end
+              if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
+                url "${BASE_URL}/ralph_${VERSION}_linux_arm64.tar.gz"
+                sha256 "${SHA_LINUX_ARM64}"
+              end
+            end
+
+            def install
+              bin.install "ralph"
+            end
+
+            test do
+              system "#{bin}/ralph", "--help"
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' /tmp/ralph.rb
+
+          # Push formula to homebrew-tap repo
+          cd "$(mktemp -d)"
+          git clone "https://x-access-token:${HOMEBREW_TAP_GITHUB_TOKEN}@github.com/agentic-metallurgy/homebrew-tap.git" .
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cp /tmp/ralph.rb Formula/ralph.rb
+          git add Formula/ralph.rb
+          git commit -m "ralph ${TAG}"
+          git push
