@@ -25,6 +25,15 @@ import (
 const statsFilePath = ".ralph.claude_stats"
 const logFilePath = ".ralph.log"
 
+// isAuthenticationText checks if plain text output contains authentication-related error messages.
+func isAuthenticationText(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "claude /login") ||
+		strings.Contains(lower, "authentication") ||
+		strings.Contains(lower, "not authenticated") ||
+		strings.Contains(lower, "invalid api key")
+}
+
 // NoopIterationThreshold is the number of consecutive no-op iterations (zero tool use,
 // cost < $0.01) before Ralph auto-stops the loop to avoid wasting money on exit loops.
 const NoopIterationThreshold = 2
@@ -546,6 +555,21 @@ func processMessage(
 			if loopMarker != nil {
 				program.Send(tui.SendLoopUpdate(loopMarker.Current, loopMarker.Total)())
 			}
+			// Check for plain-text authentication errors (e.g., "Please run claude /login")
+			if isAuthenticationText(msg.Content) {
+				if os.Getenv("ANTHROPIC_API_KEY") != "" {
+					msgChan <- tui.Message{
+						Role:    tui.RoleSystem,
+						Content: "Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.",
+					}
+				} else {
+					msgChan <- tui.Message{
+						Role:    tui.RoleSystem,
+						Content: "Authentication failed: please set ANTHROPIC_API_KEY or run `claude /login`.",
+					}
+				}
+				claudeLoop.Stop()
+			}
 		}
 
 	case "error":
@@ -639,6 +663,23 @@ func handleParsedMessage(
 			Content: fmt.Sprintf("API overloaded (529), retry %d/%d, hibernating %s until %s", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen)),
 		}
 		return // Don't process further
+	}
+
+	// Check for authentication error — stop loop with helpful message
+	if jsonParser.IsAuthenticationError(parsed) {
+		if os.Getenv("ANTHROPIC_API_KEY") != "" {
+			msgChan <- tui.Message{
+				Role:    tui.RoleSystem,
+				Content: "Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.",
+			}
+		} else {
+			msgChan <- tui.Message{
+				Role:    tui.RoleSystem,
+				Content: "Authentication failed: please set ANTHROPIC_API_KEY or run `claude /login`.",
+			}
+		}
+		claudeLoop.Stop()
+		return
 	}
 
 	// Extract usage information
@@ -804,6 +845,16 @@ func handleParsedMessageCLI(
 		resetsAt := time.Now().Add(backoffDuration)
 		claudeLoop.Hibernate(resetsAt)
 		fmt.Printf("[hibernate] API overloaded (529), retry %d/%d, hibernating %s until %s\n", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen))
+	}
+	// Check for authentication error — stop loop with helpful message
+	if jsonParser.IsAuthenticationError(parsed) {
+		if os.Getenv("ANTHROPIC_API_KEY") != "" {
+			fmt.Fprintf(os.Stderr, "[error] Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "[error] Authentication failed: please set ANTHROPIC_API_KEY or run `claude /login`.\n")
+		}
+		claudeLoop.Stop()
+		return
 	}
 	// Track stats
 	if usage := jsonParser.GetUsage(parsed); usage != nil {
@@ -971,6 +1022,13 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 						claudeLoop.SetSessionID(sessionID)
 					}
 					handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff)
+				} else if isAuthenticationText(msg.Content) {
+					if os.Getenv("ANTHROPIC_API_KEY") != "" {
+						fmt.Fprintf(os.Stderr, "[error] Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.\n")
+					} else {
+						fmt.Fprintf(os.Stderr, "[error] Authentication failed: please set ANTHROPIC_API_KEY or run `claude /login`.\n")
+					}
+					claudeLoop.Stop()
 				}
 
 			case "error":
@@ -1088,6 +1146,13 @@ planLoop:
 						sessionID = sid
 					}
 					handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, &planIterEstimate, &planSubagentCostAccum, &planIterToolUseCount, &planNoopStreak, planBackoff)
+				} else if isAuthenticationText(msg.Content) {
+					if os.Getenv("ANTHROPIC_API_KEY") != "" {
+						fmt.Fprintf(os.Stderr, "[error] Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.\n")
+					} else {
+						fmt.Fprintf(os.Stderr, "[error] Authentication failed: please set ANTHROPIC_API_KEY or run `claude /login`.\n")
+					}
+					planLoop.Stop()
 				}
 
 			case "error":
@@ -1179,6 +1244,13 @@ planLoop:
 						buildLoop.SetSessionID(sid)
 					}
 					handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, &buildIterEstimate, &buildSubagentCostAccum, &buildIterToolUseCount, &buildNoopStreak, buildBackoff)
+				} else if isAuthenticationText(msg.Content) {
+					if os.Getenv("ANTHROPIC_API_KEY") != "" {
+						fmt.Fprintf(os.Stderr, "[error] Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.\n")
+					} else {
+						fmt.Fprintf(os.Stderr, "[error] Authentication failed: please set ANTHROPIC_API_KEY or run `claude /login`.\n")
+					}
+					buildLoop.Stop()
 				}
 
 			case "error":
@@ -1401,6 +1473,19 @@ func processPlanPhase(
 						planLoop.SetSessionID(sessionID)
 					}
 					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff)
+				} else if isAuthenticationText(msg.Content) {
+					if os.Getenv("ANTHROPIC_API_KEY") != "" {
+						msgChan <- tui.Message{
+							Role:    tui.RoleSystem,
+							Content: "Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.",
+						}
+					} else {
+						msgChan <- tui.Message{
+							Role:    tui.RoleSystem,
+							Content: "Authentication failed: please set ANTHROPIC_API_KEY or run `claude /login`.",
+						}
+					}
+					planLoop.Stop()
 				}
 
 			case "error":
@@ -1496,6 +1581,19 @@ func processBuildPhase(
 						buildLoop.SetSessionID(sessionID)
 					}
 					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff)
+				} else if isAuthenticationText(msg.Content) {
+					if os.Getenv("ANTHROPIC_API_KEY") != "" {
+						msgChan <- tui.Message{
+							Role:    tui.RoleSystem,
+							Content: "Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.",
+						}
+					} else {
+						msgChan <- tui.Message{
+							Role:    tui.RoleSystem,
+							Content: "Authentication failed: please set ANTHROPIC_API_KEY or run `claude /login`.",
+						}
+					}
+					buildLoop.Stop()
 				}
 
 			case "error":

@@ -338,6 +338,20 @@ func (p *Parser) IsAPIOverloaded(msg *ParsedMessage) bool {
 	return strings.Contains(errLower, "529") || strings.Contains(errLower, "overloaded")
 }
 
+// IsAuthenticationError checks if message indicates an authentication error.
+// Returns true if the message has is_error set and the error string contains
+// "authentication", "unauthorized", "invalid_api_key", or "login".
+func (p *Parser) IsAuthenticationError(msg *ParsedMessage) bool {
+	if msg == nil || !msg.IsError {
+		return false
+	}
+	errLower := strings.ToLower(msg.Error)
+	return strings.Contains(errLower, "authentication") ||
+		strings.Contains(errLower, "unauthorized") ||
+		strings.Contains(errLower, "invalid_api_key") ||
+		strings.Contains(errLower, "login")
+}
+
 // IsSubagentMessage returns true if the message originates from a subagent
 // (i.e., has a non-nil, non-empty parent_tool_use_id)
 func (p *Parser) IsSubagentMessage(msg *ParsedMessage) bool {

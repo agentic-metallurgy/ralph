@@ -1647,6 +1647,63 @@ func TestIsAPIOverloadedDifferentError(t *testing.T) {
 	}
 }
 
+// TestIsAuthenticationErrorTrue tests that authentication errors are detected
+func TestIsAuthenticationErrorTrue(t *testing.T) {
+	p := parser.NewParser()
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"authentication_error", `{"type":"assistant","is_error":true,"error":"authentication_error"}`},
+		{"unauthorized", `{"type":"assistant","is_error":true,"error":"unauthorized"}`},
+		{"invalid_api_key", `{"type":"assistant","is_error":true,"error":"invalid_api_key"}`},
+		{"login_required", `{"type":"assistant","is_error":true,"error":"please login"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := p.ParseLine(tt.line)
+			if msg == nil {
+				t.Fatal("Expected non-nil parsed message")
+			}
+			if !p.IsAuthenticationError(msg) {
+				t.Errorf("Expected IsAuthenticationError=true for %s", tt.name)
+			}
+		})
+	}
+}
+
+// TestIsAuthenticationErrorFalse tests that non-auth errors are not detected as auth errors
+func TestIsAuthenticationErrorFalse(t *testing.T) {
+	p := parser.NewParser()
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"overloaded", `{"type":"assistant","is_error":true,"error":"529 overloaded"}`},
+		{"rate_limit", `{"type":"assistant","is_error":true,"error":"rate_limit"}`},
+		{"not_error", `{"type":"assistant","is_error":false,"error":"authentication_error"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := p.ParseLine(tt.line)
+			if msg == nil {
+				t.Fatal("Expected non-nil parsed message")
+			}
+			if p.IsAuthenticationError(msg) {
+				t.Errorf("Expected IsAuthenticationError=false for %s", tt.name)
+			}
+		})
+	}
+}
+
+// TestIsAuthenticationErrorNil tests nil message returns false
+func TestIsAuthenticationErrorNil(t *testing.T) {
+	p := parser.NewParser()
+	if p.IsAuthenticationError(nil) {
+		t.Error("Expected IsAuthenticationError=false for nil message")
+	}
+}
+
 func TestParseLineThinkingContentItemParsed(t *testing.T) {
 	p := parser.NewParser()
 

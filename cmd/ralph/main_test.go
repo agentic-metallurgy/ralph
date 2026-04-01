@@ -440,6 +440,54 @@ func TestExitLoopDetection_SubagentResultIgnored(t *testing.T) {
 	}
 }
 
+func TestIsAuthenticationText(t *testing.T) {
+	tests := []struct {
+		text     string
+		expected bool
+	}{
+		{"Please run `claude /login` to authenticate", true},
+		{"Not authenticated. Run claude /login.", true},
+		{"authentication error occurred", true},
+		{"invalid api key provided", true},
+		{"AUTHENTICATION_ERROR", true},
+		{"rate limit exceeded", false},
+		{"API overloaded", false},
+		{"normal output text", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.text, func(t *testing.T) {
+			if got := isAuthenticationText(tt.text); got != tt.expected {
+				t.Errorf("isAuthenticationText(%q) = %v, want %v", tt.text, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestHandleParsedMessageCLI_AuthError_StopsLoop(t *testing.T) {
+	jsonParser := parser.NewParser()
+	tokenStats := stats.NewTokenStats()
+	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	apiBackoff := loop.NewBackoff()
+	var iterEstimate, subagentCostAccum float64
+	var iterToolUseCount, noopStreak int
+
+	line := `{"type":"assistant","is_error":true,"error":"authentication_error"}`
+	parsed := jsonParser.ParseLine(line)
+	if parsed == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	handleParsedMessageCLI(
+		parsed, claudeLoop, jsonParser, tokenStats, io.Discard,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+	)
+
+	if claudeLoop.IsRunning() {
+		t.Error("Expected loop to not be running after authentication error")
+	}
+}
+
 func TestExitLoopDetection_ThresholdConstant(t *testing.T) {
 	if NoopIterationThreshold < 1 {
 		t.Error("NoopIterationThreshold must be at least 1")
