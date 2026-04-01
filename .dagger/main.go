@@ -41,14 +41,20 @@ func (m *RalphCi) TestWithCoverage(ctx context.Context, source *dagger.Directory
 		Stdout(ctx)
 }
 
-// integrationContainer returns a Go container with Node.js and the Claude CLI installed
+// integrationContainer returns a Go container with Node.js and the Claude CLI installed.
+// Runs as a non-root user because claude refuses --dangerously-skip-permissions as root.
 func (m *RalphCi) integrationContainer(source *dagger.Directory) *dagger.Container {
 	return dag.Container().
 		From("golang:1.25.3-alpine").
-		WithExec([]string{"apk", "add", "--no-cache", "nodejs", "npm"}).
+		WithExec([]string{"apk", "add", "--no-cache", "nodejs", "npm", "shadow"}).
 		WithExec([]string{"npm", "install", "-g", "@anthropic-ai/claude-code"}).
+		WithExec([]string{"useradd", "-m", "-d", "/home/testuser", "testuser"}).
+		WithEnvVariable("GOPATH", "/home/testuser/go").
+		WithEnvVariable("GOCACHE", "/home/testuser/.cache/go-build").
 		WithMountedDirectory("/src", source).
-		WithWorkdir("/src")
+		WithWorkdir("/src").
+		WithExec([]string{"chown", "-R", "testuser:testuser", "/src"}).
+		WithUser("testuser")
 }
 
 // IntegrationTest runs integration tests that require the Claude CLI.

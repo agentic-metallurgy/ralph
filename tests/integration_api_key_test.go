@@ -87,7 +87,6 @@ func TestIntegration_ClaudeCLI_APIKeyInherited(t *testing.T) {
 		"--print",
 		"--output-format", "stream-json",
 		"--verbose",
-		"--dangerously-skip-permissions",
 		"say hello",
 	)
 	cmd.Env = cleanEnv("ANTHROPIC_API_KEY=sk-ant-test-invalid-key")
@@ -123,7 +122,6 @@ func TestIntegration_ClaudeCLI_InvalidKey_AuthError(t *testing.T) {
 		"--print",
 		"--output-format", "stream-json",
 		"--verbose",
-		"--dangerously-skip-permissions",
 		"say hello",
 	)
 	cmd.Env = cleanEnv("ANTHROPIC_API_KEY=sk-ant-test-invalid-key")
