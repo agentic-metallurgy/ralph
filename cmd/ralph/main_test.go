@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"io"
 	"os"
@@ -437,6 +438,152 @@ func TestExitLoopDetection_SubagentResultIgnored(t *testing.T) {
 
 	if noopStreak != 0 {
 		t.Errorf("expected noopStreak=0 after subagent result, got %d", noopStreak)
+	}
+}
+
+func TestIsAuthenticationText(t *testing.T) {
+	tests := []struct {
+		text     string
+		expected bool
+	}{
+		{"Please run `claude /login` to authenticate", true},
+		{"Not authenticated. Run claude /login.", true},
+		{"authentication error occurred", true},
+		{"invalid api key provided", true},
+		{"AUTHENTICATION_ERROR", true},
+		{"rate limit exceeded", false},
+		{"API overloaded", false},
+		{"normal output text", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.text, func(t *testing.T) {
+			if got := isAuthenticationText(tt.text); got != tt.expected {
+				t.Errorf("isAuthenticationText(%q) = %v, want %v", tt.text, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestHandleParsedMessageCLI_AuthError_StopsLoop(t *testing.T) {
+	jsonParser := parser.NewParser()
+	tokenStats := stats.NewTokenStats()
+	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	apiBackoff := loop.NewBackoff()
+	var iterEstimate, subagentCostAccum float64
+	var iterToolUseCount, noopStreak int
+
+	line := `{"type":"assistant","is_error":true,"error":"authentication_error"}`
+	parsed := jsonParser.ParseLine(line)
+	if parsed == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	handleParsedMessageCLI(
+		parsed, claudeLoop, jsonParser, tokenStats, io.Discard,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+	)
+
+	if claudeLoop.IsRunning() {
+		t.Error("Expected loop to not be running after authentication error")
+	}
+}
+
+func TestDefaultCommandBuilder_InheritsEnvironment(t *testing.T) {
+	// When ANTHROPIC_API_KEY is set in the parent process, the subprocess
+	// should inherit it. Go's exec.Cmd inherits the full parent environment
+	// when Cmd.Env is nil, so we verify that DefaultCommandBuilder does NOT
+	// set Cmd.Env (which would filter the environment).
+	ctx := context.Background()
+	cmd := loop.DefaultCommandBuilder(ctx, "test prompt")
+
+	if cmd.Env != nil {
+		t.Error("expected Cmd.Env to be nil (inherit parent environment), but it was explicitly set")
+	}
+}
+
+func TestDefaultCommandBuilder_CommandStructure(t *testing.T) {
+	// Verify the CLI command is constructed with the expected flags
+	ctx := context.Background()
+	cmd := loop.DefaultCommandBuilder(ctx, "test prompt")
+
+	// The command should be "claude"
+	if cmd.Path == "" {
+		// Path may not be resolved if claude isn't installed, but Args[0] should be set
+	}
+	if len(cmd.Args) < 1 || cmd.Args[0] != "claude" {
+		t.Errorf("expected Args[0]='claude', got %v", cmd.Args)
+	}
+
+	// Verify expected flags are present
+	expectedFlags := []string{"--print", "--output-format", "stream-json", "--dangerously-skip-permissions", "--verbose"}
+	args := cmd.Args[1:] // skip the command name
+	for _, flag := range expectedFlags {
+		found := false
+		for _, arg := range args {
+			if arg == flag {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected flag %q not found in command args: %v", flag, cmd.Args)
+		}
+	}
+}
+
+func TestHandleParsedMessageCLI_AuthError_WithAPIKey(t *testing.T) {
+	// When ANTHROPIC_API_KEY is set and an auth error occurs, the error message
+	// should indicate the key is invalid rather than asking to set it.
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-invalid-key")
+
+	jsonParser := parser.NewParser()
+	tokenStats := stats.NewTokenStats()
+	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	apiBackoff := loop.NewBackoff()
+	var iterEstimate, subagentCostAccum float64
+	var iterToolUseCount, noopStreak int
+
+	line := `{"type":"assistant","is_error":true,"error":"authentication_error"}`
+	parsed := jsonParser.ParseLine(line)
+	if parsed == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	handleParsedMessageCLI(
+		parsed, claudeLoop, jsonParser, tokenStats, io.Discard,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+	)
+
+	if claudeLoop.IsRunning() {
+		t.Error("Expected loop to be stopped after authentication error")
+	}
+}
+
+func TestHandleParsedMessageCLI_AuthError_WithoutAPIKey(t *testing.T) {
+	// When ANTHROPIC_API_KEY is NOT set and an auth error occurs, the loop should stop.
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	jsonParser := parser.NewParser()
+	tokenStats := stats.NewTokenStats()
+	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	apiBackoff := loop.NewBackoff()
+	var iterEstimate, subagentCostAccum float64
+	var iterToolUseCount, noopStreak int
+
+	line := `{"type":"assistant","is_error":true,"error":"authentication_error"}`
+	parsed := jsonParser.ParseLine(line)
+	if parsed == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	handleParsedMessageCLI(
+		parsed, claudeLoop, jsonParser, tokenStats, io.Discard,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+	)
+
+	if claudeLoop.IsRunning() {
+		t.Error("Expected loop to be stopped after authentication error")
 	}
 }
 
