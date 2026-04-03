@@ -467,6 +467,7 @@ func processLoopOutput(
 	var subagentCostAccum float64   // per-iteration accumulated subagent actual costs for reconciliation
 	var iterToolUseCount int        // per-iteration tool use count for exit loop detection
 	var noopStreak int              // consecutive no-op iterations for exit loop detection
+	seenMsgIDs := make(map[string]bool) // dedup: CLI emits multiple chunks per message ID with identical usage
 	lt := &loopTracker{}
 	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
@@ -509,7 +510,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, dbCtx, lt, apiBackoff)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, dbCtx, lt, apiBackoff, seenMsgIDs)
 		}
 	}
 }
@@ -531,10 +532,11 @@ func processMessage(
 	dbCtx *dbContext,
 	lt *loopTracker,
 	apiBackoff *loop.Backoff,
+	seenMsgIDs map[string]bool,
 ) {
 	switch msg.Type {
 	case "loop_marker":
-		handleLoopMarker(msg, msgChan, program, loopTotalTokens, iterEstimate, subagentCostAccum, iterToolUseCount, dbCtx, lt, tokenStats)
+		handleLoopMarker(msg, msgChan, program, loopTotalTokens, iterEstimate, subagentCostAccum, iterToolUseCount, dbCtx, lt, tokenStats, seenMsgIDs)
 		// Reset 529 backoff on successful new loop start (iteration completed without 529)
 		if isNewLoopStart(msg.Content) {
 			apiBackoff.Reset()
@@ -548,7 +550,7 @@ func processMessage(
 			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 				claudeLoop.SetSessionID(sessionID)
 			}
-			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile, iterEstimate, subagentCostAccum, iterToolUseCount, noopStreak, apiBackoff)
+			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile, iterEstimate, subagentCostAccum, iterToolUseCount, noopStreak, apiBackoff, seenMsgIDs)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -593,7 +595,7 @@ func processMessage(
 
 // handleLoopMarker processes a loop_marker message for TUI mode.
 // Shared by processMessage, processPlanPhase, and processBuildPhase.
-func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64, iterEstimate *float64, subagentCostAccum *float64, iterToolUseCount *int, dbCtx *dbContext, lt *loopTracker, tokenStats *stats.TokenStats) {
+func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64, iterEstimate *float64, subagentCostAccum *float64, iterToolUseCount *int, dbCtx *dbContext, lt *loopTracker, tokenStats *stats.TokenStats, seenMsgIDs map[string]bool) {
 	program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
 	// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED)
 	if isNewLoopStart(msg.Content) {
@@ -602,6 +604,7 @@ func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea
 		*iterEstimate = 0
 		*subagentCostAccum = 0
 		*iterToolUseCount = 0
+		clear(seenMsgIDs)
 		program.Send(tui.SendLoopStarted()())
 		program.Send(tui.SendLoopStatsUpdate(0)())
 	}
@@ -632,6 +635,7 @@ func handleParsedMessage(
 	iterToolUseCount *int,
 	noopStreak *int,
 	apiBackoff *loop.Backoff,
+	seenMsgIDs map[string]bool,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -682,28 +686,36 @@ func handleParsedMessage(
 		return
 	}
 
-	// Extract usage information
+	// Extract usage information — deduplicate by message ID.
+	// The CLI emits multiple chunks per message ID (one per content block),
+	// each carrying identical cumulative usage. Only process usage once per message.
 	if usage := jsonParser.GetUsage(parsed); usage != nil {
-		tokenStats.AddUsage(
-			usage.InputTokens,
-			usage.OutputTokens,
-			usage.CacheCreationInputTokens,
-			usage.CacheReadInputTokens,
-		)
-		// Estimate cost from token counts and update in real-time
-		estimate := stats.EstimateCostFromTokens(
-			usage.InputTokens,
-			usage.OutputTokens,
-			usage.CacheCreationInputTokens,
-			usage.CacheReadInputTokens,
-		)
-		tokenStats.AddCost(estimate)
-		*iterEstimate += estimate
-		program.Send(tui.SendStatsUpdate(tokenStats)())
-		// Also track per-loop tokens for tmux status bar
-		loopTokens := usage.InputTokens + usage.OutputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
-		*loopTotalTokens += loopTokens
-		program.Send(tui.SendLoopStatsUpdate(*loopTotalTokens)())
+		msgID := jsonParser.GetMessageID(parsed)
+		if msgID == "" || !seenMsgIDs[msgID] {
+			if msgID != "" {
+				seenMsgIDs[msgID] = true
+			}
+			tokenStats.AddUsage(
+				usage.InputTokens,
+				usage.OutputTokens,
+				usage.CacheCreationInputTokens,
+				usage.CacheReadInputTokens,
+			)
+			// Estimate cost from token counts and update in real-time
+			estimate := stats.EstimateCostFromTokens(
+				usage.InputTokens,
+				usage.OutputTokens,
+				usage.CacheCreationInputTokens,
+				usage.CacheReadInputTokens,
+			)
+			tokenStats.AddCost(estimate)
+			*iterEstimate += estimate
+			program.Send(tui.SendStatsUpdate(tokenStats)())
+			// Also track per-loop tokens for tmux status bar
+			loopTokens := usage.InputTokens + usage.OutputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+			*loopTotalTokens += loopTokens
+			program.Send(tui.SendLoopStatsUpdate(*loopTotalTokens)())
+		}
 	}
 
 	// Extract cost from result messages — reconcile estimate with actual
@@ -828,6 +840,7 @@ func handleParsedMessageCLI(
 	iterToolUseCount *int,
 	noopStreak *int,
 	apiBackoff *loop.Backoff,
+	seenMsgIDs map[string]bool,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -856,23 +869,29 @@ func handleParsedMessageCLI(
 		claudeLoop.Stop()
 		return
 	}
-	// Track stats
+	// Track stats — deduplicate by message ID (same fix as TUI mode)
 	if usage := jsonParser.GetUsage(parsed); usage != nil {
-		tokenStats.AddUsage(
-			usage.InputTokens,
-			usage.OutputTokens,
-			usage.CacheCreationInputTokens,
-			usage.CacheReadInputTokens,
-		)
-		// Estimate cost from token counts and update in real-time
-		estimate := stats.EstimateCostFromTokens(
-			usage.InputTokens,
-			usage.OutputTokens,
-			usage.CacheCreationInputTokens,
-			usage.CacheReadInputTokens,
-		)
-		tokenStats.AddCost(estimate)
-		*iterEstimate += estimate
+		msgID := jsonParser.GetMessageID(parsed)
+		if msgID == "" || !seenMsgIDs[msgID] {
+			if msgID != "" {
+				seenMsgIDs[msgID] = true
+			}
+			tokenStats.AddUsage(
+				usage.InputTokens,
+				usage.OutputTokens,
+				usage.CacheCreationInputTokens,
+				usage.CacheReadInputTokens,
+			)
+			// Estimate cost from token counts and update in real-time
+			estimate := stats.EstimateCostFromTokens(
+				usage.InputTokens,
+				usage.OutputTokens,
+				usage.CacheCreationInputTokens,
+				usage.CacheReadInputTokens,
+			)
+			tokenStats.AddCost(estimate)
+			*iterEstimate += estimate
+		}
 	}
 	// Extract cost from result messages — reconcile estimate with actual
 	if cost := jsonParser.GetCost(parsed); cost > 0 {
@@ -973,6 +992,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 	var iterToolUseCount int
 	var noopStreak int
 	var authFailed bool
+	seenMsgIDs := make(map[string]bool)
 	lt := &loopTracker{}
 	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
@@ -1015,6 +1035,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 					iterEstimate = 0
 					subagentCostAccum = 0
 					iterToolUseCount = 0
+					seenMsgIDs = make(map[string]bool)
 					apiBackoff.Reset()
 				}
 				fmt.Printf("[loop] %s\n", msg.Content)
@@ -1025,7 +1046,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						claudeLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff)
+					handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
 					if jsonParser.IsAuthenticationError(parsed) {
 						authFailed = true
 					}
@@ -1113,6 +1134,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 	var planSubagentCostAccum float64
 	var planIterToolUseCount int
 	var planNoopStreak int
+	planSeenMsgIDs := make(map[string]bool)
 	planLt := &loopTracker{}
 	planBackoff := loop.NewBackoff() // exponential backoff for API 529 errors (plan phase)
 
@@ -1156,7 +1178,7 @@ planLoop:
 						planLoop.SetSessionID(sid)
 						sessionID = sid
 					}
-					handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, &planIterEstimate, &planSubagentCostAccum, &planIterToolUseCount, &planNoopStreak, planBackoff)
+					handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, &planIterEstimate, &planSubagentCostAccum, &planIterToolUseCount, &planNoopStreak, planBackoff, planSeenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						fmt.Fprintf(os.Stderr, "[error] Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.\n")
@@ -1213,6 +1235,7 @@ planLoop:
 	var buildSubagentCostAccum float64
 	var buildIterToolUseCount int
 	var buildNoopStreak int
+	buildSeenMsgIDs := make(map[string]bool)
 	buildLt := &loopTracker{}
 	buildBackoff := loop.NewBackoff() // exponential backoff for API 529 errors (build phase)
 
@@ -1254,7 +1277,7 @@ planLoop:
 					if sid := jsonParser.GetSessionID(parsed); sid != "" {
 						buildLoop.SetSessionID(sid)
 					}
-					handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, &buildIterEstimate, &buildSubagentCostAccum, &buildIterToolUseCount, &buildNoopStreak, buildBackoff)
+					handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, &buildIterEstimate, &buildSubagentCostAccum, &buildIterToolUseCount, &buildNoopStreak, buildBackoff, buildSeenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						fmt.Fprintf(os.Stderr, "[error] Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.\n")
@@ -1433,6 +1456,7 @@ func processPlanPhase(
 	var subagentCostAccum float64
 	var iterToolUseCount int
 	var noopStreak int
+	seenMsgIDs := make(map[string]bool)
 	lt := &loopTracker{}
 	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
@@ -1472,7 +1496,7 @@ func processPlanPhase(
 
 			switch msg.Type {
 			case "loop_marker":
-				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate, &subagentCostAccum, &iterToolUseCount, dbCtx, lt, tokenStats)
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate, &subagentCostAccum, &iterToolUseCount, dbCtx, lt, tokenStats, seenMsgIDs)
 				if isNewLoopStart(msg.Content) {
 					apiBackoff.Reset()
 				}
@@ -1483,7 +1507,7 @@ func processPlanPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						planLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff)
+					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						msgChan <- tui.Message{
@@ -1537,6 +1561,7 @@ func processBuildPhase(
 	var subagentCostAccum float64
 	var iterToolUseCount int
 	var noopStreak int
+	seenMsgIDs := make(map[string]bool)
 	lt := &loopTracker{}
 	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
@@ -1580,7 +1605,7 @@ func processBuildPhase(
 
 			switch msg.Type {
 			case "loop_marker":
-				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate, &subagentCostAccum, &iterToolUseCount, dbCtx, lt, tokenStats)
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate, &subagentCostAccum, &iterToolUseCount, dbCtx, lt, tokenStats, seenMsgIDs)
 				if isNewLoopStart(msg.Content) {
 					apiBackoff.Reset()
 				}
@@ -1591,7 +1616,7 @@ func processBuildPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						buildLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff)
+					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						msgChan <- tui.Message{

@@ -319,7 +319,7 @@ func TestExitLoopDetection_ConsecutiveNoops(t *testing.T) {
 	// First no-op iteration result
 	handleParsedMessageCLI(
 		makeNoopResult(0.005), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
 	)
 
 	if noopStreak != 1 {
@@ -334,7 +334,7 @@ func TestExitLoopDetection_ConsecutiveNoops(t *testing.T) {
 	// Second no-op iteration result — should trigger stop
 	handleParsedMessageCLI(
 		makeNoopResult(0.003), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
 	)
 
 	if noopStreak != 2 {
@@ -362,7 +362,7 @@ func TestExitLoopDetection_ProductiveIterationResetsStreak(t *testing.T) {
 	// First no-op iteration
 	handleParsedMessageCLI(
 		makeNoopResult(0.005), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
 	)
 	if noopStreak != 1 {
 		t.Fatalf("expected noopStreak=1, got %d", noopStreak)
@@ -376,12 +376,12 @@ func TestExitLoopDetection_ProductiveIterationResetsStreak(t *testing.T) {
 	// Productive iteration: assistant message with tool use, then result with higher cost
 	handleParsedMessageCLI(
 		makeAssistantWithToolUse(), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
 	)
 
 	handleParsedMessageCLI(
 		makeNoopResult(0.50), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
 	)
 
 	if noopStreak != 0 {
@@ -404,7 +404,7 @@ func TestExitLoopDetection_HighCostNoToolsIsNotNoop(t *testing.T) {
 	// High cost result with no tool use — this is legitimate thinking work
 	handleParsedMessageCLI(
 		makeNoopResult(0.50), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
 	)
 
 	if noopStreak != 0 {
@@ -433,7 +433,7 @@ func TestExitLoopDetection_SubagentResultIgnored(t *testing.T) {
 
 	handleParsedMessageCLI(
 		subagentResult, claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
 	)
 
 	if noopStreak != 0 {
@@ -481,7 +481,7 @@ func TestHandleParsedMessageCLI_AuthError_StopsLoop(t *testing.T) {
 
 	handleParsedMessageCLI(
 		parsed, claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
 	)
 
 	if claudeLoop.IsRunning() {
@@ -552,7 +552,7 @@ func TestHandleParsedMessageCLI_AuthError_WithAPIKey(t *testing.T) {
 
 	handleParsedMessageCLI(
 		parsed, claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
 	)
 
 	if claudeLoop.IsRunning() {
@@ -579,7 +579,7 @@ func TestHandleParsedMessageCLI_AuthError_WithoutAPIKey(t *testing.T) {
 
 	handleParsedMessageCLI(
 		parsed, claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff,
+		&iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
 	)
 
 	if claudeLoop.IsRunning() {
