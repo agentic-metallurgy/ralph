@@ -58,6 +58,7 @@ type ContentItem struct {
 
 // InnerMessage represents the message field within an assistant/user message
 type InnerMessage struct {
+	ID      string        `json:"id,omitempty"`
 	Content []ContentItem `json:"content"`
 	Usage   *Usage        `json:"usage,omitempty"`
 }
@@ -351,6 +352,16 @@ func (p *Parser) IsAuthenticationError(msg *ParsedMessage) bool {
 		strings.Contains(errLower, "unauthorized") ||
 		strings.Contains(errLower, "invalid_api_key") ||
 		strings.Contains(errLower, "login")
+}
+
+// GetMessageID returns the inner message ID (e.g., "msg_01PBx...") if present.
+// The CLI emits multiple chunks for the same message ID (one per content block),
+// each carrying identical cumulative usage. Callers can use this to deduplicate.
+func (p *Parser) GetMessageID(msg *ParsedMessage) string {
+	if msg == nil || msg.Message == nil {
+		return ""
+	}
+	return msg.Message.ID
 }
 
 // IsSubagentMessage returns true if the message originates from a subagent

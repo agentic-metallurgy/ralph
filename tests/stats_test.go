@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudosai/ralph-go/internal/parser"
 	"github.com/cloudosai/ralph-go/internal/stats"
 )
 
@@ -1501,5 +1502,158 @@ func TestSubagentCostAccumResetsOnNewLoop(t *testing.T) {
 	expected := 1.15 + 2.30
 	if diff := snap.TotalCostUSD - expected; diff < -tolerance || diff > tolerance {
 		t.Errorf("After iteration 2: TotalCostUSD = %f, expected %f (no cross-iteration leakage)", snap.TotalCostUSD, expected)
+	}
+}
+
+// replayFixture is a helper that replays a fixture file through the cost-tracking
+// logic mirroring handleParsedMessage, with optional message-ID deduplication.
+// Returns the final TokenStats snapshot, the expected cost from the result message,
+// and the peak TotalCostUSD seen during the replay (before reconciliation).
+func replayFixture(t *testing.T, fixturePath string, dedup bool) (snap *stats.TokenStats, expectedCost float64, peakCost float64) {
+	t.Helper()
+	data, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("Failed to read fixture file: %v", err)
+	}
+
+	p := parser.NewParser()
+	tokenStats := stats.NewTokenStats()
+
+	var iterEstimate float64
+	var subagentCostAccum float64
+	seenMsgIDs := make(map[string]bool)
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		parsed := p.ParseLine(line)
+		if parsed == nil {
+			continue
+		}
+
+		// --- Mirrors handleParsedMessage cost logic (main.go:685-723) ---
+		if usage := p.GetUsage(parsed); usage != nil {
+			shouldProcess := true
+			if dedup {
+				msgID := p.GetMessageID(parsed)
+				if msgID != "" && seenMsgIDs[msgID] {
+					shouldProcess = false
+				} else if msgID != "" {
+					seenMsgIDs[msgID] = true
+				}
+			}
+			if shouldProcess {
+				tokenStats.AddUsage(
+					usage.InputTokens,
+					usage.OutputTokens,
+					usage.CacheCreationInputTokens,
+					usage.CacheReadInputTokens,
+				)
+				estimate := stats.EstimateCostFromTokens(
+					usage.InputTokens,
+					usage.OutputTokens,
+					usage.CacheCreationInputTokens,
+					usage.CacheReadInputTokens,
+				)
+				tokenStats.AddCost(estimate)
+				iterEstimate += estimate
+			}
+		}
+
+		// Track peak cost (what the user sees in real-time before reconciliation)
+		s := tokenStats.Snapshot()
+		if s.TotalCostUSD > peakCost {
+			peakCost = s.TotalCostUSD
+		}
+
+		// Extract cost from result messages — reconcile estimate with actual
+		if cost := p.GetCost(parsed); cost > 0 {
+			if !p.IsSubagentMessage(parsed) {
+				tokenStats.ReconcileCost(iterEstimate+subagentCostAccum, cost)
+				iterEstimate = 0
+				subagentCostAccum = 0
+				expectedCost = cost
+			} else {
+				tokenStats.AddCost(cost)
+				subagentCostAccum += cost
+			}
+		}
+	}
+
+	s := tokenStats.Snapshot()
+	return &s, expectedCost, peakCost
+}
+
+// TestSubagentCostIntegration_TokenCountInflation proves that without deduplication,
+// token counts are permanently inflated because AddUsage is never reconciled.
+// The CLI emits multiple chunks per message ID with identical cumulative usage.
+func TestSubagentCostIntegration_TokenCountInflation(t *testing.T) {
+	fixture := filepath.Join("fixtures", "subagent_cost_session.json")
+
+	withDedup, _, _ := replayFixture(t, fixture, true)
+	withoutDedup, _, _ := replayFixture(t, fixture, false)
+
+	if withoutDedup.CacheCreationTokens <= withDedup.CacheCreationTokens {
+		t.Fatal("Expected without-dedup to have inflated cache creation tokens, but it didn't")
+	}
+
+	inflationRatio := float64(withoutDedup.CacheCreationTokens) / float64(withDedup.CacheCreationTokens)
+	t.Logf("Token inflation without dedup: %.1fx (cache_creation: %d vs %d)",
+		inflationRatio, withoutDedup.CacheCreationTokens, withDedup.CacheCreationTokens)
+
+	if inflationRatio < 1.1 {
+		t.Error("Expected significant token inflation without dedup, but ratio is < 1.1x")
+	}
+}
+
+// TestSubagentCostIntegration_PeakCostInflation proves that without deduplication,
+// the real-time cost displayed to the user (before reconciliation) is inflated.
+// If the iteration is interrupted before reconciliation, this inflated cost sticks.
+func TestSubagentCostIntegration_PeakCostInflation(t *testing.T) {
+	fixture := filepath.Join("fixtures", "subagent_cost_session.json")
+
+	_, expectedCost, peakWithDedup := replayFixture(t, fixture, true)
+	_, _, peakWithoutDedup := replayFixture(t, fixture, false)
+
+	if expectedCost == 0 {
+		t.Fatal("No result message with total_cost_usd found in fixture")
+	}
+
+	t.Logf("Actual cost: $%.6f", expectedCost)
+	t.Logf("Peak cost with dedup:    $%.6f (%.1fx actual)", peakWithDedup, peakWithDedup/expectedCost)
+	t.Logf("Peak cost without dedup: $%.6f (%.1fx actual)", peakWithoutDedup, peakWithoutDedup/expectedCost)
+
+	// Without dedup, peak should be significantly higher than with dedup
+	if peakWithoutDedup <= peakWithDedup {
+		t.Error("Expected without-dedup peak to exceed with-dedup peak")
+	}
+
+	// With dedup, peak estimate should be in a reasonable range of the actual cost.
+	// Estimates use hardcoded Sonnet pricing which may differ from actual model mix,
+	// so we allow up to 5x. The important thing is it's way less than without dedup.
+	if peakWithDedup > expectedCost*5 {
+		t.Errorf("Even with dedup, peak estimate ($%.6f) is >5x actual ($%.6f) — dedup may not be working", peakWithDedup, expectedCost)
+	}
+}
+
+// TestSubagentCostIntegration_FinalCostWithDedup verifies that after a complete
+// iteration (with reconciliation), the final cost matches the result's total_cost_usd.
+func TestSubagentCostIntegration_FinalCostWithDedup(t *testing.T) {
+	fixture := filepath.Join("fixtures", "subagent_cost_session.json")
+
+	snap, expectedCost, _ := replayFixture(t, fixture, true)
+
+	if expectedCost == 0 {
+		t.Fatal("No result message with total_cost_usd found in fixture")
+	}
+
+	tolerance := 0.000001
+	diff := snap.TotalCostUSD - expectedCost
+	if diff < -tolerance || diff > tolerance {
+		t.Errorf("Final TotalCostUSD = %.6f, expected %.6f (diff = %.6f)",
+			snap.TotalCostUSD, expectedCost, diff)
 	}
 }
