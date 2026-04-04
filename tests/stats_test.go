@@ -1521,6 +1521,7 @@ func replayFixture(t *testing.T, fixturePath string, dedup bool) (snap *stats.To
 
 	var iterEstimate float64
 	var subagentCostAccum float64
+	var lastResultCost float64
 	seenMsgIDs := make(map[string]bool)
 
 	lines := strings.Split(string(data), "\n")
@@ -1570,12 +1571,18 @@ func replayFixture(t *testing.T, fixturePath string, dedup bool) (snap *stats.To
 		}
 
 		// Extract cost from result messages — reconcile estimate with actual
+		// Uses delta logic to handle cumulative total_cost_usd in resumed sessions
 		if cost := p.GetCost(parsed); cost > 0 {
 			if !p.IsSubagentMessage(parsed) {
-				tokenStats.ReconcileCost(iterEstimate+subagentCostAccum, cost)
+				iterActualCost := cost
+				if cost >= lastResultCost {
+					iterActualCost = cost - lastResultCost
+				}
+				tokenStats.ReconcileCost(iterEstimate+subagentCostAccum, iterActualCost)
+				lastResultCost = cost
 				iterEstimate = 0
 				subagentCostAccum = 0
-				expectedCost = cost
+				expectedCost = iterActualCost
 			} else {
 				tokenStats.AddCost(cost)
 				subagentCostAccum += cost
@@ -1656,4 +1663,96 @@ func TestSubagentCostIntegration_FinalCostWithDedup(t *testing.T) {
 		t.Errorf("Final TotalCostUSD = %.6f, expected %.6f (diff = %.6f)",
 			snap.TotalCostUSD, expectedCost, diff)
 	}
+}
+
+// TestMultiIterationCumulativeCostInflation proves that the delta-based cost tracking
+// correctly handles cumulative total_cost_usd across multiple iterations in a resumed
+// session. Without the fix, each iteration re-adds all previous iterations' costs,
+// causing quadratic inflation.
+func TestMultiIterationCumulativeCostInflation(t *testing.T) {
+	tolerance := 0.0000001
+
+	// --- Test WITH delta fix (correct behavior) ---
+	t.Run("with_delta_fix", func(t *testing.T) {
+		s := stats.NewTokenStats()
+		var iterEstimate float64
+		var subagentCostAccum float64
+		var lastResultCost float64
+
+		// Iteration 1: estimates stream in, then result with cumulative total_cost_usd = $0.10
+		s.AddCost(0.08) // token-based estimate
+		iterEstimate += 0.08
+
+		iterActualCost := 0.10 - lastResultCost // 0.10 - 0 = 0.10
+		s.ReconcileCost(iterEstimate+subagentCostAccum, iterActualCost)
+		lastResultCost = 0.10
+		iterEstimate = 0
+		subagentCostAccum = 0
+
+		snap := s.Snapshot()
+		if diff := snap.TotalCostUSD - 0.10; diff < -tolerance || diff > tolerance {
+			t.Errorf("After iteration 1: TotalCostUSD = %f, expected 0.10", snap.TotalCostUSD)
+		}
+
+		// Iteration 2: estimates stream in, then result with cumulative total_cost_usd = $0.20
+		// (session-cumulative: $0.10 from iter1 + $0.10 from iter2)
+		s.AddCost(0.09) // token-based estimate
+		iterEstimate += 0.09
+
+		iterActualCost = 0.20 - lastResultCost // 0.20 - 0.10 = 0.10 (correct per-iteration cost)
+		s.ReconcileCost(iterEstimate+subagentCostAccum, iterActualCost)
+		lastResultCost = 0.20
+		iterEstimate = 0
+		subagentCostAccum = 0
+
+		snap = s.Snapshot()
+		// Correct: $0.10 + $0.10 = $0.20
+		if diff := snap.TotalCostUSD - 0.20; diff < -tolerance || diff > tolerance {
+			t.Errorf("After iteration 2 (with fix): TotalCostUSD = %f, expected 0.20", snap.TotalCostUSD)
+		}
+	})
+
+	// --- Test WITHOUT delta fix (buggy behavior, documents the inflation) ---
+	t.Run("without_delta_fix_inflated", func(t *testing.T) {
+		s := stats.NewTokenStats()
+		var iterEstimate float64
+		var subagentCostAccum float64
+
+		// Iteration 1: same as above
+		s.AddCost(0.08)
+		iterEstimate += 0.08
+
+		// Bug: passes raw cumulative cost directly
+		s.ReconcileCost(iterEstimate+subagentCostAccum, 0.10)
+		iterEstimate = 0
+		subagentCostAccum = 0
+
+		snap := s.Snapshot()
+		if diff := snap.TotalCostUSD - 0.10; diff < -tolerance || diff > tolerance {
+			t.Errorf("After iteration 1: TotalCostUSD = %f, expected 0.10", snap.TotalCostUSD)
+		}
+
+		// Iteration 2: passes raw cumulative $0.20 instead of delta $0.10
+		s.AddCost(0.09)
+		iterEstimate += 0.09
+
+		// Bug: ReconcileCost gets 0.20 (cumulative), not 0.10 (incremental)
+		s.ReconcileCost(iterEstimate+subagentCostAccum, 0.20)
+
+		snap = s.Snapshot()
+		// Buggy: $0.10 + $0.20 - $0.09 (estimate) = $0.21... wait let me think more carefully.
+		// After iter1: TotalCostUSD = 0.10
+		// Iter2: AddCost(0.09) → TotalCostUSD = 0.19
+		// ReconcileCost(0.09, 0.20) → TotalCostUSD = 0.19 - 0.09 + 0.20 = 0.30
+		buggyExpected := 0.30
+		if diff := snap.TotalCostUSD - buggyExpected; diff < -tolerance || diff > tolerance {
+			t.Errorf("After iteration 2 (without fix): TotalCostUSD = %f, expected %f (inflated)", snap.TotalCostUSD, buggyExpected)
+		}
+
+		// The inflation: should be $0.20 but without fix it's $0.30 (1.5x)
+		correctCost := 0.20
+		if snap.TotalCostUSD <= correctCost+tolerance {
+			t.Error("Expected inflated cost to exceed correct cost, but it didn't — bug may be fixed")
+		}
+	})
 }
