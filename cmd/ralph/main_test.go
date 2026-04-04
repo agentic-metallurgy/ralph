@@ -274,12 +274,35 @@ func TestHandleLoopMarkerReturnsTrue(t *testing.T) {
 		{"======= STOPPED =======", false},
 		{"======= COMPLETED 5 ITERATIONS =======", false},
 		{"======= RESUMED =======", false},
+		{"======= LOOP 1/5 (RETRY) =======", false},
+		{"======= LOOP 3/5 (RETRY) =======", false},
 	}
 
 	for _, tt := range tests {
 		isLoopStart := isNewLoopStart(tt.content)
 		if isLoopStart != tt.expected {
 			t.Errorf("isNewLoopStart(%q) = %v, want %v", tt.content, isLoopStart, tt.expected)
+		}
+	}
+}
+
+func TestIsRetryLoopStart(t *testing.T) {
+	tests := []struct {
+		content  string
+		expected bool
+	}{
+		{"======= LOOP 1/5 (RETRY) =======", true},
+		{"======= LOOP 3/5 (RETRY) =======", true},
+		{"======= LOOP 1/5 =======", false},
+		{"======= STOPPED =======", false},
+		{"======= COMPLETED 5 ITERATIONS =======", false},
+		{"======= RESUMED =======", false},
+	}
+
+	for _, tt := range tests {
+		result := isRetryLoopStart(tt.content)
+		if result != tt.expected {
+			t.Errorf("isRetryLoopStart(%q) = %v, want %v", tt.content, result, tt.expected)
 		}
 	}
 }
