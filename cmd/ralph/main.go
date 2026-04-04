@@ -672,6 +672,27 @@ func handleParsedMessage(
 		return // Don't process further
 	}
 
+	// Check for API 500 (server error) — enter hibernate state with exponential backoff
+	if jsonParser.IsAPIServerError(parsed) {
+		backoffDuration, retryNum, exceeded := apiBackoff.Next()
+		if exceeded {
+			msgChan <- tui.Message{
+				Role:    tui.RoleHibernate,
+				Content: fmt.Sprintf("API server error (500): max retries (%d) exceeded, stopping loop", apiBackoff.MaxRetries()),
+			}
+			claudeLoop.Stop()
+			return
+		}
+		resetsAt := time.Now().Add(backoffDuration)
+		claudeLoop.Hibernate(resetsAt)
+		program.Send(tui.SendHibernate(resetsAt)())
+		msgChan <- tui.Message{
+			Role:    tui.RoleHibernate,
+			Content: fmt.Sprintf("API server error (500), retry %d/%d, hibernating %s until %s", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen)),
+		}
+		return // Don't process further
+	}
+
 	// Check for authentication error — stop loop with helpful message
 	if jsonParser.IsAuthenticationError(parsed) {
 		if os.Getenv("ANTHROPIC_API_KEY") != "" {
@@ -872,6 +893,20 @@ func handleParsedMessageCLI(
 		resetsAt := time.Now().Add(backoffDuration)
 		claudeLoop.Hibernate(resetsAt)
 		fmt.Printf("[hibernate] API overloaded (529), retry %d/%d, hibernating %s until %s\n", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen))
+		return
+	}
+	// Check for API 500 (server error) — enter hibernate state with exponential backoff
+	if jsonParser.IsAPIServerError(parsed) {
+		backoffDuration, retryNum, exceeded := apiBackoff.Next()
+		if exceeded {
+			fmt.Printf("[hibernate] API server error (500): max retries (%d) exceeded, stopping loop\n", apiBackoff.MaxRetries())
+			claudeLoop.Stop()
+			return
+		}
+		resetsAt := time.Now().Add(backoffDuration)
+		claudeLoop.Hibernate(resetsAt)
+		fmt.Printf("[hibernate] API server error (500), retry %d/%d, hibernating %s until %s\n", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen))
+		return
 	}
 	// Check for authentication error — stop loop with helpful message
 	if jsonParser.IsAuthenticationError(parsed) {
