@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+// APIError represents a structured API error object (e.g., from 500 responses)
+type APIError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
 // MessageType represents the type of Claude message
 type MessageType string
 
@@ -16,6 +22,7 @@ const (
 	MessageTypeUser      MessageType = "user"
 	MessageTypeResult    MessageType = "result"
 	MessageTypeRateLimit MessageType = "rate_limit_event"
+	MessageTypeAPIError  MessageType = "error"
 	MessageTypeUnknown   MessageType = "unknown"
 )
 
@@ -71,9 +78,9 @@ type ParsedMessage struct {
 	TotalCostUSD    float64        `json:"total_cost_usd,omitempty"`
 	CostUSD         float64        `json:"cost_usd,omitempty"`
 	ParentToolUseID *string        `json:"parent_tool_use_id,omitempty"`
-	IsError         bool           `json:"is_error,omitempty"`
-	Error           string         `json:"error,omitempty"`
-	RateLimitInfo   *RateLimitInfo `json:"rate_limit_info,omitempty"`
+	IsError         bool              `json:"is_error,omitempty"`
+	ErrorRaw        json.RawMessage   `json:"error,omitempty"`
+	RateLimitInfo   *RateLimitInfo    `json:"rate_limit_info,omitempty"`
 	RawJSON         string         `json:"-"` // Original JSON for debugging
 }
 
@@ -328,6 +335,28 @@ func (p *Parser) IsRateLimitRejected(msg *ParsedMessage) (bool, time.Time) {
 	return true, time.Unix(msg.RateLimitInfo.ResetsAt, 0)
 }
 
+// GetError returns the error message string from a ParsedMessage, handling both
+// string-form errors (529s) and object-form errors (500s).
+func (msg *ParsedMessage) GetError() string {
+	if msg == nil || len(msg.ErrorRaw) == 0 {
+		return ""
+	}
+
+	// Try string form first (e.g., 529: "error": "API error 529: Overloaded")
+	var errStr string
+	if err := json.Unmarshal(msg.ErrorRaw, &errStr); err == nil {
+		return errStr
+	}
+
+	// Try object form (e.g., 500: "error": {"type": "api_error", "message": "Internal server error"})
+	var apiErr APIError
+	if err := json.Unmarshal(msg.ErrorRaw, &apiErr); err == nil {
+		return apiErr.Message
+	}
+
+	return ""
+}
+
 // IsAPIOverloaded checks if message indicates an API 529 (overloaded) error.
 // Returns true if the message has is_error set and the error string contains
 // "529" or "overloaded" (case-insensitive).
@@ -335,8 +364,25 @@ func (p *Parser) IsAPIOverloaded(msg *ParsedMessage) bool {
 	if msg == nil || !msg.IsError {
 		return false
 	}
-	errLower := strings.ToLower(msg.Error)
+	errLower := strings.ToLower(msg.GetError())
 	return strings.Contains(errLower, "529") || strings.Contains(errLower, "overloaded")
+}
+
+// IsAPIServerError checks if message indicates an API 500 server error.
+// Returns true when the message type is "error" and the error object has
+// type "api_error". These have is_error absent/false, so we check message type instead.
+func (p *Parser) IsAPIServerError(msg *ParsedMessage) bool {
+	if msg == nil || len(msg.ErrorRaw) == 0 {
+		return false
+	}
+	if msg.Type != MessageTypeAPIError {
+		return false
+	}
+	var apiErr APIError
+	if err := json.Unmarshal(msg.ErrorRaw, &apiErr); err != nil {
+		return false
+	}
+	return apiErr.Type == "api_error"
 }
 
 // IsAuthenticationError checks if message indicates an authentication error.
@@ -344,10 +390,14 @@ func (p *Parser) IsAPIOverloaded(msg *ParsedMessage) bool {
 // Checks both is_error messages (result type) and assistant messages where
 // the error field is set without is_error (e.g. "authentication_failed").
 func (p *Parser) IsAuthenticationError(msg *ParsedMessage) bool {
-	if msg == nil || msg.Error == "" {
+	if msg == nil {
 		return false
 	}
-	errLower := strings.ToLower(msg.Error)
+	errStr := msg.GetError()
+	if errStr == "" {
+		return false
+	}
+	errLower := strings.ToLower(errStr)
 	return strings.Contains(errLower, "authentication") ||
 		strings.Contains(errLower, "unauthorized") ||
 		strings.Contains(errLower, "invalid_api_key") ||

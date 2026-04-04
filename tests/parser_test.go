@@ -1189,8 +1189,8 @@ func TestIsRateLimitRejectedPattern2(t *testing.T) {
 	if !msg.IsError {
 		t.Error("Expected IsError=true")
 	}
-	if msg.Error != "rate_limit" {
-		t.Errorf("Expected Error='rate_limit', got %q", msg.Error)
+	if msg.GetError() != "rate_limit" {
+		t.Errorf("Expected GetError()='rate_limit', got %q", msg.GetError())
 	}
 
 	rejected, resetTime := p.IsRateLimitRejected(msg)
@@ -1776,5 +1776,75 @@ func TestIterationCostDisplaySuppressedForSubagent(t *testing.T) {
 				t.Errorf("Expected shouldDisplay=%v, got %v", tt.shouldDisplay, wouldDisplay)
 			}
 		})
+	}
+}
+
+// TestIsAPIServerError_Detects500Error tests detection of 500 API server errors
+func TestIsAPIServerError_Detects500Error(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"error","error":{"type":"api_error","message":"Internal server error"},"request_id":"req_abc123"}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	if !p.IsAPIServerError(msg) {
+		t.Error("Expected IsAPIServerError=true for 500 api_error response")
+	}
+}
+
+// TestIsAPIServerError_DoesNotDetect529 tests that 529 errors don't trigger IsAPIServerError
+func TestIsAPIServerError_DoesNotDetect529(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"assistant","is_error":true,"error":"API error 529: Overloaded"}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	if p.IsAPIServerError(msg) {
+		t.Error("Expected IsAPIServerError=false for 529 error (should not double-trigger)")
+	}
+}
+
+// TestGetError_StringForm tests GetError with string-form error (529)
+func TestGetError_StringForm(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"assistant","is_error":true,"error":"API error 529: Overloaded"}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	errStr := msg.GetError()
+	if errStr != "API error 529: Overloaded" {
+		t.Errorf("Expected GetError()='API error 529: Overloaded', got %q", errStr)
+	}
+}
+
+// TestGetError_ObjectForm tests GetError with object-form error (500)
+func TestGetError_ObjectForm(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"error","error":{"type":"api_error","message":"Internal server error"}}`
+	msg := p.ParseLine(line)
+
+	if msg == nil {
+		t.Fatal("Expected non-nil parsed message")
+	}
+
+	errStr := msg.GetError()
+	if errStr != "Internal server error" {
+		t.Errorf("Expected GetError()='Internal server error', got %q", errStr)
+	}
+}
+
+// TestIsAPIServerError_NilMessage tests nil message returns false
+func TestIsAPIServerError_NilMessage(t *testing.T) {
+	p := parser.NewParser()
+	if p.IsAPIServerError(nil) {
+		t.Error("Expected IsAPIServerError=false for nil message")
 	}
 }
