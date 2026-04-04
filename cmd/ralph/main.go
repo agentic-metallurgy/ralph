@@ -465,6 +465,7 @@ func processLoopOutput(
 	var loopTotalTokens int64       // per-loop token tracking for tmux status bar
 	var iterEstimate float64        // per-iteration estimated cost from token counts
 	var subagentCostAccum float64   // per-iteration accumulated subagent actual costs for reconciliation
+	var lastResultCost float64      // tracks previous result's cumulative total_cost_usd for delta computation
 	var iterToolUseCount int        // per-iteration tool use count for exit loop detection
 	var noopStreak int              // consecutive no-op iterations for exit loop detection
 	seenMsgIDs := make(map[string]bool) // dedup: CLI emits multiple chunks per message ID with identical usage
@@ -510,7 +511,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, dbCtx, lt, apiBackoff, seenMsgIDs)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, dbCtx, lt, apiBackoff, seenMsgIDs)
 		}
 	}
 }
@@ -527,6 +528,7 @@ func processMessage(
 	logFile io.Writer,
 	iterEstimate *float64,
 	subagentCostAccum *float64,
+	lastResultCost *float64,
 	iterToolUseCount *int,
 	noopStreak *int,
 	dbCtx *dbContext,
@@ -550,7 +552,7 @@ func processMessage(
 			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 				claudeLoop.SetSessionID(sessionID)
 			}
-			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile, iterEstimate, subagentCostAccum, iterToolUseCount, noopStreak, apiBackoff, seenMsgIDs)
+			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile, iterEstimate, subagentCostAccum, lastResultCost, iterToolUseCount, noopStreak, apiBackoff, seenMsgIDs)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -632,6 +634,7 @@ func handleParsedMessage(
 	logFile io.Writer,
 	iterEstimate *float64,
 	subagentCostAccum *float64,
+	lastResultCost *float64,
 	iterToolUseCount *int,
 	noopStreak *int,
 	apiBackoff *loop.Backoff,
@@ -718,12 +721,22 @@ func handleParsedMessage(
 		}
 	}
 
-	// Extract cost from result messages — reconcile estimate with actual
+	// Extract cost from result messages — reconcile estimate with actual.
+	// The CLI's total_cost_usd is session-cumulative in --resume sessions,
+	// so we compute the incremental cost by subtracting the previous result's value.
+	var iterActualCost float64
 	if cost := jsonParser.GetCost(parsed); cost > 0 {
 		if !jsonParser.IsSubagentMessage(parsed) {
-			// Main iteration result: replace accumulated estimates AND subagent actuals with actual cost
+			// Main iteration result: compute incremental cost from cumulative total_cost_usd
+			if cost >= *lastResultCost {
+				iterActualCost = cost - *lastResultCost
+			} else {
+				iterActualCost = cost
+			}
+			*lastResultCost = cost
+			// Replace accumulated estimates AND subagent actuals with actual cost
 			// The main result's total_cost_usd already includes subagent costs
-			tokenStats.ReconcileCost(*iterEstimate+*subagentCostAccum, cost)
+			tokenStats.ReconcileCost(*iterEstimate+*subagentCostAccum, iterActualCost)
 			*iterEstimate = 0
 			*subagentCostAccum = 0
 		} else {
@@ -803,15 +816,15 @@ func handleParsedMessage(
 	case parser.MessageTypeResult:
 		// Result messages are handled above for cost extraction
 		// Only show "Iteration cost" for the main agent result, not subagent results
-		if parsed.TotalCostUSD > 0 && !jsonParser.IsSubagentMessage(parsed) {
+		if iterActualCost > 0 && !jsonParser.IsSubagentMessage(parsed) {
 			msgChan <- tui.Message{
 				Role:    tui.RoleSystem,
-				Content: fmt.Sprintf("Iteration cost: $%.6f", parsed.TotalCostUSD),
+				Content: fmt.Sprintf("Iteration cost: $%.6f", iterActualCost),
 			}
 		}
 		// Exit loop detection: check if this main result iteration was a no-op
 		if !jsonParser.IsSubagentMessage(parsed) {
-			if *iterToolUseCount == 0 && parsed.TotalCostUSD < noopCostThreshold {
+			if *iterToolUseCount == 0 && iterActualCost < noopCostThreshold {
 				*noopStreak++
 				if *noopStreak >= NoopIterationThreshold {
 					msgChan <- tui.Message{
@@ -837,6 +850,7 @@ func handleParsedMessageCLI(
 	logFile io.Writer,
 	iterEstimate *float64,
 	subagentCostAccum *float64,
+	lastResultCost *float64,
 	iterToolUseCount *int,
 	noopStreak *int,
 	apiBackoff *loop.Backoff,
@@ -893,11 +907,21 @@ func handleParsedMessageCLI(
 			*iterEstimate += estimate
 		}
 	}
-	// Extract cost from result messages — reconcile estimate with actual
+	// Extract cost from result messages — reconcile estimate with actual.
+	// The CLI's total_cost_usd is session-cumulative in --resume sessions,
+	// so we compute the incremental cost by subtracting the previous result's value.
+	var iterActualCost float64
 	if cost := jsonParser.GetCost(parsed); cost > 0 {
 		if !jsonParser.IsSubagentMessage(parsed) {
-			// Main iteration result: replace accumulated estimates AND subagent actuals with actual cost
-			tokenStats.ReconcileCost(*iterEstimate+*subagentCostAccum, cost)
+			// Main iteration result: compute incremental cost from cumulative total_cost_usd
+			if cost >= *lastResultCost {
+				iterActualCost = cost - *lastResultCost
+			} else {
+				iterActualCost = cost
+			}
+			*lastResultCost = cost
+			// Replace accumulated estimates AND subagent actuals with actual cost
+			tokenStats.ReconcileCost(*iterEstimate+*subagentCostAccum, iterActualCost)
 			*iterEstimate = 0
 			*subagentCostAccum = 0
 		} else {
@@ -930,12 +954,12 @@ func handleParsedMessageCLI(
 			}
 		}
 	}
-	if parsed.Type == parser.MessageTypeResult && parsed.TotalCostUSD > 0 && !jsonParser.IsSubagentMessage(parsed) {
-		fmt.Printf("[cost] Iteration cost: $%.6f\n", parsed.TotalCostUSD)
+	if parsed.Type == parser.MessageTypeResult && iterActualCost > 0 && !jsonParser.IsSubagentMessage(parsed) {
+		fmt.Printf("[cost] Iteration cost: $%.6f\n", iterActualCost)
 	}
 	// Exit loop detection for CLI mode
 	if parsed.Type == parser.MessageTypeResult && !jsonParser.IsSubagentMessage(parsed) {
-		if *iterToolUseCount == 0 && parsed.TotalCostUSD < noopCostThreshold {
+		if *iterToolUseCount == 0 && iterActualCost < noopCostThreshold {
 			*noopStreak++
 			if *noopStreak >= NoopIterationThreshold {
 				fmt.Printf("[exit] Stopping: agent appears done (%d consecutive no-op iterations)\n", *noopStreak)
@@ -989,6 +1013,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 	jsonParser := parser.NewParser()
 	var iterEstimate float64
 	var subagentCostAccum float64
+	var lastResultCost float64
 	var iterToolUseCount int
 	var noopStreak int
 	var authFailed bool
@@ -1046,7 +1071,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						claudeLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
+					handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
 					if jsonParser.IsAuthenticationError(parsed) {
 						authFailed = true
 					}
@@ -1132,6 +1157,7 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 	var sessionID string
 	var planIterEstimate float64
 	var planSubagentCostAccum float64
+	var planLastResultCost float64
 	var planIterToolUseCount int
 	var planNoopStreak int
 	planSeenMsgIDs := make(map[string]bool)
@@ -1178,7 +1204,7 @@ planLoop:
 						planLoop.SetSessionID(sid)
 						sessionID = sid
 					}
-					handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, &planIterEstimate, &planSubagentCostAccum, &planIterToolUseCount, &planNoopStreak, planBackoff, planSeenMsgIDs)
+					handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, &planIterEstimate, &planSubagentCostAccum, &planLastResultCost, &planIterToolUseCount, &planNoopStreak, planBackoff, planSeenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						fmt.Fprintf(os.Stderr, "[error] Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.\n")
@@ -1233,6 +1259,7 @@ planLoop:
 
 	var buildIterEstimate float64
 	var buildSubagentCostAccum float64
+	var buildLastResultCost float64
 	var buildIterToolUseCount int
 	var buildNoopStreak int
 	buildSeenMsgIDs := make(map[string]bool)
@@ -1277,7 +1304,7 @@ planLoop:
 					if sid := jsonParser.GetSessionID(parsed); sid != "" {
 						buildLoop.SetSessionID(sid)
 					}
-					handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, &buildIterEstimate, &buildSubagentCostAccum, &buildIterToolUseCount, &buildNoopStreak, buildBackoff, buildSeenMsgIDs)
+					handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, &buildIterEstimate, &buildSubagentCostAccum, &buildLastResultCost, &buildIterToolUseCount, &buildNoopStreak, buildBackoff, buildSeenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						fmt.Fprintf(os.Stderr, "[error] Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.\n")
@@ -1454,6 +1481,7 @@ func processPlanPhase(
 	var loopTotalTokens int64
 	var iterEstimate float64
 	var subagentCostAccum float64
+	var lastResultCost float64
 	var iterToolUseCount int
 	var noopStreak int
 	seenMsgIDs := make(map[string]bool)
@@ -1507,7 +1535,7 @@ func processPlanPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						planLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
+					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						msgChan <- tui.Message{
@@ -1559,6 +1587,7 @@ func processBuildPhase(
 	var loopTotalTokens int64
 	var iterEstimate float64
 	var subagentCostAccum float64
+	var lastResultCost float64
 	var iterToolUseCount int
 	var noopStreak int
 	seenMsgIDs := make(map[string]bool)
@@ -1616,7 +1645,7 @@ func processBuildPhase(
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						buildLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
+					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						msgChan <- tui.Message{
