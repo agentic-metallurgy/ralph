@@ -599,7 +599,7 @@ func processMessage(
 // Shared by processMessage, processPlanPhase, and processBuildPhase.
 func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64, iterEstimate *float64, subagentCostAccum *float64, iterToolUseCount *int, dbCtx *dbContext, lt *loopTracker, tokenStats *stats.TokenStats, seenMsgIDs map[string]bool) {
 	program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
-	// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED)
+	// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED/RETRY)
 	if isNewLoopStart(msg.Content) {
 		lt.startNewLoop(dbCtx, tokenStats, msg.Loop)
 		*loopTotalTokens = 0
@@ -609,6 +609,13 @@ func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea
 		clear(seenMsgIDs)
 		program.Send(tui.SendLoopStarted()())
 		program.Send(tui.SendLoopStatsUpdate(0)())
+	} else if isRetryLoopStart(msg.Content) {
+		// Hibernate retry: reset iteration counters but do NOT create a new DB entry
+		// and do NOT reset apiBackoff (callers handle that separately)
+		*loopTotalTokens = 0
+		*iterEstimate = 0
+		*subagentCostAccum = 0
+		*iterToolUseCount = 0
 	}
 	// Use stop sign emoji for STOPPED messages
 	role := tui.RoleLoop
@@ -668,6 +675,27 @@ func handleParsedMessage(
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("API overloaded (529), retry %d/%d, hibernating %s until %s", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen)),
+		}
+		return // Don't process further
+	}
+
+	// Check for API 500 (server error) — enter hibernate state with exponential backoff
+	if jsonParser.IsAPIServerError(parsed) {
+		backoffDuration, retryNum, exceeded := apiBackoff.Next()
+		if exceeded {
+			msgChan <- tui.Message{
+				Role:    tui.RoleHibernate,
+				Content: fmt.Sprintf("API server error (500): max retries (%d) exceeded, stopping loop", apiBackoff.MaxRetries()),
+			}
+			claudeLoop.Stop()
+			return
+		}
+		resetsAt := time.Now().Add(backoffDuration)
+		claudeLoop.Hibernate(resetsAt)
+		program.Send(tui.SendHibernate(resetsAt)())
+		msgChan <- tui.Message{
+			Role:    tui.RoleHibernate,
+			Content: fmt.Sprintf("API server error (500), retry %d/%d, hibernating %s until %s", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen)),
 		}
 		return // Don't process further
 	}
@@ -872,6 +900,20 @@ func handleParsedMessageCLI(
 		resetsAt := time.Now().Add(backoffDuration)
 		claudeLoop.Hibernate(resetsAt)
 		fmt.Printf("[hibernate] API overloaded (529), retry %d/%d, hibernating %s until %s\n", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen))
+		return
+	}
+	// Check for API 500 (server error) — enter hibernate state with exponential backoff
+	if jsonParser.IsAPIServerError(parsed) {
+		backoffDuration, retryNum, exceeded := apiBackoff.Next()
+		if exceeded {
+			fmt.Printf("[hibernate] API server error (500): max retries (%d) exceeded, stopping loop\n", apiBackoff.MaxRetries())
+			claudeLoop.Stop()
+			return
+		}
+		resetsAt := time.Now().Add(backoffDuration)
+		claudeLoop.Hibernate(resetsAt)
+		fmt.Printf("[hibernate] API server error (500), retry %d/%d, hibernating %s until %s\n", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen))
+		return
 	}
 	// Check for authentication error — stop loop with helpful message
 	if jsonParser.IsAuthenticationError(parsed) {
@@ -1062,6 +1104,12 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 					iterToolUseCount = 0
 					seenMsgIDs = make(map[string]bool)
 					apiBackoff.Reset()
+				} else if isRetryLoopStart(msg.Content) {
+					// Hibernate retry: reset iteration counters but do NOT create
+					// a new DB entry and do NOT reset apiBackoff
+					iterEstimate = 0
+					subagentCostAccum = 0
+					iterToolUseCount = 0
 				}
 				fmt.Printf("[loop] %s\n", msg.Content)
 
@@ -1685,7 +1733,14 @@ func isNewLoopStart(content string) bool {
 	return strings.Contains(content, "LOOP") &&
 		!strings.Contains(content, "STOPPED") &&
 		!strings.Contains(content, "COMPLETED") &&
-		!strings.Contains(content, "RESUMED")
+		!strings.Contains(content, "RESUMED") &&
+		!strings.Contains(content, "RETRY")
+}
+
+// isRetryLoopStart returns true when the loop marker indicates a hibernate retry
+// (the iteration is being retried after a 529/500 hibernate, not a fresh start).
+func isRetryLoopStart(content string) bool {
+	return strings.Contains(content, "LOOP") && strings.Contains(content, "RETRY")
 }
 
 // parseTaskCounts reads an IMPLEMENTATION_PLAN.md file and returns the number of

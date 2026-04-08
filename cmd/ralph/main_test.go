@@ -274,12 +274,35 @@ func TestHandleLoopMarkerReturnsTrue(t *testing.T) {
 		{"======= STOPPED =======", false},
 		{"======= COMPLETED 5 ITERATIONS =======", false},
 		{"======= RESUMED =======", false},
+		{"======= LOOP 1/5 (RETRY) =======", false},
+		{"======= LOOP 3/5 (RETRY) =======", false},
 	}
 
 	for _, tt := range tests {
 		isLoopStart := isNewLoopStart(tt.content)
 		if isLoopStart != tt.expected {
 			t.Errorf("isNewLoopStart(%q) = %v, want %v", tt.content, isLoopStart, tt.expected)
+		}
+	}
+}
+
+func TestIsRetryLoopStart(t *testing.T) {
+	tests := []struct {
+		content  string
+		expected bool
+	}{
+		{"======= LOOP 1/5 (RETRY) =======", true},
+		{"======= LOOP 3/5 (RETRY) =======", true},
+		{"======= LOOP 1/5 =======", false},
+		{"======= STOPPED =======", false},
+		{"======= COMPLETED 5 ITERATIONS =======", false},
+		{"======= RESUMED =======", false},
+	}
+
+	for _, tt := range tests {
+		result := isRetryLoopStart(tt.content)
+		if result != tt.expected {
+			t.Errorf("isRetryLoopStart(%q) = %v, want %v", tt.content, result, tt.expected)
 		}
 	}
 }
@@ -597,5 +620,95 @@ func TestExitLoopDetection_ThresholdConstant(t *testing.T) {
 	}
 	if noopCostThreshold <= 0 {
 		t.Error("noopCostThreshold must be positive")
+	}
+}
+
+// TestAPIBackoffNotResetOnHibernateRetry verifies that when a RETRY loop marker
+// arrives after a 529 hit, apiBackoff is NOT reset — the consecutive hit counter
+// should continue escalating across the retry cycle.
+func TestAPIBackoffNotResetOnHibernateRetry(t *testing.T) {
+	apiBackoff := loop.NewBackoff()
+
+	// Step 1: fresh loop start → reset backoff
+	freshContent := "======= LOOP 1/5 ======="
+	if !isNewLoopStart(freshContent) {
+		t.Fatal("expected isNewLoopStart to be true for fresh loop")
+	}
+	apiBackoff.Reset()
+	if apiBackoff.ConsecutiveHits() != 0 {
+		t.Fatalf("expected consecutiveHits=0 after reset, got %d", apiBackoff.ConsecutiveHits())
+	}
+
+	// Step 2: 529 hit → backoff.Next() increments counter
+	_, retryNum, exceeded := apiBackoff.Next()
+	if exceeded {
+		t.Fatal("did not expect exceeded on first hit")
+	}
+	if retryNum != 1 {
+		t.Fatalf("expected retryNum=1, got %d", retryNum)
+	}
+	if apiBackoff.ConsecutiveHits() != 1 {
+		t.Fatalf("expected consecutiveHits=1 after Next(), got %d", apiBackoff.ConsecutiveHits())
+	}
+
+	// Step 3: RETRY loop marker arrives — isNewLoopStart should return false,
+	// so apiBackoff.Reset() should NOT be called
+	retryContent := "======= LOOP 1/5 (RETRY) ======="
+	if isNewLoopStart(retryContent) {
+		t.Fatal("expected isNewLoopStart to be false for RETRY marker")
+	}
+	if !isRetryLoopStart(retryContent) {
+		t.Fatal("expected isRetryLoopStart to be true for RETRY marker")
+	}
+	// Simulate what the real code does: only reset on isNewLoopStart
+	if isNewLoopStart(retryContent) {
+		apiBackoff.Reset() // should NOT execute
+	}
+
+	// Step 4: verify backoff was NOT reset — consecutive hits still 1
+	if apiBackoff.ConsecutiveHits() != 1 {
+		t.Errorf("expected consecutiveHits=1 (not reset on RETRY), got %d", apiBackoff.ConsecutiveHits())
+	}
+}
+
+// TestStartNewLoopNotCalledOnHibernateRetry verifies that when a RETRY loop marker
+// arrives, the code path that calls startNewLoop() is NOT reached. We verify this by
+// checking that isNewLoopStart returns false for RETRY content, which is the gate
+// that prevents startNewLoop from being called in handleLoopMarker and runCLI.
+func TestStartNewLoopNotCalledOnHibernateRetry(t *testing.T) {
+	// Track whether startNewLoop would be called via the isNewLoopStart gate
+	startNewLoopCallCount := 0
+
+	// Simulate a fresh loop start — isNewLoopStart returns true → startNewLoop would be called
+	freshContent := "======= LOOP 1/5 ======="
+	if isNewLoopStart(freshContent) {
+		startNewLoopCallCount++
+	}
+	if startNewLoopCallCount != 1 {
+		t.Fatalf("expected startNewLoop to be called once for fresh loop, got %d", startNewLoopCallCount)
+	}
+
+	// Simulate a RETRY marker — isNewLoopStart returns false → startNewLoop NOT called
+	retryContent := "======= LOOP 1/5 (RETRY) ======="
+	if isNewLoopStart(retryContent) {
+		startNewLoopCallCount++
+	}
+
+	if startNewLoopCallCount != 1 {
+		t.Errorf("expected startNewLoop call count to remain 1 after RETRY marker, got %d", startNewLoopCallCount)
+	}
+
+	// Verify isRetryLoopStart returns true — the retry path is taken instead
+	if !isRetryLoopStart(retryContent) {
+		t.Error("expected isRetryLoopStart to be true for RETRY marker")
+	}
+
+	// A subsequent fresh loop start SHOULD increment the counter again
+	freshContent2 := "======= LOOP 2/5 ======="
+	if isNewLoopStart(freshContent2) {
+		startNewLoopCallCount++
+	}
+	if startNewLoopCallCount != 2 {
+		t.Errorf("expected startNewLoop call count=2 after second fresh loop, got %d", startNewLoopCallCount)
 	}
 }

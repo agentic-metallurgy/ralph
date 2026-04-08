@@ -2123,3 +2123,63 @@ func TestHibernateRetryDecrementIteration(t *testing.T) {
 		t.Errorf("Expected at least 2 loop starts after hibernate (retry + next), got %d", loopStartCount)
 	}
 }
+
+// TestHibernateRetryEmitsRetryMarker tests that after a hibernate+retry cycle,
+// the retried iteration emits a loop_marker containing "(RETRY)" in its content.
+func TestHibernateRetryEmitsRetryMarker(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockMediumSlowCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for first iteration to start (system message arrives before sleep)
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"type":"system"`) {
+			break
+		}
+	}
+
+	// Hibernate briefly while the iteration is still running
+	l.Hibernate(time.Now().Add(50 * time.Millisecond))
+
+	// Collect all loop_marker messages after hibernate
+	retryMarkerFound := false
+	normalMarkerAfterRetry := false
+	completed := false
+	for msg := range output {
+		if msg.Type == "loop_marker" {
+			if strings.Contains(msg.Content, "(RETRY)") {
+				retryMarkerFound = true
+			} else if retryMarkerFound && strings.Contains(msg.Content, "LOOP") &&
+				!strings.Contains(msg.Content, "HIBERNATING") &&
+				!strings.Contains(msg.Content, "WAKING") &&
+				!strings.Contains(msg.Content, "COMPLETED") {
+				// A normal LOOP marker after the RETRY marker = next iteration
+				normalMarkerAfterRetry = true
+			}
+		}
+		if msg.Type == "complete" {
+			completed = true
+			cancel()
+		}
+	}
+
+	if !retryMarkerFound {
+		t.Error("Expected a loop_marker containing '(RETRY)' after hibernate+retry cycle")
+	}
+	if !completed {
+		t.Error("Expected loop to complete all iterations")
+	}
+	if !normalMarkerAfterRetry {
+		t.Error("Expected a normal LOOP marker after the RETRY marker (second iteration)")
+	}
+}

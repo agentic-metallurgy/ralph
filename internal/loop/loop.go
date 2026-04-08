@@ -259,6 +259,7 @@ func (l *Loop) run(ctx context.Context) {
 	}()
 
 	i := 1
+	isHibernateRetry := false
 	for {
 		// Inner loop: run iterations until we catch up with GetIterations()
 		for ; i <= l.GetIterations(); i++ {
@@ -296,9 +297,14 @@ func (l *Loop) run(ctx context.Context) {
 
 			// Send loop marker
 			total := l.GetIterations()
+			markerContent := fmt.Sprintf("======= LOOP %d/%d =======", i, total)
+			if isHibernateRetry {
+				markerContent = fmt.Sprintf("======= LOOP %d/%d (RETRY) =======", i, total)
+				isHibernateRetry = false
+			}
 			l.output <- Message{
 				Type:    "loop_marker",
-				Content: fmt.Sprintf("======= LOOP %d/%d =======", i, total),
+				Content: markerContent,
 				Loop:    i,
 				Total:   total,
 			}
@@ -370,6 +376,7 @@ func (l *Loop) run(ctx context.Context) {
 					Total:   total,
 				}
 				// Retry this iteration
+				isHibernateRetry = true
 				i--
 				continue
 			}
