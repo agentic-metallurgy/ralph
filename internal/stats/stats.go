@@ -310,6 +310,21 @@ func InitDB(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("creating loop_stats table: %w", err)
 	}
 
+	const createProjectStats = `CREATE TABLE IF NOT EXISTS project_stats (
+		project_key           TEXT PRIMARY KEY,
+		input_tokens          INTEGER DEFAULT 0,
+		output_tokens         INTEGER DEFAULT 0,
+		cache_creation_tokens INTEGER DEFAULT 0,
+		cache_read_tokens     INTEGER DEFAULT 0,
+		total_cost            REAL DEFAULT 0,
+		total_tokens          INTEGER DEFAULT 0,
+		elapsed_ns            INTEGER DEFAULT 0
+	)`
+	if _, err := db.Exec(createProjectStats); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("creating project_stats table: %w", err)
+	}
+
 	// Prune old checkpoint rows
 	if _, err := db.Exec("DELETE FROM checkpoints WHERE timestamp < datetime('now', '-7 days')"); err != nil {
 		db.Close()
@@ -317,6 +332,57 @@ func InitDB(path string) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+// SaveProjectStats persists cumulative token stats for a project key.
+func SaveProjectStats(db *sql.DB, projectKey string, s *TokenStats) error {
+	if db == nil {
+		return nil
+	}
+	snap := s.Snapshot()
+	_, err := db.Exec(
+		`INSERT OR REPLACE INTO project_stats (project_key, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, total_cost, total_tokens, elapsed_ns)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		projectKey, snap.InputTokens, snap.OutputTokens, snap.CacheCreationTokens, snap.CacheReadTokens,
+		snap.TotalCostUSD, snap.TotalTokensCount, snap.TotalElapsedNs,
+	)
+	return err
+}
+
+// LoadProjectStats loads cumulative token stats for a project key.
+// Returns zeroed stats (not an error) when no row exists or db is nil.
+func LoadProjectStats(db *sql.DB, projectKey string) (*TokenStats, error) {
+	if db == nil {
+		return NewTokenStats(), nil
+	}
+	row := db.QueryRow(
+		`SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, total_cost, total_tokens, elapsed_ns
+		 FROM project_stats WHERE project_key = ?`, projectKey,
+	)
+	s := NewTokenStats()
+	err := row.Scan(&s.InputTokens, &s.OutputTokens, &s.CacheCreationTokens, &s.CacheReadTokens,
+		&s.TotalCostUSD, &s.TotalTokensCount, &s.TotalElapsedNs)
+	if err == sql.ErrNoRows {
+		return NewTokenStats(), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// ProjectKey returns a stable key for per-project stats.
+// For git repos (both owner and repo non-empty), returns "owner/repo".
+// Otherwise falls back to the absolute working directory path.
+func ProjectKey(owner, repo string) string {
+	if owner != "" && repo != "" {
+		return owner + "/" + repo
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return cwd
 }
 
 // CheckpointParams holds parameters for a checkpoint row insert.
