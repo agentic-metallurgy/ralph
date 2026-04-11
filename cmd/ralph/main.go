@@ -22,8 +22,13 @@ import (
 	"github.com/cloudosai/ralph-go/internal/tui"
 )
 
-const statsFilePath = ".ralph.claude_stats"
-const logFilePath = ".ralph.log"
+func logFilePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".ralph.log"
+	}
+	return filepath.Join(home, ".ralph", "ralph.log")
+}
 
 // isAuthenticationText checks if plain text output contains authentication-related error messages.
 func isAuthenticationText(text string) bool {
@@ -62,18 +67,37 @@ type loopTracker struct {
 	lastFlushedSnap stats.TokenStats
 }
 
-// expandDBPath returns the full path to the stats database (~/.ralph/ralph_stats.db).
+// expandDBPath returns the full path to the stats database (~/.ralph/ralph.db).
 func expandDBPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".ralph", "ralph_stats.db")
+	return filepath.Join(home, ".ralph", "ralph.db")
+}
+
+// migrateDB renames ~/.ralph/ralph_stats.db to ~/.ralph/ralph.db if the old file
+// exists and the new one does not, providing a seamless upgrade for existing users.
+func migrateDB() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	oldPath := filepath.Join(home, ".ralph", "ralph_stats.db")
+	newPath := filepath.Join(home, ".ralph", "ralph.db")
+	if _, err := os.Stat(oldPath); err != nil {
+		return
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		return
+	}
+	os.Rename(oldPath, newPath)
 }
 
 // initDBContext initializes the database and session context. Best-effort: returns
 // a dbContext with nil db on any error so callers can proceed without stats.
 func initDBContext() *dbContext {
+	migrateDB()
 	dbPath := expandDBPath()
 	if dbPath == "" {
 		fmt.Fprintf(os.Stderr, "Warning: Could not determine home directory for stats DB\n")
@@ -100,25 +124,6 @@ func initDBContext() *dbContext {
 		owner:     owner,
 		repo:      repo,
 		branch:    branch,
-	}
-}
-
-// exportSessionTSV exports session stats as TSV and writes to a file in the current directory.
-func exportSessionTSV(dbCtx *dbContext) {
-	if dbCtx == nil || dbCtx.db == nil {
-		return
-	}
-	tsv, err := stats.ExportSessionTSV(dbCtx.db, dbCtx.sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not export session TSV: %v\n", err)
-		return
-	}
-	if tsv == "" {
-		return
-	}
-	filename := dbCtx.sessionID + ".tsv"
-	if err := os.WriteFile(filename, []byte(tsv), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not write TSV file: %v\n", err)
 	}
 }
 
@@ -321,24 +326,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Load existing stats (if any)
-	tokenStats, err := stats.LoadTokenStats(statsFilePath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not load stats: %v\n", err)
-		tokenStats = stats.NewTokenStats()
-	}
-
 	// Initialize DB context for stats tracking (best-effort)
 	dbCtx := initDBContext()
 	if dbCtx.db != nil {
 		defer dbCtx.db.Close()
 	}
 
+	// Load existing stats from SQLite
+	tokenStats, err := stats.LoadProjectStats(dbCtx.db, stats.ProjectKey(dbCtx.owner, dbCtx.repo))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not load project stats from DB: %v\n", err)
+		tokenStats = stats.NewTokenStats()
+	}
+
 	// Open log file (truncated each run); fall back to io.Discard on error
 	var logFile io.Writer
-	logFileHandle, err := os.Create(logFilePath)
+	logPath := logFilePath()
+	logFileHandle, err := os.Create(logPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not open log file %s: %v\n", logFilePath, err)
+		fmt.Fprintf(os.Stderr, "Warning: Could not open log file %s: %v\n", logPath, err)
 		logFile = io.Discard
 	} else {
 		logFile = logFileHandle
@@ -353,20 +359,18 @@ func main() {
 		} else {
 			exitCode = runCLI(cfg, promptContent, tokenStats, logFile, dbCtx)
 		}
-		if err := tokenStats.Save(statsFilePath); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
+		if err := stats.SaveProjectStats(dbCtx.db, stats.ProjectKey(dbCtx.owner, dbCtx.repo), tokenStats); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Could not save project stats to DB: %v\n", err)
 		}
-		exportSessionTSV(dbCtx)
 		os.Exit(exitCode)
 	}
 
 	// Plan-and-build mode: run planning (1 iteration) then building (N iterations) in single TUI session
 	if cfg.IsPlanAndBuildMode() {
 		runPlanAndBuild(cfg, tokenStats, logFile, dbCtx)
-		if err := tokenStats.Save(statsFilePath); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
+		if err := stats.SaveProjectStats(dbCtx.db, stats.ProjectKey(dbCtx.owner, dbCtx.repo), tokenStats); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Could not save project stats to DB: %v\n", err)
 		}
-		exportSessionTSV(dbCtx)
 		return
 	}
 
@@ -440,10 +444,9 @@ func main() {
 	}
 
 	// Save stats on exit
-	if err := tokenStats.Save(statsFilePath); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
+	if err := stats.SaveProjectStats(dbCtx.db, stats.ProjectKey(dbCtx.owner, dbCtx.repo), tokenStats); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not save project stats to DB: %v\n", err)
 	}
-	exportSessionTSV(dbCtx)
 }
 
 // processLoopOutput reads from the loop's output channel, parses JSON, and updates the TUI

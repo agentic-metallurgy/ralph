@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -133,49 +132,6 @@ func FormatTokens(count int64) string {
 	}
 }
 
-// Save persists the stats to a JSON file at the given path
-func (t *TokenStats) Save(path string) error {
-	// Take a consistent snapshot under lock, then do I/O outside the lock
-	t.mu.Lock()
-	t.TotalTokensCount = t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens
-	snap := TokenStats{
-		InputTokens:         t.InputTokens,
-		OutputTokens:        t.OutputTokens,
-		CacheCreationTokens: t.CacheCreationTokens,
-		CacheReadTokens:     t.CacheReadTokens,
-		TotalCostUSD:        t.TotalCostUSD,
-		TotalTokensCount:    t.TotalTokensCount,
-		TotalElapsedNs:      t.TotalElapsedNs,
-	}
-	t.mu.Unlock()
-
-	data, err := json.MarshalIndent(&snap, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(path, data, 0644)
-}
-
-// LoadTokenStats loads stats from a JSON file, returns empty stats if file doesn't exist
-func LoadTokenStats(path string) (*TokenStats, error) {
-	// If file doesn't exist, return empty stats
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return NewTokenStats(), nil
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var stats TokenStats
-	if err := json.Unmarshal(data, &stats); err != nil {
-		return nil, err
-	}
-
-	return &stats, nil
-}
 
 // GenerateSessionID returns a 6-char lowercase hex string from crypto/rand.
 func GenerateSessionID() (string, error) {
@@ -310,6 +266,21 @@ func InitDB(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("creating loop_stats table: %w", err)
 	}
 
+	const createProjectStats = `CREATE TABLE IF NOT EXISTS project_stats (
+		project_key           TEXT PRIMARY KEY,
+		input_tokens          INTEGER DEFAULT 0,
+		output_tokens         INTEGER DEFAULT 0,
+		cache_creation_tokens INTEGER DEFAULT 0,
+		cache_read_tokens     INTEGER DEFAULT 0,
+		total_cost            REAL DEFAULT 0,
+		total_tokens          INTEGER DEFAULT 0,
+		elapsed_ns            INTEGER DEFAULT 0
+	)`
+	if _, err := db.Exec(createProjectStats); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("creating project_stats table: %w", err)
+	}
+
 	// Prune old checkpoint rows
 	if _, err := db.Exec("DELETE FROM checkpoints WHERE timestamp < datetime('now', '-7 days')"); err != nil {
 		db.Close()
@@ -317,6 +288,57 @@ func InitDB(path string) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+// SaveProjectStats persists cumulative token stats for a project key.
+func SaveProjectStats(db *sql.DB, projectKey string, s *TokenStats) error {
+	if db == nil {
+		return nil
+	}
+	snap := s.Snapshot()
+	_, err := db.Exec(
+		`INSERT OR REPLACE INTO project_stats (project_key, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, total_cost, total_tokens, elapsed_ns)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		projectKey, snap.InputTokens, snap.OutputTokens, snap.CacheCreationTokens, snap.CacheReadTokens,
+		snap.TotalCostUSD, snap.TotalTokensCount, snap.TotalElapsedNs,
+	)
+	return err
+}
+
+// LoadProjectStats loads cumulative token stats for a project key.
+// Returns zeroed stats (not an error) when no row exists or db is nil.
+func LoadProjectStats(db *sql.DB, projectKey string) (*TokenStats, error) {
+	if db == nil {
+		return NewTokenStats(), nil
+	}
+	row := db.QueryRow(
+		`SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, total_cost, total_tokens, elapsed_ns
+		 FROM project_stats WHERE project_key = ?`, projectKey,
+	)
+	s := NewTokenStats()
+	err := row.Scan(&s.InputTokens, &s.OutputTokens, &s.CacheCreationTokens, &s.CacheReadTokens,
+		&s.TotalCostUSD, &s.TotalTokensCount, &s.TotalElapsedNs)
+	if err == sql.ErrNoRows {
+		return NewTokenStats(), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// ProjectKey returns a stable key for per-project stats.
+// For git repos (both owner and repo non-empty), returns "owner/repo".
+// Otherwise falls back to the absolute working directory path.
+func ProjectKey(owner, repo string) string {
+	if owner != "" && repo != "" {
+		return owner + "/" + repo
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return cwd
 }
 
 // CheckpointParams holds parameters for a checkpoint row insert.
@@ -476,49 +498,3 @@ func QueryRollingWakeTime(db *sql.DB, owner, repo string, limit float64) (time.T
 	return time.Now().UTC().Add(60 * time.Minute), nil
 }
 
-// ExportSessionTSV returns a TSV-formatted string of loop_stats rows for the given session.
-// Returns empty string if no rows found.
-func ExportSessionTSV(db *sql.DB, sessionID string) (string, error) {
-	if db == nil {
-		return "", nil
-	}
-
-	rows, err := db.Query(
-		`SELECT loop_id, session_id, owner, repo, branch, description, total_cost,
-		        input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-		        total_tokens, start_time, finish_time
-		 FROM loop_stats WHERE session_id = ? ORDER BY loop_id`,
-		sessionID,
-	)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-
-	var b strings.Builder
-	header := "loop_id\tsession_id\towner\trepo\tbranch\tdescription\ttotal_cost\tinput_tokens\toutput_tokens\tcache_creation_tokens\tcache_read_tokens\ttotal_tokens\tstart_time\tfinish_time"
-	hasRows := false
-
-	for rows.Next() {
-		if !hasRows {
-			b.WriteString(header)
-			b.WriteByte('\n')
-			hasRows = true
-		}
-		var loopID, sessID, owner, repo, branch, desc, startTime, finishTime string
-		var totalCost float64
-		var input, output, cacheCreation, cacheRead, total int64
-		if err := rows.Scan(&loopID, &sessID, &owner, &repo, &branch, &desc, &totalCost,
-			&input, &output, &cacheCreation, &cacheRead, &total, &startTime, &finishTime); err != nil {
-			return "", err
-		}
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%s\t%.6f\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",
-			loopID, sessID, owner, repo, branch, desc, totalCost,
-			input, output, cacheCreation, cacheRead, total, startTime, finishTime)
-	}
-	if err := rows.Err(); err != nil {
-		return "", err
-	}
-
-	return b.String(), nil
-}

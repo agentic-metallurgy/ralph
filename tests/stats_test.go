@@ -2,7 +2,6 @@ package tests
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -116,196 +115,10 @@ func TestTotalTokens(t *testing.T) {
 	}
 }
 
-func TestSave(t *testing.T) {
-	// Create temp file
-	tmpDir, err := os.MkdirTemp("", "ralph-stats-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
 
-	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
 
-	s := stats.NewTokenStats()
-	s.InputTokens = 1000
-	s.OutputTokens = 500
-	s.CacheCreationTokens = 200
-	s.CacheReadTokens = 100
-	s.TotalCostUSD = 0.123456
 
-	// Save
-	if err := s.Save(statsFile); err != nil {
-		t.Fatalf("Failed to save stats: %v", err)
-	}
 
-	// Verify file exists
-	if _, err := os.Stat(statsFile); os.IsNotExist(err) {
-		t.Fatal("Stats file was not created")
-	}
-
-	// Read and parse the file
-	data, err := os.ReadFile(statsFile)
-	if err != nil {
-		t.Fatalf("Failed to read stats file: %v", err)
-	}
-
-	var saved map[string]interface{}
-	if err := json.Unmarshal(data, &saved); err != nil {
-		t.Fatalf("Failed to parse saved JSON: %v", err)
-	}
-
-	// Verify values
-	if saved["input_tokens"].(float64) != 1000 {
-		t.Errorf("Expected saved input_tokens 1000, got %v", saved["input_tokens"])
-	}
-	if saved["output_tokens"].(float64) != 500 {
-		t.Errorf("Expected saved output_tokens 500, got %v", saved["output_tokens"])
-	}
-	if saved["total_cost"].(float64) != 0.123456 {
-		t.Errorf("Expected saved total_cost 0.123456, got %v", saved["total_cost"])
-	}
-	// TotalTokensCount should be updated on save
-	if saved["total_tokens"].(float64) != 1800 {
-		t.Errorf("Expected saved total_tokens 1800, got %v", saved["total_tokens"])
-	}
-}
-
-func TestLoadTokenStats_ExistingFile(t *testing.T) {
-	// Create temp dir and file
-	tmpDir, err := os.MkdirTemp("", "ralph-stats-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
-
-	// Create a stats file with known values
-	statsData := `{
-		"input_tokens": 5000,
-		"output_tokens": 2500,
-		"cache_creation_tokens": 1000,
-		"cache_read_tokens": 500,
-		"total_cost": 0.987654,
-		"total_tokens": 9000
-	}`
-	if err := os.WriteFile(statsFile, []byte(statsData), 0644); err != nil {
-		t.Fatalf("Failed to write test stats file: %v", err)
-	}
-
-	// Load
-	s, err := stats.LoadTokenStats(statsFile)
-	if err != nil {
-		t.Fatalf("Failed to load stats: %v", err)
-	}
-
-	// Verify values
-	if s.InputTokens != 5000 {
-		t.Errorf("Expected InputTokens 5000, got %d", s.InputTokens)
-	}
-	if s.OutputTokens != 2500 {
-		t.Errorf("Expected OutputTokens 2500, got %d", s.OutputTokens)
-	}
-	if s.CacheCreationTokens != 1000 {
-		t.Errorf("Expected CacheCreationTokens 1000, got %d", s.CacheCreationTokens)
-	}
-	if s.CacheReadTokens != 500 {
-		t.Errorf("Expected CacheReadTokens 500, got %d", s.CacheReadTokens)
-	}
-	if s.TotalCostUSD != 0.987654 {
-		t.Errorf("Expected TotalCostUSD 0.987654, got %f", s.TotalCostUSD)
-	}
-	if s.TotalTokensCount != 9000 {
-		t.Errorf("Expected TotalTokensCount 9000, got %d", s.TotalTokensCount)
-	}
-}
-
-func TestLoadTokenStats_NonExistentFile(t *testing.T) {
-	// Load from non-existent file should return empty stats
-	s, err := stats.LoadTokenStats("/nonexistent/path/.ralph.claude_stats")
-	if err != nil {
-		t.Fatalf("Expected no error for non-existent file, got: %v", err)
-	}
-
-	// Should return empty stats
-	if s.InputTokens != 0 || s.OutputTokens != 0 || s.TotalCostUSD != 0 {
-		t.Error("Expected empty stats for non-existent file")
-	}
-}
-
-func TestLoadTokenStats_CorruptJSON(t *testing.T) {
-	// Create temp dir and file with invalid JSON
-	tmpDir, err := os.MkdirTemp("", "ralph-stats-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
-
-	// Write corrupt JSON
-	if err := os.WriteFile(statsFile, []byte("{invalid json"), 0644); err != nil {
-		t.Fatalf("Failed to write corrupt stats file: %v", err)
-	}
-
-	// Load should return error
-	_, err = stats.LoadTokenStats(statsFile)
-	if err == nil {
-		t.Error("Expected error for corrupt JSON, got nil")
-	}
-}
-
-func TestSaveAndLoad_RoundTrip(t *testing.T) {
-	// Create temp dir
-	tmpDir, err := os.MkdirTemp("", "ralph-stats-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
-
-	// Create stats with specific values
-	original := stats.NewTokenStats()
-	original.InputTokens = 12345
-	original.OutputTokens = 6789
-	original.CacheCreationTokens = 1111
-	original.CacheReadTokens = 2222
-	original.TotalCostUSD = 1.234567
-
-	// Save
-	if err := original.Save(statsFile); err != nil {
-		t.Fatalf("Failed to save: %v", err)
-	}
-
-	// Load
-	loaded, err := stats.LoadTokenStats(statsFile)
-	if err != nil {
-		t.Fatalf("Failed to load: %v", err)
-	}
-
-	// Compare
-	if loaded.InputTokens != original.InputTokens {
-		t.Errorf("InputTokens mismatch: %d vs %d", loaded.InputTokens, original.InputTokens)
-	}
-	if loaded.OutputTokens != original.OutputTokens {
-		t.Errorf("OutputTokens mismatch: %d vs %d", loaded.OutputTokens, original.OutputTokens)
-	}
-	if loaded.CacheCreationTokens != original.CacheCreationTokens {
-		t.Errorf("CacheCreationTokens mismatch: %d vs %d", loaded.CacheCreationTokens, original.CacheCreationTokens)
-	}
-	if loaded.CacheReadTokens != original.CacheReadTokens {
-		t.Errorf("CacheReadTokens mismatch: %d vs %d", loaded.CacheReadTokens, original.CacheReadTokens)
-	}
-	if loaded.TotalCostUSD != original.TotalCostUSD {
-		t.Errorf("TotalCostUSD mismatch: %f vs %f", loaded.TotalCostUSD, original.TotalCostUSD)
-	}
-	// TotalTokensCount is updated on Save
-	expectedTotal := original.TotalTokens()
-	if loaded.TotalTokensCount != expectedTotal {
-		t.Errorf("TotalTokensCount mismatch: %d vs %d", loaded.TotalTokensCount, expectedTotal)
-	}
-}
 
 func TestAddUsage_ZeroValues(t *testing.T) {
 	s := stats.NewTokenStats()
@@ -365,76 +178,7 @@ func TestAddCost_SmallValues(t *testing.T) {
 	}
 }
 
-func TestLoadTokenStats_PartialData(t *testing.T) {
-	// Test loading a file with only some fields
-	tmpDir, err := os.MkdirTemp("", "ralph-stats-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
 
-	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
-
-	// Create a minimal stats file
-	statsData := `{"input_tokens": 100, "output_tokens": 50}`
-	if err := os.WriteFile(statsFile, []byte(statsData), 0644); err != nil {
-		t.Fatalf("Failed to write test stats file: %v", err)
-	}
-
-	s, err := stats.LoadTokenStats(statsFile)
-	if err != nil {
-		t.Fatalf("Failed to load partial stats: %v", err)
-	}
-
-	if s.InputTokens != 100 {
-		t.Errorf("Expected InputTokens 100, got %d", s.InputTokens)
-	}
-	if s.OutputTokens != 50 {
-		t.Errorf("Expected OutputTokens 50, got %d", s.OutputTokens)
-	}
-	// Missing fields should be zero
-	if s.CacheCreationTokens != 0 {
-		t.Errorf("Expected CacheCreationTokens 0 for missing field, got %d", s.CacheCreationTokens)
-	}
-	if s.TotalCostUSD != 0 {
-		t.Errorf("Expected TotalCostUSD 0 for missing field, got %f", s.TotalCostUSD)
-	}
-}
-
-func TestSave_OverwritesExisting(t *testing.T) {
-	// Test that Save overwrites existing file
-	tmpDir, err := os.MkdirTemp("", "ralph-stats-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
-
-	// First save
-	s1 := stats.NewTokenStats()
-	s1.InputTokens = 100
-	if err := s1.Save(statsFile); err != nil {
-		t.Fatalf("Failed first save: %v", err)
-	}
-
-	// Second save with different values
-	s2 := stats.NewTokenStats()
-	s2.InputTokens = 999
-	if err := s2.Save(statsFile); err != nil {
-		t.Fatalf("Failed second save: %v", err)
-	}
-
-	// Load and verify it has the second values
-	loaded, err := stats.LoadTokenStats(statsFile)
-	if err != nil {
-		t.Fatalf("Failed to load: %v", err)
-	}
-
-	if loaded.InputTokens != 999 {
-		t.Errorf("Expected InputTokens 999 (from second save), got %d", loaded.InputTokens)
-	}
-}
 
 func TestAccumulationMatchesPython(t *testing.T) {
 	// Test that accumulation matches the Python version behavior
@@ -486,50 +230,7 @@ func TestAccumulationMatchesPython(t *testing.T) {
 	}
 }
 
-func TestSave_CreatesParentDirectory(t *testing.T) {
-	// Test that Save creates parent directory if it doesn't exist
-	tmpDir, err := os.MkdirTemp("", "ralph-stats-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
 
-	// Path with non-existent subdirectory
-	statsFile := filepath.Join(tmpDir, "subdir", ".ralph.claude_stats")
-
-	s := stats.NewTokenStats()
-	s.InputTokens = 42
-
-	// This should fail because Save doesn't create parent directories
-	err = s.Save(statsFile)
-	if err == nil {
-		t.Log("Note: Save successfully created file in non-existent directory")
-	} else {
-		t.Logf("As expected, Save failed for non-existent parent dir: %v", err)
-	}
-}
-
-func TestLoadTokenStats_EmptyFile(t *testing.T) {
-	// Test loading an empty file
-	tmpDir, err := os.MkdirTemp("", "ralph-stats-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
-
-	// Create empty file
-	if err := os.WriteFile(statsFile, []byte(""), 0644); err != nil {
-		t.Fatalf("Failed to create empty stats file: %v", err)
-	}
-
-	// Load should return error for empty file (invalid JSON)
-	_, err = stats.LoadTokenStats(statsFile)
-	if err == nil {
-		t.Error("Expected error for empty file, got nil")
-	}
-}
 
 func TestTotalTokensCount_UpdatedAfterAddUsage(t *testing.T) {
 	s := stats.NewTokenStats()
@@ -546,31 +247,6 @@ func TestTotalTokensCount_UpdatedAfterAddUsage(t *testing.T) {
 	}
 }
 
-func TestElapsedTime_SaveAndLoad(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "ralph-stats-elapsed-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	statsFile := filepath.Join(tmpDir, ".ralph.claude_stats")
-
-	s := stats.NewTokenStats()
-	s.TotalElapsedNs = int64(5445 * 1e9) // 1h30m45s
-
-	if err := s.Save(statsFile); err != nil {
-		t.Fatalf("Failed to save stats: %v", err)
-	}
-
-	loaded, err := stats.LoadTokenStats(statsFile)
-	if err != nil {
-		t.Fatalf("Failed to load stats: %v", err)
-	}
-
-	if loaded.TotalElapsedNs != s.TotalElapsedNs {
-		t.Errorf("TotalElapsedNs mismatch: expected %d, got %d", s.TotalElapsedNs, loaded.TotalElapsedNs)
-	}
-}
 
 func TestEstimateCostFromTokens(t *testing.T) {
 	tests := []struct {
@@ -1115,94 +791,6 @@ func TestGetGitContext(t *testing.T) {
 	}
 }
 
-func TestExportSessionTSV(t *testing.T) {
-	db, cleanup := helperInitTestDB(t)
-	defer cleanup()
-
-	// Write 2 loop_stats rows for the same session
-	stats.WriteLoopStats(db, stats.LoopStatsParams{
-		LoopID:              "abc123-1",
-		SessionID:           "abc123",
-		Owner:               "myorg",
-		Repo:                "myrepo",
-		Branch:              "main",
-		Description:         "feat: first loop",
-		TotalCost:           0.10,
-		InputTokens:         1000,
-		OutputTokens:        500,
-		CacheCreationTokens: 100,
-		CacheReadTokens:     50,
-		TotalTokens:         1650,
-		StartTime:           "2026-03-22T10:00:00Z",
-		FinishTime:          "2026-03-22T10:02:00Z",
-	})
-	stats.WriteLoopStats(db, stats.LoopStatsParams{
-		LoopID:              "abc123-2",
-		SessionID:           "abc123",
-		Owner:               "myorg",
-		Repo:                "myrepo",
-		Branch:              "main",
-		Description:         "feat: second loop",
-		TotalCost:           0.20,
-		InputTokens:         2000,
-		OutputTokens:        1000,
-		CacheCreationTokens: 200,
-		CacheReadTokens:     100,
-		TotalTokens:         3300,
-		StartTime:           "2026-03-22T10:02:00Z",
-		FinishTime:          "2026-03-22T10:05:00Z",
-	})
-
-	// Also write a row for a different session — should not appear
-	stats.WriteLoopStats(db, stats.LoopStatsParams{
-		LoopID:    "other-1",
-		SessionID: "other0",
-		TotalCost: 9.99,
-		StartTime: "2026-03-22T10:00:00Z",
-		FinishTime: "2026-03-22T10:01:00Z",
-	})
-
-	tsv, err := stats.ExportSessionTSV(db, "abc123")
-	if err != nil {
-		t.Fatalf("ExportSessionTSV failed: %v", err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(tsv), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("Expected 3 lines (1 header + 2 data), got %d: %q", len(lines), tsv)
-	}
-
-	// Verify header
-	if !strings.HasPrefix(lines[0], "loop_id\tsession_id\t") {
-		t.Errorf("Expected TSV header to start with 'loop_id\\tsession_id\\t', got %q", lines[0])
-	}
-
-	// Verify data lines contain correct loop_ids
-	if !strings.HasPrefix(lines[1], "abc123-1\t") {
-		t.Errorf("Expected first data line to start with 'abc123-1', got %q", lines[1])
-	}
-	if !strings.HasPrefix(lines[2], "abc123-2\t") {
-		t.Errorf("Expected second data line to start with 'abc123-2', got %q", lines[2])
-	}
-
-	// Verify the "other" session is not included
-	if strings.Contains(tsv, "other-1") {
-		t.Error("TSV should not contain rows from other sessions")
-	}
-}
-
-func TestExportSessionTSV_EmptySession(t *testing.T) {
-	db, cleanup := helperInitTestDB(t)
-	defer cleanup()
-
-	tsv, err := stats.ExportSessionTSV(db, "nonexistent")
-	if err != nil {
-		t.Fatalf("ExportSessionTSV failed: %v", err)
-	}
-	if tsv != "" {
-		t.Errorf("Expected empty string for non-existent session, got %q", tsv)
-	}
-}
 
 func TestQueryRollingHourCost_NilDB(t *testing.T) {
 	cost, err := stats.QueryRollingHourCost(nil, "", "")
@@ -1327,15 +915,6 @@ func TestQueryRollingWakeTime_FallbackSingleLargeCheckpoint(t *testing.T) {
 	}
 }
 
-func TestExportSessionTSV_NilDB(t *testing.T) {
-	tsv, err := stats.ExportSessionTSV(nil, "abc123")
-	if err != nil {
-		t.Errorf("ExportSessionTSV(nil, ...) should return nil error, got %v", err)
-	}
-	if tsv != "" {
-		t.Errorf("ExportSessionTSV(nil, ...) should return empty string, got %q", tsv)
-	}
-}
 
 func TestReconcileCostThreadSafe(t *testing.T) {
 	s := stats.NewTokenStats()
@@ -1755,4 +1334,119 @@ func TestMultiIterationCumulativeCostInflation(t *testing.T) {
 			t.Error("Expected inflated cost to exceed correct cost, but it didn't — bug may be fixed")
 		}
 	})
+}
+
+func newTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	tmpDir := t.TempDir()
+	db, err := stats.InitDB(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func TestSaveProjectStats(t *testing.T) {
+	db := newTestDB(t)
+
+	s := stats.NewTokenStats()
+	s.AddUsage(100, 200, 10, 20)
+	s.AddCost(0.05)
+
+	err := stats.SaveProjectStats(db, "owner/repo", s)
+	if err != nil {
+		t.Fatalf("SaveProjectStats failed: %v", err)
+	}
+
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM project_stats WHERE project_key = ?", "owner/repo").Scan(&count)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Expected 1 row, got %d", count)
+	}
+}
+
+func TestLoadProjectStats_ExistingKey(t *testing.T) {
+	db := newTestDB(t)
+
+	s := stats.NewTokenStats()
+	s.AddUsage(100, 200, 10, 20)
+	s.AddCost(0.05)
+	s.TotalElapsedNs = 5000000
+
+	if err := stats.SaveProjectStats(db, "owner/repo", s); err != nil {
+		t.Fatalf("SaveProjectStats failed: %v", err)
+	}
+
+	loaded, err := stats.LoadProjectStats(db, "owner/repo")
+	if err != nil {
+		t.Fatalf("LoadProjectStats failed: %v", err)
+	}
+
+	snap := loaded.Snapshot()
+	if snap.InputTokens != 100 {
+		t.Errorf("InputTokens: got %d, want 100", snap.InputTokens)
+	}
+	if snap.OutputTokens != 200 {
+		t.Errorf("OutputTokens: got %d, want 200", snap.OutputTokens)
+	}
+	if snap.CacheCreationTokens != 10 {
+		t.Errorf("CacheCreationTokens: got %d, want 10", snap.CacheCreationTokens)
+	}
+	if snap.CacheReadTokens != 20 {
+		t.Errorf("CacheReadTokens: got %d, want 20", snap.CacheReadTokens)
+	}
+	tolerance := 0.0001
+	if diff := snap.TotalCostUSD - 0.05; diff < -tolerance || diff > tolerance {
+		t.Errorf("TotalCostUSD: got %f, want 0.05", snap.TotalCostUSD)
+	}
+	if snap.TotalElapsedNs != 5000000 {
+		t.Errorf("TotalElapsedNs: got %d, want 5000000", snap.TotalElapsedNs)
+	}
+}
+
+func TestLoadProjectStats_MissingKey(t *testing.T) {
+	db := newTestDB(t)
+
+	loaded, err := stats.LoadProjectStats(db, "nonexistent/project")
+	if err != nil {
+		t.Fatalf("LoadProjectStats should not error for missing key: %v", err)
+	}
+
+	snap := loaded.Snapshot()
+	if snap.InputTokens != 0 || snap.OutputTokens != 0 || snap.TotalCostUSD != 0 {
+		t.Errorf("Expected zeroed stats for missing key, got %+v", snap)
+	}
+}
+
+func TestLoadProjectStats_NilDB(t *testing.T) {
+	loaded, err := stats.LoadProjectStats(nil, "owner/repo")
+	if err != nil {
+		t.Fatalf("LoadProjectStats(nil) should not error: %v", err)
+	}
+
+	snap := loaded.Snapshot()
+	if snap.InputTokens != 0 || snap.OutputTokens != 0 || snap.TotalCostUSD != 0 {
+		t.Errorf("Expected zeroed stats for nil DB, got %+v", snap)
+	}
+}
+
+func TestProjectKey_GitRepo(t *testing.T) {
+	key := stats.ProjectKey("myowner", "myrepo")
+	if key != "myowner/myrepo" {
+		t.Errorf("Expected 'myowner/myrepo', got %q", key)
+	}
+}
+
+func TestProjectKey_NonGit(t *testing.T) {
+	key := stats.ProjectKey("", "")
+	if key == "" {
+		t.Error("Expected non-empty CWD path for non-git project key")
+	}
+	if strings.Contains(key, "/") && !filepath.IsAbs(key) {
+		t.Errorf("Expected absolute path, got %q", key)
+	}
 }
