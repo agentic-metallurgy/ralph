@@ -22,7 +22,6 @@ import (
 	"github.com/cloudosai/ralph-go/internal/tui"
 )
 
-const statsFilePath = ".ralph.claude_stats"
 const logFilePath = ".ralph.log"
 
 // isAuthenticationText checks if plain text output contains authentication-related error messages.
@@ -340,17 +339,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Load existing stats (if any)
-	tokenStats, err := stats.LoadTokenStats(statsFilePath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not load stats: %v\n", err)
-		tokenStats = stats.NewTokenStats()
-	}
-
 	// Initialize DB context for stats tracking (best-effort)
 	dbCtx := initDBContext()
 	if dbCtx.db != nil {
 		defer dbCtx.db.Close()
+	}
+
+	// Load existing stats from SQLite
+	tokenStats, err := stats.LoadProjectStats(dbCtx.db, stats.ProjectKey(dbCtx.owner, dbCtx.repo))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not load project stats from DB: %v\n", err)
+		tokenStats = stats.NewTokenStats()
 	}
 
 	// Open log file (truncated each run); fall back to io.Discard on error
@@ -372,8 +371,8 @@ func main() {
 		} else {
 			exitCode = runCLI(cfg, promptContent, tokenStats, logFile, dbCtx)
 		}
-		if err := tokenStats.Save(statsFilePath); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
+		if err := stats.SaveProjectStats(dbCtx.db, stats.ProjectKey(dbCtx.owner, dbCtx.repo), tokenStats); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Could not save project stats to DB: %v\n", err)
 		}
 		exportSessionTSV(dbCtx)
 		os.Exit(exitCode)
@@ -382,8 +381,8 @@ func main() {
 	// Plan-and-build mode: run planning (1 iteration) then building (N iterations) in single TUI session
 	if cfg.IsPlanAndBuildMode() {
 		runPlanAndBuild(cfg, tokenStats, logFile, dbCtx)
-		if err := tokenStats.Save(statsFilePath); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
+		if err := stats.SaveProjectStats(dbCtx.db, stats.ProjectKey(dbCtx.owner, dbCtx.repo), tokenStats); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Could not save project stats to DB: %v\n", err)
 		}
 		exportSessionTSV(dbCtx)
 		return
@@ -459,8 +458,8 @@ func main() {
 	}
 
 	// Save stats on exit
-	if err := tokenStats.Save(statsFilePath); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not save stats: %v\n", err)
+	if err := stats.SaveProjectStats(dbCtx.db, stats.ProjectKey(dbCtx.owner, dbCtx.repo), tokenStats); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not save project stats to DB: %v\n", err)
 	}
 	exportSessionTSV(dbCtx)
 }

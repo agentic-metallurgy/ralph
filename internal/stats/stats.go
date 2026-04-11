@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -133,49 +132,6 @@ func FormatTokens(count int64) string {
 	}
 }
 
-// Save persists the stats to a JSON file at the given path
-func (t *TokenStats) Save(path string) error {
-	// Take a consistent snapshot under lock, then do I/O outside the lock
-	t.mu.Lock()
-	t.TotalTokensCount = t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens
-	snap := TokenStats{
-		InputTokens:         t.InputTokens,
-		OutputTokens:        t.OutputTokens,
-		CacheCreationTokens: t.CacheCreationTokens,
-		CacheReadTokens:     t.CacheReadTokens,
-		TotalCostUSD:        t.TotalCostUSD,
-		TotalTokensCount:    t.TotalTokensCount,
-		TotalElapsedNs:      t.TotalElapsedNs,
-	}
-	t.mu.Unlock()
-
-	data, err := json.MarshalIndent(&snap, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(path, data, 0644)
-}
-
-// LoadTokenStats loads stats from a JSON file, returns empty stats if file doesn't exist
-func LoadTokenStats(path string) (*TokenStats, error) {
-	// If file doesn't exist, return empty stats
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return NewTokenStats(), nil
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var stats TokenStats
-	if err := json.Unmarshal(data, &stats); err != nil {
-		return nil, err
-	}
-
-	return &stats, nil
-}
 
 // GenerateSessionID returns a 6-char lowercase hex string from crypto/rand.
 func GenerateSessionID() (string, error) {
