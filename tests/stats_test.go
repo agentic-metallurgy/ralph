@@ -791,94 +791,6 @@ func TestGetGitContext(t *testing.T) {
 	}
 }
 
-func TestExportSessionTSV(t *testing.T) {
-	db, cleanup := helperInitTestDB(t)
-	defer cleanup()
-
-	// Write 2 loop_stats rows for the same session
-	stats.WriteLoopStats(db, stats.LoopStatsParams{
-		LoopID:              "abc123-1",
-		SessionID:           "abc123",
-		Owner:               "myorg",
-		Repo:                "myrepo",
-		Branch:              "main",
-		Description:         "feat: first loop",
-		TotalCost:           0.10,
-		InputTokens:         1000,
-		OutputTokens:        500,
-		CacheCreationTokens: 100,
-		CacheReadTokens:     50,
-		TotalTokens:         1650,
-		StartTime:           "2026-03-22T10:00:00Z",
-		FinishTime:          "2026-03-22T10:02:00Z",
-	})
-	stats.WriteLoopStats(db, stats.LoopStatsParams{
-		LoopID:              "abc123-2",
-		SessionID:           "abc123",
-		Owner:               "myorg",
-		Repo:                "myrepo",
-		Branch:              "main",
-		Description:         "feat: second loop",
-		TotalCost:           0.20,
-		InputTokens:         2000,
-		OutputTokens:        1000,
-		CacheCreationTokens: 200,
-		CacheReadTokens:     100,
-		TotalTokens:         3300,
-		StartTime:           "2026-03-22T10:02:00Z",
-		FinishTime:          "2026-03-22T10:05:00Z",
-	})
-
-	// Also write a row for a different session — should not appear
-	stats.WriteLoopStats(db, stats.LoopStatsParams{
-		LoopID:    "other-1",
-		SessionID: "other0",
-		TotalCost: 9.99,
-		StartTime: "2026-03-22T10:00:00Z",
-		FinishTime: "2026-03-22T10:01:00Z",
-	})
-
-	tsv, err := stats.ExportSessionTSV(db, "abc123")
-	if err != nil {
-		t.Fatalf("ExportSessionTSV failed: %v", err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(tsv), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("Expected 3 lines (1 header + 2 data), got %d: %q", len(lines), tsv)
-	}
-
-	// Verify header
-	if !strings.HasPrefix(lines[0], "loop_id\tsession_id\t") {
-		t.Errorf("Expected TSV header to start with 'loop_id\\tsession_id\\t', got %q", lines[0])
-	}
-
-	// Verify data lines contain correct loop_ids
-	if !strings.HasPrefix(lines[1], "abc123-1\t") {
-		t.Errorf("Expected first data line to start with 'abc123-1', got %q", lines[1])
-	}
-	if !strings.HasPrefix(lines[2], "abc123-2\t") {
-		t.Errorf("Expected second data line to start with 'abc123-2', got %q", lines[2])
-	}
-
-	// Verify the "other" session is not included
-	if strings.Contains(tsv, "other-1") {
-		t.Error("TSV should not contain rows from other sessions")
-	}
-}
-
-func TestExportSessionTSV_EmptySession(t *testing.T) {
-	db, cleanup := helperInitTestDB(t)
-	defer cleanup()
-
-	tsv, err := stats.ExportSessionTSV(db, "nonexistent")
-	if err != nil {
-		t.Fatalf("ExportSessionTSV failed: %v", err)
-	}
-	if tsv != "" {
-		t.Errorf("Expected empty string for non-existent session, got %q", tsv)
-	}
-}
 
 func TestQueryRollingHourCost_NilDB(t *testing.T) {
 	cost, err := stats.QueryRollingHourCost(nil, "", "")
@@ -1003,15 +915,6 @@ func TestQueryRollingWakeTime_FallbackSingleLargeCheckpoint(t *testing.T) {
 	}
 }
 
-func TestExportSessionTSV_NilDB(t *testing.T) {
-	tsv, err := stats.ExportSessionTSV(nil, "abc123")
-	if err != nil {
-		t.Errorf("ExportSessionTSV(nil, ...) should return nil error, got %v", err)
-	}
-	if tsv != "" {
-		t.Errorf("ExportSessionTSV(nil, ...) should return empty string, got %q", tsv)
-	}
-}
 
 func TestReconcileCostThreadSafe(t *testing.T) {
 	s := stats.NewTokenStats()

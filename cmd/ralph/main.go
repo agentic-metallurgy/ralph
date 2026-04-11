@@ -121,25 +121,6 @@ func initDBContext() *dbContext {
 	}
 }
 
-// exportSessionTSV exports session stats as TSV and writes to a file in the current directory.
-func exportSessionTSV(dbCtx *dbContext) {
-	if dbCtx == nil || dbCtx.db == nil {
-		return
-	}
-	tsv, err := stats.ExportSessionTSV(dbCtx.db, dbCtx.sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not export session TSV: %v\n", err)
-		return
-	}
-	if tsv == "" {
-		return
-	}
-	filename := dbCtx.sessionID + ".tsv"
-	if err := os.WriteFile(filename, []byte(tsv), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not write TSV file: %v\n", err)
-	}
-}
-
 // startNewLoop completes the previous loop (if any) and begins tracking a new one.
 func (lt *loopTracker) startNewLoop(dbCtx *dbContext, tokenStats *stats.TokenStats, loopNum int) {
 	if lt.currentLoopID != "" {
@@ -374,7 +355,6 @@ func main() {
 		if err := stats.SaveProjectStats(dbCtx.db, stats.ProjectKey(dbCtx.owner, dbCtx.repo), tokenStats); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not save project stats to DB: %v\n", err)
 		}
-		exportSessionTSV(dbCtx)
 		os.Exit(exitCode)
 	}
 
@@ -384,7 +364,6 @@ func main() {
 		if err := stats.SaveProjectStats(dbCtx.db, stats.ProjectKey(dbCtx.owner, dbCtx.repo), tokenStats); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Could not save project stats to DB: %v\n", err)
 		}
-		exportSessionTSV(dbCtx)
 		return
 	}
 
@@ -461,7 +440,6 @@ func main() {
 	if err := stats.SaveProjectStats(dbCtx.db, stats.ProjectKey(dbCtx.owner, dbCtx.repo), tokenStats); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Could not save project stats to DB: %v\n", err)
 	}
-	exportSessionTSV(dbCtx)
 }
 
 // processLoopOutput reads from the loop's output channel, parses JSON, and updates the TUI
