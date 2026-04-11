@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cloudosai/ralph-go/internal/config"
@@ -668,6 +669,44 @@ func TestAPIBackoffNotResetOnHibernateRetry(t *testing.T) {
 	// Step 4: verify backoff was NOT reset — consecutive hits still 1
 	if apiBackoff.ConsecutiveHits() != 1 {
 		t.Errorf("expected consecutiveHits=1 (not reset on RETRY), got %d", apiBackoff.ConsecutiveHits())
+	}
+}
+
+func TestLogFileAppendsAcrossRuns(t *testing.T) {
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "ralph.log")
+
+	// First "run": open with append flags, write session 1, close
+	f1, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("first open failed: %v", err)
+	}
+	if _, err := f1.WriteString("session 1\n"); err != nil {
+		t.Fatalf("first write failed: %v", err)
+	}
+	f1.Close()
+
+	// Second "run": open with append flags, write session 2, close
+	f2, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("second open failed: %v", err)
+	}
+	if _, err := f2.WriteString("session 2\n"); err != nil {
+		t.Fatalf("second write failed: %v", err)
+	}
+	f2.Close()
+
+	// Read the file and assert both sessions are present
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "session 1") {
+		t.Errorf("expected 'session 1' in log file, got: %q", content)
+	}
+	if !strings.Contains(content, "session 2") {
+		t.Errorf("expected 'session 2' in log file, got: %q", content)
 	}
 }
 

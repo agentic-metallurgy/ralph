@@ -339,16 +339,17 @@ func main() {
 		tokenStats = stats.NewTokenStats()
 	}
 
-	// Open log file (truncated each run); fall back to io.Discard on error
+	// Open log file in append mode; fall back to io.Discard on error
 	var logFile io.Writer
 	logPath := logFilePath()
-	logFileHandle, err := os.Create(logPath)
+	logFileHandle, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Could not open log file %s: %v\n", logPath, err)
 		logFile = io.Discard
 	} else {
 		logFile = logFileHandle
 		defer logFileHandle.Close()
+		fmt.Fprintf(logFileHandle, "\n--- ralph run started %s ---\n\n", time.Now().UTC().Format(time.RFC3339))
 	}
 
 	// CLI mode: run without TUI, output to stdout/stderr, exit when complete
