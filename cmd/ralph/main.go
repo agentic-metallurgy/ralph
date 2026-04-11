@@ -62,18 +62,37 @@ type loopTracker struct {
 	lastFlushedSnap stats.TokenStats
 }
 
-// expandDBPath returns the full path to the stats database (~/.ralph/ralph_stats.db).
+// expandDBPath returns the full path to the stats database (~/.ralph/ralph.db).
 func expandDBPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".ralph", "ralph_stats.db")
+	return filepath.Join(home, ".ralph", "ralph.db")
+}
+
+// migrateDB renames ~/.ralph/ralph_stats.db to ~/.ralph/ralph.db if the old file
+// exists and the new one does not, providing a seamless upgrade for existing users.
+func migrateDB() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	oldPath := filepath.Join(home, ".ralph", "ralph_stats.db")
+	newPath := filepath.Join(home, ".ralph", "ralph.db")
+	if _, err := os.Stat(oldPath); err != nil {
+		return
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		return
+	}
+	os.Rename(oldPath, newPath)
 }
 
 // initDBContext initializes the database and session context. Best-effort: returns
 // a dbContext with nil db on any error so callers can proceed without stats.
 func initDBContext() *dbContext {
+	migrateDB()
 	dbPath := expandDBPath()
 	if dbPath == "" {
 		fmt.Fprintf(os.Stderr, "Warning: Could not determine home directory for stats DB\n")
