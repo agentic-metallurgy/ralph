@@ -1335,3 +1335,118 @@ func TestMultiIterationCumulativeCostInflation(t *testing.T) {
 		}
 	})
 }
+
+func newTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	tmpDir := t.TempDir()
+	db, err := stats.InitDB(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+func TestSaveProjectStats(t *testing.T) {
+	db := newTestDB(t)
+
+	s := stats.NewTokenStats()
+	s.AddUsage(100, 200, 10, 20)
+	s.AddCost(0.05)
+
+	err := stats.SaveProjectStats(db, "owner/repo", s)
+	if err != nil {
+		t.Fatalf("SaveProjectStats failed: %v", err)
+	}
+
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM project_stats WHERE project_key = ?", "owner/repo").Scan(&count)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Expected 1 row, got %d", count)
+	}
+}
+
+func TestLoadProjectStats_ExistingKey(t *testing.T) {
+	db := newTestDB(t)
+
+	s := stats.NewTokenStats()
+	s.AddUsage(100, 200, 10, 20)
+	s.AddCost(0.05)
+	s.TotalElapsedNs = 5000000
+
+	if err := stats.SaveProjectStats(db, "owner/repo", s); err != nil {
+		t.Fatalf("SaveProjectStats failed: %v", err)
+	}
+
+	loaded, err := stats.LoadProjectStats(db, "owner/repo")
+	if err != nil {
+		t.Fatalf("LoadProjectStats failed: %v", err)
+	}
+
+	snap := loaded.Snapshot()
+	if snap.InputTokens != 100 {
+		t.Errorf("InputTokens: got %d, want 100", snap.InputTokens)
+	}
+	if snap.OutputTokens != 200 {
+		t.Errorf("OutputTokens: got %d, want 200", snap.OutputTokens)
+	}
+	if snap.CacheCreationTokens != 10 {
+		t.Errorf("CacheCreationTokens: got %d, want 10", snap.CacheCreationTokens)
+	}
+	if snap.CacheReadTokens != 20 {
+		t.Errorf("CacheReadTokens: got %d, want 20", snap.CacheReadTokens)
+	}
+	tolerance := 0.0001
+	if diff := snap.TotalCostUSD - 0.05; diff < -tolerance || diff > tolerance {
+		t.Errorf("TotalCostUSD: got %f, want 0.05", snap.TotalCostUSD)
+	}
+	if snap.TotalElapsedNs != 5000000 {
+		t.Errorf("TotalElapsedNs: got %d, want 5000000", snap.TotalElapsedNs)
+	}
+}
+
+func TestLoadProjectStats_MissingKey(t *testing.T) {
+	db := newTestDB(t)
+
+	loaded, err := stats.LoadProjectStats(db, "nonexistent/project")
+	if err != nil {
+		t.Fatalf("LoadProjectStats should not error for missing key: %v", err)
+	}
+
+	snap := loaded.Snapshot()
+	if snap.InputTokens != 0 || snap.OutputTokens != 0 || snap.TotalCostUSD != 0 {
+		t.Errorf("Expected zeroed stats for missing key, got %+v", snap)
+	}
+}
+
+func TestLoadProjectStats_NilDB(t *testing.T) {
+	loaded, err := stats.LoadProjectStats(nil, "owner/repo")
+	if err != nil {
+		t.Fatalf("LoadProjectStats(nil) should not error: %v", err)
+	}
+
+	snap := loaded.Snapshot()
+	if snap.InputTokens != 0 || snap.OutputTokens != 0 || snap.TotalCostUSD != 0 {
+		t.Errorf("Expected zeroed stats for nil DB, got %+v", snap)
+	}
+}
+
+func TestProjectKey_GitRepo(t *testing.T) {
+	key := stats.ProjectKey("myowner", "myrepo")
+	if key != "myowner/myrepo" {
+		t.Errorf("Expected 'myowner/myrepo', got %q", key)
+	}
+}
+
+func TestProjectKey_NonGit(t *testing.T) {
+	key := stats.ProjectKey("", "")
+	if key == "" {
+		t.Error("Expected non-empty CWD path for non-git project key")
+	}
+	if strings.Contains(key, "/") && !filepath.IsAbs(key) {
+		t.Errorf("Expected absolute path, got %q", key)
+	}
+}

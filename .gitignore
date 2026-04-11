@@ -12,9 +12,6 @@
 *.test
 coverage.out
 
-# Runtime files (stats, logs)
-.ralph.*
-
 # OS files
 .DS_Store
 

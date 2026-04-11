@@ -22,7 +22,13 @@ import (
 	"github.com/cloudosai/ralph-go/internal/tui"
 )
 
-const logFilePath = ".ralph.log"
+func logFilePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".ralph.log"
+	}
+	return filepath.Join(home, ".ralph", "ralph.log")
+}
 
 // isAuthenticationText checks if plain text output contains authentication-related error messages.
 func isAuthenticationText(text string) bool {
@@ -335,9 +341,10 @@ func main() {
 
 	// Open log file (truncated each run); fall back to io.Discard on error
 	var logFile io.Writer
-	logFileHandle, err := os.Create(logFilePath)
+	logPath := logFilePath()
+	logFileHandle, err := os.Create(logPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not open log file %s: %v\n", logFilePath, err)
+		fmt.Fprintf(os.Stderr, "Warning: Could not open log file %s: %v\n", logPath, err)
 		logFile = io.Discard
 	} else {
 		logFile = logFileHandle
