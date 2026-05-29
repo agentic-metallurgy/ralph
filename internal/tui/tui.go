@@ -81,9 +81,26 @@ const (
 type Message struct {
 	Role      MessageRole
 	Content   string
-	ToolUseID string // correlation key for in-place status updates (RoleTool)
-	Kind      string // ACP tool kind: read/edit/execute/search/fetch/think/...
-	Status    string // ACP tool status: in_progress/completed/failed/pending
+	ToolUseID string        // correlation key for in-place status updates (RoleTool)
+	Kind      string        // ACP tool kind: read/edit/execute/search/fetch/think/...
+	Status    string        // ACP tool status: in_progress/completed/failed/pending
+	StartedAt time.Time     // when an in_progress tool row was added (TUI clock)
+	Elapsed   time.Duration // wall-clock duration once the tool completed/failed
+}
+
+// spinnerFrames animates in_progress tool rows, advanced once per tick.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// formatToolDuration renders a compact elapsed time, e.g. "420ms", "1.4s",
+// "2m3s".
+func formatToolDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
 // toolStatusGlyph returns the leading lifecycle glyph for a tool row.
@@ -196,6 +213,8 @@ type Model struct {
 	completed      bool // whether the loop has finished all iterations
 	messages       []Message
 	maxMessages    int
+	spinnerFrame    int // advances each tick to animate in_progress rows
+	inProgressTools int // count of tool rows currently in_progress
 	stats          *stats.TokenStats
 	currentLoop    int
 	totalLoops     int
@@ -320,8 +339,18 @@ func (m Model) getLoopElapsed() time.Duration {
 
 // AddMessage adds a message to the activity feed
 func (m *Model) AddMessage(msg Message) {
+	if msg.Role == RoleTool && msg.Status == "in_progress" {
+		if msg.StartedAt.IsZero() {
+			msg.StartedAt = timeNow()
+		}
+		m.inProgressTools++
+	}
 	m.messages = append(m.messages, msg)
 	if len(m.messages) > m.maxMessages {
+		// Keep the in_progress counter correct if we evict a still-running row.
+		if evicted := m.messages[0]; evicted.Role == RoleTool && evicted.Status == "in_progress" && m.inProgressTools > 0 {
+			m.inProgressTools--
+		}
 		m.messages = m.messages[1:]
 	}
 }
@@ -551,6 +580,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickMsg:
+		// Advance the spinner so in_progress rows and the thinking indicator animate.
+		m.spinnerFrame++
 		// Update viewport content and schedule next tick
 		// Note: we do NOT call GotoBottom() here — that would override the user's
 		// scroll position every 250ms, making the viewport effectively unscrollable.
@@ -591,6 +622,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// in place. No-op if not found (e.g. row evicted by maxMessages cap).
 		for i := len(m.messages) - 1; i >= 0; i-- {
 			if m.messages[i].Role == RoleTool && m.messages[i].ToolUseID == msg.toolUseID {
+				// Only the first resolution of a running row records timing and
+				// drops the in_progress count.
+				if m.messages[i].Status == "in_progress" {
+					if m.inProgressTools > 0 {
+						m.inProgressTools--
+					}
+					if !m.messages[i].StartedAt.IsZero() {
+						m.messages[i].Elapsed = timeNow().Sub(m.messages[i].StartedAt)
+					}
+				}
 				m.messages[i].Status = msg.status
 				break
 			}
@@ -652,6 +693,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// toolElapsed returns the formatted elapsed time for a tool row: a live
+// running time while in_progress, the final duration once resolved, or "" if
+// no start time was recorded.
+func (m Model) toolElapsed(msg Message) string {
+	if msg.StartedAt.IsZero() {
+		return ""
+	}
+	if msg.Status == "in_progress" {
+		return formatToolDuration(timeNow().Sub(msg.StartedAt))
+	}
+	if msg.Elapsed > 0 {
+		return formatToolDuration(msg.Elapsed)
+	}
+	return ""
+}
+
 // renderActivityContent renders the message content for the viewport
 func (m Model) renderActivityContent() string {
 	if len(m.messages) == 0 {
@@ -659,21 +716,37 @@ func (m Model) renderActivityContent() string {
 		return waitStyle.Render("Waiting for activity...")
 	}
 
+	dimStyle := lipgloss.NewStyle().Foreground(colorDimGray)
+
 	var lines []string
 	for _, msg := range m.messages {
 		var line string
 		if msg.Role == RoleTool && msg.Status != "" {
-			// ACP-modeled tool row: status glyph + kind icon + styled title.
-			line = fmt.Sprintf("%s %s %s",
-				toolStatusGlyph(msg.Status),
-				toolKindIcon(msg.Kind),
-				msg.GetStyle().Render(msg.Content))
+			// ACP-modeled tool row: status glyph + kind icon + styled title +
+			// dim elapsed time. in_progress rows show an animated spinner and a
+			// live-updating timer; resolved rows show their final duration.
+			glyph := toolStatusGlyph(msg.Status)
+			if msg.Status == "in_progress" {
+				glyph = spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+			}
+			line = fmt.Sprintf("%s %s %s", glyph, toolKindIcon(msg.Kind), msg.GetStyle().Render(msg.Content))
+			if dur := m.toolElapsed(msg); dur != "" {
+				line += " " + dimStyle.Render("("+dur+")")
+			}
 		} else {
 			// Format: icon + styled content
 			line = fmt.Sprintf("%s %s", msg.GetIcon(), msg.GetStyle().Render(msg.Content))
 		}
 		lines = append(lines, line)
 		lines = append(lines, "") // Add empty line between messages
+	}
+
+	// Thinking/waiting indicator: when the loop is live but nothing is
+	// executing, the model is deciding its next step. Animate dots so the
+	// gap between steps reads as active rather than stalled.
+	if m.inProgressTools == 0 && !m.completed && !m.hibernating && !m.quitting && !m.timerPaused {
+		dots := strings.Repeat(".", 1+(m.spinnerFrame%3))
+		lines = append(lines, dimStyle.Italic(true).Render("💭 thinking"+dots))
 	}
 
 	return strings.Join(lines, "\n")
