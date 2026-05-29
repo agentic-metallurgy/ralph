@@ -9,13 +9,14 @@ import (
 	"strings"
 )
 
-//go:embed assets/prompt.md assets/plan_prompt.md assets/autoresearch_prompt.md assets/autoresearch_template.md
+//go:embed assets/prompt.md assets/plan_prompt.md assets/autoresearch_prompt.md assets/autoresearch_template.md assets/spec_template.md
 var embeddedFS embed.FS
 
 const embeddedPromptPath = "assets/prompt.md"
 const embeddedPlanPromptPath = "assets/plan_prompt.md"
 const embeddedAutoresearchPromptPath = "assets/autoresearch_prompt.md"
 const embeddedAutoresearchTemplatePath = "assets/autoresearch_template.md"
+const embeddedSpecTemplatePath = "assets/spec_template.md"
 
 const defaultPlanFile = "IMPLEMENTATION_PLAN.md"
 
@@ -193,6 +194,17 @@ func GetEmbeddedAutoresearchTemplate() (string, error) {
 	content, err := embeddedFS.ReadFile(embeddedAutoresearchTemplatePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read embedded autoresearch template: %w", err)
+	}
+	return string(content), nil
+}
+
+// GetEmbeddedSpecTemplate returns the embedded spec template content.
+// It is written to specs/spec_template.md for bare `ralph` (build mode) when
+// the spec folder is empty or missing, mirroring the autoresearch template flow.
+func GetEmbeddedSpecTemplate() (string, error) {
+	content, err := embeddedFS.ReadFile(embeddedSpecTemplatePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read embedded spec template: %w", err)
 	}
 	return string(content), nil
 }

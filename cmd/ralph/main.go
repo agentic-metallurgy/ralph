@@ -288,6 +288,28 @@ func main() {
 		}
 	}
 
+	// Handle build mode with the embedded prompt: if the spec folder is empty or
+	// missing, write a spec template for the user to fill in and exit, mirroring
+	// the autoresearch template flow.
+	if cfg.IsBuildMode() && cfg.SpecFile == "" && cfg.LoopPrompt == "" && config.SpecFolderEmptyOrMissing(cfg.SpecFolder) {
+		templateContent, tmplErr := prompt.GetEmbeddedSpecTemplate()
+		if tmplErr != nil {
+			fmt.Fprintf(os.Stderr, "Error loading template: %v\n", tmplErr)
+			os.Exit(1)
+		}
+		if mkErr := os.MkdirAll(cfg.SpecFolder, 0755); mkErr != nil {
+			fmt.Fprintf(os.Stderr, "Error creating spec folder %s: %v\n", cfg.SpecFolder, mkErr)
+			os.Exit(1)
+		}
+		templatePath := filepath.Join(cfg.SpecFolder, "spec_template.md")
+		if writeErr := os.WriteFile(templatePath, []byte(templateContent), 0644); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "Error creating template: %v\n", writeErr)
+			os.Exit(1)
+		}
+		fmt.Printf("Created %s\nDescribe your goal and acceptance criteria, then save your spec into %s and run `ralph` again.\n", templatePath, cfg.SpecFolder)
+		return
+	}
+
 	// Wrap in tmux if not already inside one (skip in CLI mode)
 	if !cfg.CLI && tmux.ShouldWrap(cfg.NoTmux) {
 		if err := tmux.Wrap(cfg.Subcommand); err != nil {

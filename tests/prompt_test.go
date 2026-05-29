@@ -496,6 +496,23 @@ func TestAutoresearchTemplateLoads(t *testing.T) {
 	}
 }
 
+func TestSpecTemplateLoads(t *testing.T) {
+	content, err := prompt.GetEmbeddedSpecTemplate()
+	if err != nil {
+		t.Fatalf("Expected no error loading spec template, got: %v", err)
+	}
+
+	if len(content) == 0 {
+		t.Error("Expected non-empty spec template content")
+	}
+	if !strings.Contains(content, "Ultimate Goal") {
+		t.Error("Expected spec template to contain 'Ultimate Goal'")
+	}
+	if !strings.Contains(content, "Acceptance Criteria") {
+		t.Error("Expected spec template to contain 'Acceptance Criteria'")
+	}
+}
+
 func TestAutoresearchPromptContainsIterationPlaceholders(t *testing.T) {
 	// The raw embedded prompt should contain $loop_iteration and $loop_total
 	// (these get substituted by the loop at runtime, not by the prompt loader)
