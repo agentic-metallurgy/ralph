@@ -88,6 +88,14 @@ type Message struct {
 	Elapsed   time.Duration // wall-clock duration once the tool completed/failed
 }
 
+// PlanItem mirrors parser.PlanItem with plain-string status so the tui package
+// stays free of a parser import (matching how Message.Kind/Status are kept as
+// plain strings). It is one entry of the agent's TodoWrite-authored plan.
+type PlanItem struct {
+	Content string
+	Status  string // "pending" | "in_progress" | "completed"
+}
+
 // spinnerFrames animates in_progress tool rows, advanced once per tick.
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -221,6 +229,7 @@ type Model struct {
 	currentTask    string // Current task (e.g., "#6 Change the lib/gold into lib/silver")
 	completedTasks int    // Number of completed tasks from plan
 	totalTasks     int    // Total number of tasks from plan
+	plan           []PlanItem // Agent's TodoWrite-authored plan (ACP plan panel)
 	currentMode    string // Current mode display ("Planning", "Building", or "")
 	startTime      time.Time
 	baseElapsed    time.Duration // elapsed time from previous sessions
@@ -387,6 +396,11 @@ type toolStatusUpdateMsg struct {
 // modeUpdateMsg is sent to update the current mode display
 type modeUpdateMsg struct {
 	mode string
+}
+
+// planUpdateMsg replaces the agent's plan (a full-list TodoWrite snapshot).
+type planUpdateMsg struct {
+	items []PlanItem
 }
 
 // completedTasksUpdateMsg is sent to update the completed/total task counts
@@ -645,6 +659,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentMode = msg.mode
 		return m, nil
 
+	case planUpdateMsg:
+		// Full-list replace. Derive the footer counters from the plan so the
+		// panel and footer share a single source of truth.
+		m.plan = msg.items
+		completed, current := 0, ""
+		for _, it := range msg.items {
+			switch it.Status {
+			case "completed":
+				completed++
+			case "in_progress":
+				if current == "" {
+					current = it.Content
+				}
+			}
+		}
+		m.completedTasks = completed
+		m.totalTasks = len(msg.items)
+		if current != "" {
+			m.currentTask = current
+		}
+		if m.viewportReady {
+			m.viewport.SetContent(m.renderActivityContent())
+		}
+		return m, nil
+
 	case completedTasksUpdateMsg:
 		m.completedTasks = msg.completed
 		m.totalTasks = msg.total
@@ -709,11 +748,64 @@ func (m Model) toolElapsed(msg Message) string {
 	return ""
 }
 
+// planPanelMaxItems caps how many plan entries are shown before collapsing the
+// remainder into a "…and N more" line, keeping the panel compact.
+const planPanelMaxItems = 8
+
+// renderPlanPanel renders the agent's TodoWrite plan as a compact checklist:
+// ✓ completed (green, dim), spinner/◐ in_progress (purple), ○ pending (dim).
+// Returns "" when there is no plan.
+func (m Model) renderPlanPanel() string {
+	if len(m.plan) == 0 {
+		return ""
+	}
+	dimStyle := lipgloss.NewStyle().Foreground(colorDimGray)
+	doneStyle := lipgloss.NewStyle().Foreground(colorGreen).Strikethrough(true)
+	currentStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPurple)
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(colorPurple)
+
+	completed := 0
+	for _, it := range m.plan {
+		if it.Status == "completed" {
+			completed++
+		}
+	}
+
+	var lines []string
+	lines = append(lines, headerStyle.Render(fmt.Sprintf("📋 Plan (%d/%d)", completed, len(m.plan))))
+	for i, it := range m.plan {
+		if i >= planPanelMaxItems {
+			lines = append(lines, dimStyle.Render(fmt.Sprintf("   …and %d more", len(m.plan)-planPanelMaxItems)))
+			break
+		}
+		var glyph, text string
+		switch it.Status {
+		case "completed":
+			glyph = "✓"
+			text = doneStyle.Render(it.Content)
+		case "in_progress":
+			glyph = spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+			text = currentStyle.Render(it.Content)
+		default:
+			glyph = "○"
+			text = dimStyle.Render(it.Content)
+		}
+		lines = append(lines, fmt.Sprintf("  %s %s", glyph, text))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // renderActivityContent renders the message content for the viewport
 func (m Model) renderActivityContent() string {
+	planPanel := m.renderPlanPanel()
+
 	if len(m.messages) == 0 {
 		waitStyle := lipgloss.NewStyle().Foreground(colorDimGray)
-		return waitStyle.Render("Waiting for activity...")
+		waiting := waitStyle.Render("Waiting for activity...")
+		if planPanel != "" {
+			return planPanel + "\n\n" + waiting
+		}
+		return waiting
 	}
 
 	dimStyle := lipgloss.NewStyle().Foreground(colorDimGray)
@@ -749,7 +841,11 @@ func (m Model) renderActivityContent() string {
 		lines = append(lines, dimStyle.Italic(true).Render("💭 thinking"+dots))
 	}
 
-	return strings.Join(lines, "\n")
+	content := strings.Join(lines, "\n")
+	if planPanel != "" {
+		return planPanel + "\n\n" + content
+	}
+	return content
 }
 
 // View renders the UI
@@ -1049,6 +1145,14 @@ func SendTaskUpdate(task string) tea.Cmd {
 func SendToolStatusUpdate(toolUseID, status string) tea.Cmd {
 	return func() tea.Msg {
 		return toolStatusUpdateMsg{toolUseID: toolUseID, status: status}
+	}
+}
+
+// SendPlanUpdate is a helper command to replace the agent's plan (the panel +
+// footer counters are derived from it).
+func SendPlanUpdate(items []PlanItem) tea.Cmd {
+	return func() tea.Msg {
+		return planUpdateMsg{items: items}
 	}
 }
 

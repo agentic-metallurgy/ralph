@@ -632,6 +632,16 @@ func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea
 	}
 }
 
+// toTUIPlan converts parser PlanItems into the tui package's local PlanItem
+// type (the tui package intentionally has no parser import).
+func toTUIPlan(items []parser.PlanItem) []tui.PlanItem {
+	out := make([]tui.PlanItem, 0, len(items))
+	for _, it := range items {
+		out = append(out, tui.PlanItem{Content: it.Content, Status: string(it.Status)})
+	}
+	return out
+}
+
 // handleParsedMessage processes a parsed JSON message from Claude for TUI mode.
 // Shared by standard mode and plan-and-build mode.
 func handleParsedMessage(
@@ -788,6 +798,13 @@ func handleParsedMessage(
 	case parser.MessageTypeAssistant:
 		content := jsonParser.ExtractContent(parsed)
 
+		// Agent plan (TodoWrite): drive the plan panel + footer counters. The
+		// generic TodoWrite tool row is suppressed below so the plan panel is
+		// the single representation.
+		if len(content.Plan) > 0 {
+			program.Send(tui.SendPlanUpdate(toTUIPlan(content.Plan))())
+		}
+
 		// Display thinking blocks
 		if content.Thinking != "" {
 			msgChan <- tui.Message{
@@ -821,6 +838,12 @@ func handleParsedMessage(
 		// completed/failed when its tool_result arrives (see MessageTypeUser).
 		*iterToolUseCount += len(content.ToolUses)
 		for _, toolUse := range content.ToolUses {
+			// TodoWrite is represented by the plan panel, not a redundant
+			// lifecycle row. It still counts toward iterToolUseCount above so
+			// noop-exit detection is unchanged.
+			if toolUse.Name == "TodoWrite" {
+				continue
+			}
 			toolMsg := toolUse.Title
 			if toolMsg == "" {
 				toolMsg = "Using tool: " + toolUse.Name
@@ -1004,9 +1027,22 @@ func handleParsedMessageCLI(
 				fmt.Fprintf(logFile, "[assistant] %s\n\n", text)
 			}
 		}
+		if len(content.Plan) > 0 {
+			completed := 0
+			for _, it := range content.Plan {
+				if it.Status == parser.PlanCompleted {
+					completed++
+				}
+			}
+			fmt.Printf("[plan] %d/%d done\n", completed, len(content.Plan))
+		}
 		for _, item := range parsed.Message.Content {
 			if item.Type == parser.ContentTypeToolUse {
 				*iterToolUseCount++
+				// TodoWrite is surfaced via the [plan] line above, not a tool row.
+				if item.Name == "TodoWrite" {
+					continue
+				}
 				kind := parser.ClassifyToolKind(item.Name)
 				filePath := parser.ExtractFilePathFromInput(item.Input)
 				if filePath != "" {

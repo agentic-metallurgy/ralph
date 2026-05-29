@@ -152,6 +152,113 @@ func TestExtractContentToolResultStatus(t *testing.T) {
 	})
 }
 
+// TestExtractPlan verifies TodoWrite inputs become ordered PlanItems.
+func TestExtractPlan(t *testing.T) {
+	input := map[string]interface{}{
+		"todos": []interface{}{
+			map[string]interface{}{"content": "Add ClassifyToolKind", "status": "completed", "activeForm": "Adding ClassifyToolKind"},
+			map[string]interface{}{"content": "Wire dispatch", "status": "in_progress", "activeForm": "Wiring dispatch"},
+			map[string]interface{}{"content": "Write tests", "status": "pending", "activeForm": "Writing tests"},
+		},
+	}
+	plan := parser.ExtractPlan(input)
+	if len(plan) != 3 {
+		t.Fatalf("Expected 3 plan items, got %d", len(plan))
+	}
+	want := []parser.PlanItem{
+		{Content: "Add ClassifyToolKind", Status: parser.PlanCompleted},
+		{Content: "Wire dispatch", Status: parser.PlanInProgress},
+		{Content: "Write tests", Status: parser.PlanPending},
+	}
+	for i, w := range want {
+		if plan[i] != w {
+			t.Errorf("plan[%d] = %+v, want %+v", i, plan[i], w)
+		}
+	}
+}
+
+// TestExtractPlanDefensive checks fallbacks, unknown status, empty-skip, non-todo.
+func TestExtractPlanDefensive(t *testing.T) {
+	t.Run("activeForm fallback when content absent", func(t *testing.T) {
+		input := map[string]interface{}{
+			"todos": []interface{}{
+				map[string]interface{}{"activeForm": "Doing the thing", "status": "in_progress"},
+			},
+		}
+		plan := parser.ExtractPlan(input)
+		if len(plan) != 1 || plan[0].Content != "Doing the thing" {
+			t.Fatalf("expected activeForm fallback, got %+v", plan)
+		}
+	})
+
+	t.Run("unknown status normalizes to pending", func(t *testing.T) {
+		input := map[string]interface{}{
+			"todos": []interface{}{
+				map[string]interface{}{"content": "Mystery", "status": "weird"},
+				map[string]interface{}{"content": "NoStatus"},
+			},
+		}
+		plan := parser.ExtractPlan(input)
+		if len(plan) != 2 {
+			t.Fatalf("expected 2 items, got %d", len(plan))
+		}
+		if plan[0].Status != parser.PlanPending || plan[1].Status != parser.PlanPending {
+			t.Errorf("expected pending normalization, got %+v", plan)
+		}
+	})
+
+	t.Run("empty-content items skipped", func(t *testing.T) {
+		input := map[string]interface{}{
+			"todos": []interface{}{
+				map[string]interface{}{"content": "", "status": "completed"},
+				map[string]interface{}{"status": "pending"},
+				map[string]interface{}{"content": "Kept", "status": "pending"},
+			},
+		}
+		plan := parser.ExtractPlan(input)
+		if len(plan) != 1 || plan[0].Content != "Kept" {
+			t.Fatalf("expected only non-empty item kept, got %+v", plan)
+		}
+	})
+
+	t.Run("non-todo input returns nil", func(t *testing.T) {
+		if plan := parser.ExtractPlan(map[string]interface{}{"file_path": "x.go"}); plan != nil {
+			t.Errorf("expected nil for non-todo input, got %+v", plan)
+		}
+		if plan := parser.ExtractPlan(nil); plan != nil {
+			t.Errorf("expected nil for nil input, got %+v", plan)
+		}
+	})
+}
+
+// TestExtractContentPopulatesPlan verifies a TodoWrite tool_use surfaces a Plan
+// on ParsedContent, and that the tool use is still counted (noop semantics).
+func TestExtractContentPopulatesPlan(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_t","name":"TodoWrite","input":{"todos":[{"content":"A","status":"completed"},{"content":"B","status":"in_progress"}]}}]}}`
+	content := p.ExtractContent(p.ParseLine(line))
+	if len(content.Plan) != 2 {
+		t.Fatalf("expected 2 plan items, got %d", len(content.Plan))
+	}
+	if content.Plan[0].Status != parser.PlanCompleted || content.Plan[1].Status != parser.PlanInProgress {
+		t.Errorf("unexpected plan statuses: %+v", content.Plan)
+	}
+	// The TodoWrite tool use is still present so iterToolUseCount is unaffected.
+	if len(content.ToolUses) != 1 {
+		t.Errorf("expected TodoWrite to still appear as a tool use, got %d", len(content.ToolUses))
+	}
+}
+
+// TestExtractContentNoPlanForNonTodo verifies non-TodoWrite tools leave Plan nil.
+func TestExtractContentNoPlanForNonTodo(t *testing.T) {
+	p := parser.NewParser()
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_r","name":"Read","input":{"file_path":"/a/b.go"}}]}}`
+	content := p.ExtractContent(p.ParseLine(line))
+	if content.Plan != nil {
+		t.Errorf("expected nil Plan for non-TodoWrite tool, got %+v", content.Plan)
+	}
+}
+
 // TestToolTitleTruncation ensures long commands/patterns are truncated.
 func TestToolTitleTruncation(t *testing.T) {
 	p := parser.NewParser()

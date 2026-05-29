@@ -149,3 +149,72 @@ func TestToolStatusUpdateUnknownIDNoCrash(t *testing.T) {
 		t.Errorf("expected t1 to remain in_progress after no-op update; got:\n%s", view)
 	}
 }
+
+// TestPlanUpdateDrivesFooterCounters verifies a plan update sets the footer
+// completed/total counters and the current task to the in_progress item.
+func TestPlanUpdateDrivesFooterCounters(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	plan := []tui.PlanItem{
+		{Content: "Add ClassifyToolKind", Status: "completed"},
+		{Content: "Wire dispatch", Status: "in_progress"},
+		{Content: "Write tests", Status: "pending"},
+	}
+	model, _ = updateModel(model, tui.SendPlanUpdate(plan)())
+
+	view := model.View()
+	if !strings.Contains(view, "1/3") {
+		t.Errorf("expected footer to show 1/3 completed tasks; got:\n%s", view)
+	}
+	if !strings.Contains(view, "Wire dispatch") {
+		t.Errorf("expected current task to be the in_progress item; got:\n%s", view)
+	}
+}
+
+// TestPlanPanelRendersGlyphs verifies the plan panel renders a line per item
+// with the right glyph per status.
+func TestPlanPanelRendersGlyphs(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	plan := []tui.PlanItem{
+		{Content: "Done item", Status: "completed"},
+		{Content: "Current item", Status: "in_progress"},
+		{Content: "Pending item", Status: "pending"},
+	}
+	model, _ = updateModel(model, tui.SendPlanUpdate(plan)())
+
+	view := model.View()
+	for _, want := range []string{"📋 Plan", "Done item", "Current item", "Pending item", "✓", "⠋", "○"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("expected plan panel to contain %q; got:\n%s", want, view)
+		}
+	}
+}
+
+// TestPlanUpdateReplacesNotAppends verifies a second plan update replaces the
+// previous list rather than appending to it.
+func TestPlanUpdateReplacesNotAppends(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	model, _ = updateModel(model, tui.SendPlanUpdate([]tui.PlanItem{
+		{Content: "First only", Status: "in_progress"},
+	})())
+	model, _ = updateModel(model, tui.SendPlanUpdate([]tui.PlanItem{
+		{Content: "Second A", Status: "completed"},
+		{Content: "Second B", Status: "in_progress"},
+	})())
+
+	view := model.View()
+	if strings.Contains(view, "First only") {
+		t.Errorf("expected first plan to be replaced; got:\n%s", view)
+	}
+	if !strings.Contains(view, "Second A") || !strings.Contains(view, "Second B") {
+		t.Errorf("expected second plan items present; got:\n%s", view)
+	}
+	if !strings.Contains(view, "1/2") {
+		t.Errorf("expected footer 1/2 after replace; got:\n%s", view)
+	}
+}

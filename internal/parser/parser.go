@@ -54,6 +54,24 @@ const (
 	ToolKindOther   ToolKind = "other"
 )
 
+// PlanItemStatus is the status of a single plan entry, mirroring the ACP
+// `plan` session-update entry status. It maps directly to the TodoWrite tool's
+// per-item status field.
+type PlanItemStatus string
+
+const (
+	PlanPending    PlanItemStatus = "pending"
+	PlanInProgress PlanItemStatus = "in_progress"
+	PlanCompleted  PlanItemStatus = "completed"
+)
+
+// PlanItem is one entry in the agent's todo/plan list, synthesized from a
+// TodoWrite tool-use input.
+type PlanItem struct {
+	Content string
+	Status  PlanItemStatus
+}
+
 // ToolStatus is the lifecycle status of a tool call, mirroring the ACP
 // tool-call `status` enum. A tool_use starts in_progress and transitions to
 // completed/failed when its corresponding tool_result arrives.
@@ -80,7 +98,7 @@ func ClassifyToolKind(name string) ToolKind {
 		return ToolKindSearch
 	case "WebFetch", "WebSearch":
 		return ToolKindFetch
-	case "Task":
+	case "Task", "TodoWrite":
 		return ToolKindThink
 	default:
 		return ToolKindOther
@@ -198,6 +216,7 @@ type ParsedContent struct {
 	ToolUses    []ToolUse    // Tool uses
 	ToolResults []ToolResult // Tool results
 	Thinking    string       // Extracted <thinking> content
+	Plan        []PlanItem   // Agent plan, synthesized from a TodoWrite tool_use
 }
 
 // ToolUse represents a tool use from the assistant.
@@ -379,6 +398,12 @@ func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
 				Title:     buildToolTitle(item.Name, kind, item.Input),
 				Location:  location,
 			})
+			// A TodoWrite call carries the agent's full plan; synthesize the
+			// ACP-style plan entries from its input. Last call in a turn wins
+			// (full-list replace), which the caller relies on.
+			if item.Name == "TodoWrite" {
+				content.Plan = ExtractPlan(item.Input)
+			}
 
 		case ContentTypeToolResult:
 			resultText := ""
@@ -590,6 +615,50 @@ func ExtractFilePathFromInput(input map[string]interface{}) string {
 		return desc
 	}
 	return ""
+}
+
+// ExtractPlan reads a TodoWrite tool input and returns its entries as ordered
+// PlanItems. It pulls each item's text from `content` (falling back to
+// `activeForm`, `task`, then `title`) and normalizes an unknown/empty status to
+// pending. Items with no text are skipped. Returns nil if the input has no
+// `todos` array (i.e. not a TodoWrite input).
+func ExtractPlan(input map[string]interface{}) []PlanItem {
+	if input == nil {
+		return nil
+	}
+	raw, ok := input["todos"].([]interface{})
+	if !ok {
+		return nil
+	}
+	var items []PlanItem
+	for _, entry := range raw {
+		m, ok := entry.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		text := firstString(m, "content", "activeForm", "task", "title")
+		if text == "" {
+			continue
+		}
+		items = append(items, PlanItem{
+			Content: text,
+			Status:  normalizePlanStatus(firstString(m, "status")),
+		})
+	}
+	return items
+}
+
+// normalizePlanStatus maps a raw status string to a known PlanItemStatus,
+// defaulting unknown/empty values to pending.
+func normalizePlanStatus(s string) PlanItemStatus {
+	switch PlanItemStatus(s) {
+	case PlanInProgress:
+		return PlanInProgress
+	case PlanCompleted:
+		return PlanCompleted
+	default:
+		return PlanPending
+	}
 }
 
 // ExtractTaskReference scans text for references to IMPLEMENTATION_PLAN.md tasks
