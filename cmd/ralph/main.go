@@ -816,24 +816,40 @@ func handleParsedMessage(
 			}
 		}
 
-		// Display tool uses with file path info and count for noop detection
+		// Display tool uses as ACP-modeled lifecycle rows and count for noop
+		// detection. Each row starts in_progress and is flipped to
+		// completed/failed when its tool_result arrives (see MessageTypeUser).
 		*iterToolUseCount += len(content.ToolUses)
 		for _, toolUse := range content.ToolUses {
-			toolMsg := fmt.Sprintf("Using tool: %s", toolUse.Name)
-			if toolUse.FilePath != "" {
-				toolMsg = fmt.Sprintf("Using tool: %s — %s", toolUse.Name, toolUse.FilePath)
+			toolMsg := toolUse.Title
+			if toolMsg == "" {
+				toolMsg = "Using tool: " + toolUse.Name
+			}
+			if toolUse.Location != "" && !strings.Contains(toolMsg, toolUse.Location) {
+				toolMsg = fmt.Sprintf("%s — %s", toolMsg, toolUse.Location)
 			}
 			msgChan <- tui.Message{
-				Role:    tui.RoleTool,
-				Content: toolMsg,
+				Role:      tui.RoleTool,
+				Content:   toolMsg,
+				ToolUseID: toolUse.ID,
+				Kind:      string(toolUse.Kind),
+				Status:    string(parser.ToolStatusInProgress),
 			}
 		}
 
 	case parser.MessageTypeUser:
 		// Skip tool result content in TUI mode (file dumps are too verbose).
-		// Still scan for task references in the results.
+		// Flip the matching tool row to completed/failed, and still scan for
+		// task references in the results.
 		content := jsonParser.ExtractContent(parsed)
 		for _, toolResult := range content.ToolResults {
+			if toolResult.ToolUseID != "" {
+				status := parser.ToolStatusCompleted
+				if toolResult.IsError {
+					status = parser.ToolStatusFailed
+				}
+				program.Send(tui.SendToolStatusUpdate(toolResult.ToolUseID, string(status))())
+			}
 			if toolResult.Content != "" {
 				if ref := jsonParser.ExtractTaskReference(toolResult.Content); ref != nil {
 					taskLabel := fmt.Sprintf("#%d", ref.Number)
@@ -991,12 +1007,22 @@ func handleParsedMessageCLI(
 		for _, item := range parsed.Message.Content {
 			if item.Type == parser.ContentTypeToolUse {
 				*iterToolUseCount++
+				kind := parser.ClassifyToolKind(item.Name)
 				filePath := parser.ExtractFilePathFromInput(item.Input)
 				if filePath != "" {
-					fmt.Printf("[tool] %s: %s\n", item.Name, filePath)
+					fmt.Printf("[tool] (%s) %s: %s\n", kind, item.Name, filePath)
 				} else {
-					fmt.Printf("[tool] %s\n", item.Name)
+					fmt.Printf("[tool] (%s) %s\n", kind, item.Name)
 				}
+			}
+		}
+	}
+	// Report tool completion/failure in CLI mode.
+	if parsed.Type == parser.MessageTypeUser {
+		content := jsonParser.ExtractContent(parsed)
+		for _, toolResult := range content.ToolResults {
+			if toolResult.IsError {
+				fmt.Printf("[tool] failed\n")
 			}
 		}
 	}

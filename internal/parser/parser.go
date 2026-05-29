@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -36,6 +37,106 @@ const (
 	ContentTypeThinking   ContentType = "thinking"
 )
 
+// ToolKind is a semantic category for a tool call, mirroring the Agent Client
+// Protocol (ACP) tool-call `kind` taxonomy. It drives icon/visual selection in
+// the TUI independent of the concrete Claude tool name.
+type ToolKind string
+
+const (
+	ToolKindRead    ToolKind = "read"
+	ToolKindEdit    ToolKind = "edit"
+	ToolKindDelete  ToolKind = "delete"
+	ToolKindMove    ToolKind = "move"
+	ToolKindSearch  ToolKind = "search"
+	ToolKindExecute ToolKind = "execute"
+	ToolKindThink   ToolKind = "think"
+	ToolKindFetch   ToolKind = "fetch"
+	ToolKindOther   ToolKind = "other"
+)
+
+// ToolStatus is the lifecycle status of a tool call, mirroring the ACP
+// tool-call `status` enum. A tool_use starts in_progress and transitions to
+// completed/failed when its corresponding tool_result arrives.
+type ToolStatus string
+
+const (
+	ToolStatusPending    ToolStatus = "pending"
+	ToolStatusInProgress ToolStatus = "in_progress"
+	ToolStatusCompleted  ToolStatus = "completed"
+	ToolStatusFailed     ToolStatus = "failed"
+)
+
+// ClassifyToolKind maps a Claude tool name to an ACP-style ToolKind.
+// Unknown tools (including MCP tools) fall back to ToolKindOther.
+func ClassifyToolKind(name string) ToolKind {
+	switch name {
+	case "Read", "NotebookRead":
+		return ToolKindRead
+	case "Edit", "MultiEdit", "Write", "NotebookEdit":
+		return ToolKindEdit
+	case "Bash", "BashOutput", "KillBash", "KillShell":
+		return ToolKindExecute
+	case "Glob", "Grep":
+		return ToolKindSearch
+	case "WebFetch", "WebSearch":
+		return ToolKindFetch
+	case "Task":
+		return ToolKindThink
+	default:
+		return ToolKindOther
+	}
+}
+
+// buildToolTitle produces a short, human-readable label for a tool call,
+// e.g. "Read config.go", "Bash: go build ./...", or a Task description.
+func buildToolTitle(name string, kind ToolKind, input map[string]interface{}) string {
+	// Prefer an explicit description for execute/think tools when present.
+	if kind == ToolKindExecute || kind == ToolKindThink {
+		if desc, ok := input["description"].(string); ok && desc != "" {
+			return desc
+		}
+	}
+	switch kind {
+	case ToolKindRead, ToolKindEdit, ToolKindDelete, ToolKindMove:
+		if path := firstString(input, "file_path", "path"); path != "" {
+			return name + " " + filepath.Base(path)
+		}
+	case ToolKindSearch:
+		if pattern, ok := input["pattern"].(string); ok && pattern != "" {
+			return name + " " + truncate(pattern, 50)
+		}
+	case ToolKindExecute:
+		if cmd, ok := input["command"].(string); ok && cmd != "" {
+			return name + ": " + truncate(cmd, 50)
+		}
+	case ToolKindFetch:
+		if url := firstString(input, "url", "query"); url != "" {
+			return name + " " + truncate(url, 50)
+		}
+	}
+	return name
+}
+
+// firstString returns the first non-empty string value among the given keys.
+func firstString(input map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := input[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// truncate shortens s to at most n runes, appending an ellipsis if cut.
+// It counts runes (not bytes) so multibyte UTF-8 is never split mid-rune.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "..."
+}
+
 // Usage represents token usage information from Claude
 type Usage struct {
 	InputTokens              int64 `json:"input_tokens"`
@@ -61,6 +162,7 @@ type ContentItem struct {
 	ToolUseID      string                 `json:"tool_use_id,omitempty"` // Tool use ID for tool_result
 	Content        interface{}            `json:"content,omitempty"`     // Tool result content
 	ThinkingText   string                 `json:"thinking,omitempty"`    // Thinking content for thinking items
+	IsError        bool                   `json:"is_error,omitempty"`    // True for failed tool_result
 }
 
 // InnerMessage represents the message field within an assistant/user message
@@ -98,16 +200,27 @@ type ParsedContent struct {
 	Thinking    string       // Extracted <thinking> content
 }
 
-// ToolUse represents a tool use from the assistant
+// ToolUse represents a tool use from the assistant.
+// The ACP-modeled fields (ID, Kind, Title, Location) describe the tool call
+// the way the Agent Client Protocol's ToolCall schema does, so the TUI can
+// render a lifecycle-aware row.
 type ToolUse struct {
 	Name      string
-	InputJSON string // Truncated JSON preview
-	FilePath  string // Extracted file path from input (if available)
+	InputJSON string   // Truncated JSON preview
+	FilePath  string   // Extracted file path from input (if available); alias of Location
+	ID        string   // Tool use ID — correlates with the matching ToolResult.ToolUseID
+	Kind      ToolKind // ACP-style semantic kind (read/edit/execute/search/...)
+	Title     string   // Short human-readable label, e.g. "Read config.go"
+	Location  string   // File path / pattern / command the call targets
 }
 
-// ToolResult represents a tool result from the user
+// ToolResult represents a tool result from the user.
+// ToolUseID/IsError let the TUI flip the matching ToolUse row to
+// completed or failed.
 type ToolResult struct {
-	Content string // Truncated content
+	Content   string // Truncated content
+	ToolUseID string // ID of the tool_use this result responds to
+	IsError   bool   // True if the tool call failed
 }
 
 // TaskReference represents a detected IMPLEMENTATION_PLAN.md task reference
@@ -255,10 +368,16 @@ func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
 			if len(inputJSON) > 150 {
 				inputJSON = inputJSON[:150]
 			}
+			location := ExtractFilePathFromInput(item.Input)
+			kind := ClassifyToolKind(item.Name)
 			content.ToolUses = append(content.ToolUses, ToolUse{
 				Name:      item.Name,
 				InputJSON: inputJSON,
-				FilePath:  ExtractFilePathFromInput(item.Input),
+				FilePath:  location,
+				ID:        item.ID,
+				Kind:      kind,
+				Title:     buildToolTitle(item.Name, kind, item.Input),
+				Location:  location,
 			})
 
 		case ContentTypeToolResult:
@@ -272,9 +391,14 @@ func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
 				}
 			}
 			resultText = p.StripSystemReminders(resultText)
-			if resultText != "" {
+			// Always record a result that carries a tool_use_id so the TUI can
+			// update the matching tool row's status, even when the (stripped)
+			// content is empty.
+			if resultText != "" || item.ToolUseID != "" {
 				content.ToolResults = append(content.ToolResults, ToolResult{
-					Content: resultText,
+					Content:   resultText,
+					ToolUseID: item.ToolUseID,
+					IsError:   item.IsError,
 				})
 			}
 		}

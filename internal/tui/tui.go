@@ -74,10 +74,56 @@ const (
 	RoleThinking    MessageRole = "thinking"
 )
 
-// Message represents a single activity message in the feed
+// Message represents a single activity message in the feed.
+// For RoleTool messages the ACP-modeled fields (ToolUseID, Kind, Status) let
+// the row render a kind icon + lifecycle status glyph and be mutated in place
+// when the tool finishes.
 type Message struct {
-	Role    MessageRole
-	Content string
+	Role      MessageRole
+	Content   string
+	ToolUseID string // correlation key for in-place status updates (RoleTool)
+	Kind      string // ACP tool kind: read/edit/execute/search/fetch/think/...
+	Status    string // ACP tool status: in_progress/completed/failed/pending
+}
+
+// toolStatusGlyph returns the leading lifecycle glyph for a tool row.
+func toolStatusGlyph(status string) string {
+	switch status {
+	case "in_progress":
+		return "◐"
+	case "completed":
+		return "✓"
+	case "failed":
+		return "✗"
+	case "pending":
+		return "○"
+	default:
+		return " "
+	}
+}
+
+// toolKindIcon returns the icon for an ACP tool kind.
+func toolKindIcon(kind string) string {
+	switch kind {
+	case "read":
+		return "📖"
+	case "edit":
+		return "✏️"
+	case "delete":
+		return "🗑️"
+	case "move":
+		return "🔀"
+	case "search":
+		return "🔎"
+	case "execute":
+		return "⚡"
+	case "fetch":
+		return "🌐"
+	case "think":
+		return "💭"
+	default:
+		return "🔧"
+	}
 }
 
 // GetIcon returns the emoji icon for this message's role
@@ -113,7 +159,16 @@ func (m Message) GetStyle() lipgloss.Style {
 	case RoleAssistant:
 		return lipgloss.NewStyle().Bold(true).Foreground(colorBlue)
 	case RoleTool:
-		return lipgloss.NewStyle().Bold(true).Foreground(colorPurple)
+		// Color the tool row by lifecycle status: failed→red, completed→green,
+		// running/other→purple.
+		switch m.Status {
+		case "failed":
+			return lipgloss.NewStyle().Bold(true).Foreground(colorRed)
+		case "completed":
+			return lipgloss.NewStyle().Bold(true).Foreground(colorGreen)
+		default:
+			return lipgloss.NewStyle().Bold(true).Foreground(colorPurple)
+		}
 	case RoleUser:
 		return lipgloss.NewStyle().Foreground(colorDimGray)
 	case RoleSystem:
@@ -291,6 +346,13 @@ type statsUpdateMsg struct {
 // taskUpdateMsg is sent to update the current IMPLEMENTATION_PLAN.md task
 type taskUpdateMsg struct {
 	task string
+}
+
+// toolStatusUpdateMsg is sent to flip an existing tool row's lifecycle status
+// (e.g. in_progress → completed/failed) by matching its tool_use ID.
+type toolStatusUpdateMsg struct {
+	toolUseID string
+	status    string
 }
 
 // modeUpdateMsg is sent to update the current mode display
@@ -524,6 +586,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentTask = msg.task
 		return m, nil
 
+	case toolStatusUpdateMsg:
+		// Find the most recent tool row with this ID and update its status
+		// in place. No-op if not found (e.g. row evicted by maxMessages cap).
+		for i := len(m.messages) - 1; i >= 0; i-- {
+			if m.messages[i].Role == RoleTool && m.messages[i].ToolUseID == msg.toolUseID {
+				m.messages[i].Status = msg.status
+				break
+			}
+		}
+		if m.viewportReady {
+			m.viewport.SetContent(m.renderActivityContent())
+		}
+		return m, nil
+
 	case modeUpdateMsg:
 		m.currentMode = msg.mode
 		return m, nil
@@ -585,11 +661,17 @@ func (m Model) renderActivityContent() string {
 
 	var lines []string
 	for _, msg := range m.messages {
-		icon := msg.GetIcon()
-		style := msg.GetStyle()
-
-		// Format: icon + styled content
-		line := fmt.Sprintf("%s %s", icon, style.Render(msg.Content))
+		var line string
+		if msg.Role == RoleTool && msg.Status != "" {
+			// ACP-modeled tool row: status glyph + kind icon + styled title.
+			line = fmt.Sprintf("%s %s %s",
+				toolStatusGlyph(msg.Status),
+				toolKindIcon(msg.Kind),
+				msg.GetStyle().Render(msg.Content))
+		} else {
+			// Format: icon + styled content
+			line = fmt.Sprintf("%s %s", msg.GetIcon(), msg.GetStyle().Render(msg.Content))
+		}
 		lines = append(lines, line)
 		lines = append(lines, "") // Add empty line between messages
 	}
@@ -886,6 +968,14 @@ func SendStatsUpdate(s *stats.TokenStats) tea.Cmd {
 func SendTaskUpdate(task string) tea.Cmd {
 	return func() tea.Msg {
 		return taskUpdateMsg{task: task}
+	}
+}
+
+// SendToolStatusUpdate is a helper command to update a tool row's lifecycle
+// status (completed/failed) by its tool_use ID.
+func SendToolStatusUpdate(toolUseID, status string) tea.Cmd {
+	return func() tea.Msg {
+		return toolStatusUpdateMsg{toolUseID: toolUseID, status: status}
 	}
 }
 
