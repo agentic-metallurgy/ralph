@@ -156,6 +156,33 @@ func (c *Config) IsAutoresearchMode() bool {
 	return c.Subcommand == "autoresearch"
 }
 
+// IsBuildMode returns true for bare `ralph` or the explicit "build" subcommand.
+func (c *Config) IsBuildMode() bool {
+	return c.Subcommand == "" || c.Subcommand == "build"
+}
+
+// SpecFolderEmptyOrMissing reports whether the spec folder does not exist or
+// exists but contains no entries. A path that exists but is not a directory
+// returns false so that validation can surface the more specific error.
+func SpecFolderEmptyOrMissing(path string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(absPath)
+	if os.IsNotExist(err) {
+		return true
+	}
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		return false
+	}
+	return len(entries) == 0
+}
+
 // Validate checks if the configuration is valid.
 // It validates:
 // - Iterations must be greater than 0

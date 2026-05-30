@@ -288,6 +288,28 @@ func main() {
 		}
 	}
 
+	// Handle build mode with the embedded prompt: if the spec folder is empty or
+	// missing, write a spec template for the user to fill in and exit, mirroring
+	// the autoresearch template flow.
+	if cfg.IsBuildMode() && cfg.SpecFile == "" && cfg.LoopPrompt == "" && config.SpecFolderEmptyOrMissing(cfg.SpecFolder) {
+		templateContent, tmplErr := prompt.GetEmbeddedSpecTemplate()
+		if tmplErr != nil {
+			fmt.Fprintf(os.Stderr, "Error loading template: %v\n", tmplErr)
+			os.Exit(1)
+		}
+		if mkErr := os.MkdirAll(cfg.SpecFolder, 0755); mkErr != nil {
+			fmt.Fprintf(os.Stderr, "Error creating spec folder %s: %v\n", cfg.SpecFolder, mkErr)
+			os.Exit(1)
+		}
+		templatePath := filepath.Join(cfg.SpecFolder, "spec_template.md")
+		if writeErr := os.WriteFile(templatePath, []byte(templateContent), 0644); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "Error creating template: %v\n", writeErr)
+			os.Exit(1)
+		}
+		fmt.Printf("Created %s\nDescribe your goal and acceptance criteria, then save your spec into %s and run `ralph` again.\n", templatePath, cfg.SpecFolder)
+		return
+	}
+
 	// Wrap in tmux if not already inside one (skip in CLI mode)
 	if !cfg.CLI && tmux.ShouldWrap(cfg.NoTmux) {
 		if err := tmux.Wrap(cfg.Subcommand); err != nil {
@@ -632,6 +654,16 @@ func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea
 	}
 }
 
+// toTUIPlan converts parser PlanItems into the tui package's local PlanItem
+// type (the tui package intentionally has no parser import).
+func toTUIPlan(items []parser.PlanItem) []tui.PlanItem {
+	out := make([]tui.PlanItem, 0, len(items))
+	for _, it := range items {
+		out = append(out, tui.PlanItem{Content: it.Content, Status: string(it.Status)})
+	}
+	return out
+}
+
 // handleParsedMessage processes a parsed JSON message from Claude for TUI mode.
 // Shared by standard mode and plan-and-build mode.
 func handleParsedMessage(
@@ -788,6 +820,13 @@ func handleParsedMessage(
 	case parser.MessageTypeAssistant:
 		content := jsonParser.ExtractContent(parsed)
 
+		// Agent plan (TodoWrite): drive the plan panel + footer counters. The
+		// generic TodoWrite tool row is suppressed below so the plan panel is
+		// the single representation.
+		if len(content.Plan) > 0 {
+			program.Send(tui.SendPlanUpdate(toTUIPlan(content.Plan))())
+		}
+
 		// Display thinking blocks
 		if content.Thinking != "" {
 			msgChan <- tui.Message{
@@ -816,24 +855,46 @@ func handleParsedMessage(
 			}
 		}
 
-		// Display tool uses with file path info and count for noop detection
+		// Display tool uses as ACP-modeled lifecycle rows and count for noop
+		// detection. Each row starts in_progress and is flipped to
+		// completed/failed when its tool_result arrives (see MessageTypeUser).
 		*iterToolUseCount += len(content.ToolUses)
 		for _, toolUse := range content.ToolUses {
-			toolMsg := fmt.Sprintf("Using tool: %s", toolUse.Name)
-			if toolUse.FilePath != "" {
-				toolMsg = fmt.Sprintf("Using tool: %s — %s", toolUse.Name, toolUse.FilePath)
+			// TodoWrite is represented by the plan panel, not a redundant
+			// lifecycle row. It still counts toward iterToolUseCount above so
+			// noop-exit detection is unchanged.
+			if toolUse.Name == "TodoWrite" {
+				continue
+			}
+			toolMsg := toolUse.Title
+			if toolMsg == "" {
+				toolMsg = "Using tool: " + toolUse.Name
+			}
+			if toolUse.Location != "" && !strings.Contains(toolMsg, toolUse.Location) {
+				toolMsg = fmt.Sprintf("%s — %s", toolMsg, toolUse.Location)
 			}
 			msgChan <- tui.Message{
-				Role:    tui.RoleTool,
-				Content: toolMsg,
+				Role:      tui.RoleTool,
+				Content:   toolMsg,
+				ToolUseID: toolUse.ID,
+				Kind:      string(toolUse.Kind),
+				Status:    string(parser.ToolStatusInProgress),
 			}
 		}
 
 	case parser.MessageTypeUser:
 		// Skip tool result content in TUI mode (file dumps are too verbose).
-		// Still scan for task references in the results.
+		// Flip the matching tool row to completed/failed, and still scan for
+		// task references in the results.
 		content := jsonParser.ExtractContent(parsed)
 		for _, toolResult := range content.ToolResults {
+			if toolResult.ToolUseID != "" {
+				status := parser.ToolStatusCompleted
+				if toolResult.IsError {
+					status = parser.ToolStatusFailed
+				}
+				program.Send(tui.SendToolStatusUpdate(toolResult.ToolUseID, string(status))())
+			}
 			if toolResult.Content != "" {
 				if ref := jsonParser.ExtractTaskReference(toolResult.Content); ref != nil {
 					taskLabel := fmt.Sprintf("#%d", ref.Number)
@@ -988,15 +1049,38 @@ func handleParsedMessageCLI(
 				fmt.Fprintf(logFile, "[assistant] %s\n\n", text)
 			}
 		}
+		if len(content.Plan) > 0 {
+			completed := 0
+			for _, it := range content.Plan {
+				if it.Status == parser.PlanCompleted {
+					completed++
+				}
+			}
+			fmt.Printf("[plan] %d/%d done\n", completed, len(content.Plan))
+		}
 		for _, item := range parsed.Message.Content {
 			if item.Type == parser.ContentTypeToolUse {
 				*iterToolUseCount++
+				// TodoWrite is surfaced via the [plan] line above, not a tool row.
+				if item.Name == "TodoWrite" {
+					continue
+				}
+				kind := parser.ClassifyToolKind(item.Name)
 				filePath := parser.ExtractFilePathFromInput(item.Input)
 				if filePath != "" {
-					fmt.Printf("[tool] %s: %s\n", item.Name, filePath)
+					fmt.Printf("[tool] (%s) %s: %s\n", kind, item.Name, filePath)
 				} else {
-					fmt.Printf("[tool] %s\n", item.Name)
+					fmt.Printf("[tool] (%s) %s\n", kind, item.Name)
 				}
+			}
+		}
+	}
+	// Report tool completion/failure in CLI mode.
+	if parsed.Type == parser.MessageTypeUser {
+		content := jsonParser.ExtractContent(parsed)
+		for _, toolResult := range content.ToolResults {
+			if toolResult.IsError {
+				fmt.Printf("[tool] failed\n")
 			}
 		}
 	}

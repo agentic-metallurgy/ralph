@@ -922,6 +922,74 @@ func TestAutoresearchNoFilenameArgDefault(t *testing.T) {
 	}
 }
 
+func TestIsBuildMode(t *testing.T) {
+	cases := []struct {
+		subcommand string
+		want       bool
+	}{
+		{"", true},
+		{"build", true},
+		{"plan", false},
+		{"plan-and-build", false},
+		{"autoresearch", false},
+	}
+	for _, tc := range cases {
+		cfg := &config.Config{Subcommand: tc.subcommand}
+		if got := cfg.IsBuildMode(); got != tc.want {
+			t.Errorf("IsBuildMode() with subcommand %q = %v, want %v", tc.subcommand, got, tc.want)
+		}
+	}
+}
+
+func TestSpecFolderEmptyOrMissing_Missing(t *testing.T) {
+	if !config.SpecFolderEmptyOrMissing("/nonexistent/path/to/specs/") {
+		t.Error("Expected true for a missing spec folder")
+	}
+}
+
+func TestSpecFolderEmptyOrMissing_Empty(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if !config.SpecFolderEmptyOrMissing(tmpDir) {
+		t.Error("Expected true for an empty spec folder")
+	}
+}
+
+func TestSpecFolderEmptyOrMissing_HasFiles(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "ralph-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	specFile := filepath.Join(tmpDir, "spec.md")
+	if err := os.WriteFile(specFile, []byte("# spec"), 0644); err != nil {
+		t.Fatalf("Failed to write spec file: %v", err)
+	}
+
+	if config.SpecFolderEmptyOrMissing(tmpDir) {
+		t.Error("Expected false for a spec folder containing files")
+	}
+}
+
+func TestSpecFolderEmptyOrMissing_IsFile(t *testing.T) {
+	// A path that exists but is not a directory returns false so that
+	// validation can surface the more specific "expected directory" error.
+	tmpFile, err := os.CreateTemp("", "ralph-spec-*.md")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if config.SpecFolderEmptyOrMissing(tmpFile.Name()) {
+		t.Error("Expected false when the spec path is a file, not a directory")
+	}
+}
+
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
