@@ -18,3 +18,8 @@ coverage.out
 # ralph
 IMPLEMENTATION_PLAN.md
 specs/
+
+# ralph runtime artifacts (logs + persisted token stats, any directory)
+.ralph.log
+.claude_stats
+.ralph.claude_stats
