@@ -518,15 +518,48 @@ func TestHandleParsedMessageCLI_AuthError_StopsLoop(t *testing.T) {
 }
 
 func TestDefaultCommandBuilder_InheritsEnvironment(t *testing.T) {
-	// When ANTHROPIC_API_KEY is set in the parent process, the subprocess
-	// should inherit it. Go's exec.Cmd inherits the full parent environment
-	// when Cmd.Env is nil, so we verify that DefaultCommandBuilder does NOT
-	// set Cmd.Env (which would filter the environment).
+	// The subprocess must still inherit the parent environment (e.g.
+	// ANTHROPIC_API_KEY) — but with ralph's own tmux session detached, so the
+	// child can't operate on the tmux server keeping ralph alive. Cmd.Env is
+	// therefore explicitly set to a filtered copy of the parent environment.
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
 	ctx := context.Background()
 	cmd := loop.DefaultCommandBuilder(ctx, "test prompt")
 
-	if cmd.Env != nil {
-		t.Error("expected Cmd.Env to be nil (inherit parent environment), but it was explicitly set")
+	if cmd.Env == nil {
+		t.Fatal("expected Cmd.Env to be set (filtered copy of parent environment), but it was nil")
+	}
+
+	var sawKey, sawTmux bool
+	for _, kv := range cmd.Env {
+		if kv == "ANTHROPIC_API_KEY=sk-test-key" {
+			sawKey = true
+		}
+		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
+			sawTmux = true
+		}
+	}
+	if !sawKey {
+		t.Error("expected child env to inherit ANTHROPIC_API_KEY from the parent")
+	}
+	if sawTmux {
+		t.Error("expected TMUX/TMUX_PANE to be stripped from the child env (tmux-session isolation)")
+	}
+}
+
+func TestDefaultCommandBuilder_StripsInheritedTmux(t *testing.T) {
+	// Simulate ralph running inside its own tmux session: the child must not
+	// inherit the live TMUX handle, otherwise its tmux commands would target
+	// ralph's own server and could tear down the session ralph runs in.
+	t.Setenv("TMUX", "/private/tmp/tmux-501/default,12345,0")
+	t.Setenv("TMUX_PANE", "%0")
+	ctx := context.Background()
+	cmd := loop.DefaultCommandBuilder(ctx, "test prompt")
+
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
+			t.Errorf("expected inherited tmux var to be stripped, found: %q", kv)
+		}
 	}
 }
 
