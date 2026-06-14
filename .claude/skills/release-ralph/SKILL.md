@@ -8,7 +8,20 @@ user-invocable: true
 
 Cuts a new CalVer release of Ralph: bumps the version constant, commits, tags, and pushes. The CI workflow handles building binaries, creating the GitHub release, and publishing the Homebrew formula.
 
-## Step 1: Determine the new version
+## Step 1: Switch to main and sync from remote
+
+Releases are always cut from an up-to-date `main`. Before doing anything else:
+
+```bash
+git checkout main
+git fetch origin
+git pull --ff-only origin main
+```
+
+- If the working tree has uncommitted changes that would block the checkout, stash them first (`git stash push -m release-wip`) and restore with `git stash pop` once on main.
+- A stale local `main` is common — always `fetch` + `pull` so the release (and the merge status of any recent fix/feature branch) reflects what's actually on the remote. Don't assume a branch is unmerged based on local state alone.
+
+## Step 2: Determine the new version
 
 Gather these in parallel:
 - Latest tag: `git tag --sort=-v:refname | head -5`
@@ -20,7 +33,7 @@ Gather these in parallel:
 - If the latest tag is from a different day, use today's base with no patch suffix
 - Never ask the user for the version — always auto-calculate
 
-## Step 2: Bump the version in source
+## Step 3: Bump the version in source
 
 Edit `internal/config/config.go` and update the `Version` variable to the new version string:
 
@@ -28,7 +41,7 @@ Edit `internal/config/config.go` and update the `Version` variable to the new ve
 var Version = "v{new_version}"
 ```
 
-## Step 3: Commit and tag
+## Step 4: Commit and tag
 
 Stage only the changed file and commit:
 
@@ -40,7 +53,7 @@ git tag v{new_version}
 
 Follow the user's commit message conventions (check CLAUDE.md for author instructions).
 
-## Step 4: Push to trigger the release
+## Step 5: Push to trigger the release
 
 ```bash
 git push origin main
@@ -53,7 +66,7 @@ This triggers the CI workflow in `.github/workflows/ci.yml` which:
 3. Creates a GitHub Release with tar.gz archives, standalone binaries, and checksums
 4. Publishes the Homebrew formula to `agentic-metallurgy/homebrew-tap`
 
-## Step 5: Report
+## Step 6: Report
 
 Tell the user:
 - The version that was released (e.g. `v2026.3.21`)
