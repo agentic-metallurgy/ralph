@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,12 +21,52 @@ type CommandBuilder func(ctx context.Context, prompt string) *exec.Cmd
 
 // DefaultCommandBuilder creates the standard claude CLI command.
 func DefaultCommandBuilder(ctx context.Context, prompt string) *exec.Cmd {
-	return exec.CommandContext(ctx, "claude",
+	cmd := exec.CommandContext(ctx, "claude",
 		"--print",
 		"--output-format", "stream-json",
 		"--dangerously-skip-permissions",
 		"--verbose",
 	)
+	cmd.Env = isolatedTmuxEnv()
+	return cmd
+}
+
+// isolatedTmuxEnv returns a copy of the current environment with the inherited
+// tmux session detached from the child claude process.
+//
+// Ralph wraps itself in a tmux session (see internal/tmux.Wrap), which exports
+// TMUX/TMUX_PANE into every descendant — including the claude CLI and anything
+// it spawns. Without isolation, a child's `tmux` commands bind to *ralph's own*
+// server and session: a nested `tmux new-session` lands on ralph's server, and
+// any server-fatal operation there (a stray `kill-server`, control-mode client
+// churn, or an Electron app's tmux-backed test suite) tears down the session
+// ralph itself runs in — killing ralph with no error and no completion marker.
+//
+// To prevent that we (1) drop TMUX/TMUX_PANE so the child no longer attaches to
+// ralph's client, and (2) point TMUX_TMPDIR at a dedicated directory so any tmux
+// server the child starts lives on its own socket, fully separate from ralph's
+// default-socket session. The agent's tmux still works normally; it just can't
+// reach the session keeping ralph alive.
+func isolatedTmuxEnv() []string {
+	src := os.Environ()
+	out := make([]string, 0, len(src)+1)
+	for _, kv := range src {
+		switch {
+		case strings.HasPrefix(kv, "TMUX="),
+			strings.HasPrefix(kv, "TMUX_PANE="),
+			strings.HasPrefix(kv, "TMUX_TMPDIR="):
+			continue
+		}
+		out = append(out, kv)
+	}
+	// Best-effort: give the child its own tmux socket directory. If we can't
+	// create it, fall back to leaving TMUX_TMPDIR unset (still isolated from
+	// ralph's client by the dropped TMUX handle above).
+	dir := filepath.Join(os.TempDir(), "ralph-agent-tmux")
+	if err := os.MkdirAll(dir, 0o700); err == nil {
+		out = append(out, "TMUX_TMPDIR="+dir)
+	}
+	return out
 }
 
 // Config holds the loop execution configuration.
