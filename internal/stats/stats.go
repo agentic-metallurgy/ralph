@@ -99,12 +99,26 @@ func (t *TokenStats) SetTotalElapsedNs(ns int64) {
 	t.TotalElapsedNs = ns
 }
 
-// Snapshot returns a consistent point-in-time copy of the stats for reading.
-// The returned value has a fresh (zero) mutex and can be read without locking.
-func (t *TokenStats) Snapshot() TokenStats {
+// Snapshot is an immutable, lock-free point-in-time copy of a TokenStats's
+// counters. It deliberately carries no mutex, so callers may copy it freely —
+// store it in a struct field, pass it by value, or hand it to a fmt verb —
+// without copying a lock (which go vet's copylocks check forbids).
+type Snapshot struct {
+	InputTokens         int64
+	OutputTokens        int64
+	CacheCreationTokens int64
+	CacheReadTokens     int64
+	TotalCostUSD        float64
+	TotalTokensCount    int64
+	TotalElapsedNs      int64
+}
+
+// Snapshot returns a consistent point-in-time copy of the stats for reading
+// without holding the lock.
+func (t *TokenStats) Snapshot() Snapshot {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return TokenStats{
+	return Snapshot{
 		InputTokens:         t.InputTokens,
 		OutputTokens:        t.OutputTokens,
 		CacheCreationTokens: t.CacheCreationTokens,
