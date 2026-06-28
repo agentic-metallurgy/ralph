@@ -241,7 +241,8 @@ type Model struct {
 	loopBaseElapsed   time.Duration // per-loop elapsed from before pause within same loop
 	loopTimerPaused   bool          // whether per-loop timer is paused
 	loopPausedElapsed time.Duration // per-loop elapsed at time of pause
-	viewport          viewport.Model
+	thinkingViewport  viewport.Model // left pane (2:1): thinking/assistant narrative, word-wrapped
+	toolViewport      viewport.Model // right pane (1:1): tool-use rows + plan panel
 	activityHeight    int
 	footerHeight      int
 	msgChan           <-chan Message
@@ -488,19 +489,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Guard viewport dimensions against going below 1
-		vpWidth := max(m.width-4, 1)
+		// Split the activity area 2:1 — a wide "thinking" pane and a narrow
+		// "tool use" pane. Each box's outer width plus its rounded border (+2)
+		// sums to m.width so the row fills the terminal exactly.
+		leftStyleWidth := max((m.width-4)*2/3, 1)
+		rightStyleWidth := max((m.width-4)-leftStyleWidth, 1)
+		leftVpWidth := max(leftStyleWidth-4, 1)
+		rightVpWidth := max(rightStyleWidth-4, 1)
 		vpHeight := max(m.activityHeight-2, 1)
 
-		// Initialize or update viewport
+		// Initialize or update both viewports
 		if !m.viewportReady {
-			m.viewport = viewport.New(vpWidth, vpHeight)
-			m.viewport.SetContent(m.renderActivityContent())
-			m.viewport.GotoBottom()
+			m.thinkingViewport = viewport.New(leftVpWidth, vpHeight)
+			m.toolViewport = viewport.New(rightVpWidth, vpHeight)
 			m.viewportReady = true
+			m.thinkingViewport.SetContent(m.renderThinkingContent())
+			m.toolViewport.SetContent(m.renderToolContent())
+			m.thinkingViewport.GotoBottom()
+			m.toolViewport.GotoBottom()
 		} else {
-			m.viewport.Width = vpWidth
-			m.viewport.Height = vpHeight
+			m.thinkingViewport.Width = leftVpWidth
+			m.thinkingViewport.Height = vpHeight
+			m.toolViewport.Width = rightVpWidth
+			m.toolViewport.Height = vpHeight
+			// Re-wrap content to the new widths.
+			m.thinkingViewport.SetContent(m.renderThinkingContent())
+			m.toolViewport.SetContent(m.renderToolContent())
 		}
 		return m, nil
 
@@ -601,7 +615,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// scroll position every 250ms, making the viewport effectively unscrollable.
 		// GotoBottom() is only called on viewport init and when new messages arrive.
 		if m.viewportReady {
-			m.viewport.SetContent(m.renderActivityContent())
+			m.thinkingViewport.SetContent(m.renderThinkingContent())
+			m.toolViewport.SetContent(m.renderToolContent())
+			// The tool pane auto-follows the latest activity; the thinking pane
+			// preserves the user's scroll position (no GotoBottom here).
+			m.toolViewport.GotoBottom()
 		}
 		m.updateTmuxStatusBar()
 		return m, tickCmd()
@@ -609,8 +627,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case newMessageMsg:
 		m.AddMessage(Message(msg))
 		if m.viewportReady {
-			m.viewport.SetContent(m.renderActivityContent())
-			m.viewport.GotoBottom()
+			m.thinkingViewport.SetContent(m.renderThinkingContent())
+			m.toolViewport.SetContent(m.renderToolContent())
+			m.thinkingViewport.GotoBottom()
+			m.toolViewport.GotoBottom()
 		}
 		// Continue listening for more messages
 		if m.msgChan != nil {
@@ -651,7 +671,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if m.viewportReady {
-			m.viewport.SetContent(m.renderActivityContent())
+			m.thinkingViewport.SetContent(m.renderThinkingContent())
+			m.toolViewport.SetContent(m.renderToolContent())
+			m.toolViewport.GotoBottom()
 		}
 		return m, nil
 
@@ -680,7 +702,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentTask = current
 		}
 		if m.viewportReady {
-			m.viewport.SetContent(m.renderActivityContent())
+			m.thinkingViewport.SetContent(m.renderThinkingContent())
+			m.toolViewport.SetContent(m.renderToolContent())
+			m.toolViewport.GotoBottom()
 		}
 		return m, nil
 
@@ -725,8 +749,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Handle viewport scrolling
-	m.viewport, cmd = m.viewport.Update(msg)
+	// Handle viewport scrolling — scroll keys drive the thinking pane (the tool
+	// pane auto-follows the latest activity).
+	m.thinkingViewport, cmd = m.thinkingViewport.Update(msg)
 	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
@@ -795,25 +820,68 @@ func (m Model) renderPlanPanel() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderActivityContent renders the message content for the viewport
-func (m Model) renderActivityContent() string {
-	planPanel := m.renderPlanPanel()
+// renderNarrativeLine renders one non-tool message for the thinking pane as a
+// hanging-indent block: the role icon sits in a fixed gutter and the styled
+// content is word-wrapped to the remaining width, so long thinking/assistant
+// text is shown in full instead of being clipped to a single line.
+func renderNarrativeLine(msg Message, width int) string {
+	bodyWidth := max(width-3, 1)
+	body := msg.GetStyle().Width(bodyWidth).Render(msg.Content)
+	gutter := lipgloss.NewStyle().Width(3).Render(msg.GetIcon())
+	return lipgloss.JoinHorizontal(lipgloss.Top, gutter, body)
+}
 
+// renderThinkingContent renders the left (2/3) pane: the thinking/assistant
+// narrative — every non-tool message word-wrapped to the pane width — plus the
+// idle "thinking…" indicator. Tool-use rows live in the right pane instead.
+func (m Model) renderThinkingContent() string {
+	dimStyle := lipgloss.NewStyle().Foreground(colorDimGray)
+
+	// Nothing has happened yet: show the waiting placeholder (no idle dots),
+	// matching the pre-split behavior.
 	if len(m.messages) == 0 {
-		waitStyle := lipgloss.NewStyle().Foreground(colorDimGray)
-		waiting := waitStyle.Render("Waiting for activity...")
-		if planPanel != "" {
-			return planPanel + "\n\n" + waiting
-		}
-		return waiting
+		return dimStyle.Render("Waiting for activity...")
 	}
 
+	width := m.thinkingViewport.Width
+	if width < 1 {
+		width = max(m.width-4, 1)
+	}
+
+	var lines []string
+	for _, msg := range m.messages {
+		if msg.Role == RoleTool {
+			continue // tool rows render in the right pane
+		}
+		lines = append(lines, renderNarrativeLine(msg, width))
+		lines = append(lines, "") // blank line between messages
+	}
+
+	// Thinking/waiting indicator: when the loop is live but nothing is
+	// executing, the model is deciding its next step. Animate dots so the
+	// gap between steps reads as active rather than stalled.
+	if m.inProgressTools == 0 && !m.completed && !m.hibernating && !m.quitting && !m.timerPaused {
+		dots := strings.Repeat(".", 1+(m.spinnerFrame%3))
+		lines = append(lines, dimStyle.Italic(true).Render("💭 thinking"+dots))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// renderToolContent renders the right (1/3) pane: the agent's plan panel pinned
+// at the top followed by the tool-use rows, each rendered exactly as before the
+// split (status glyph + kind icon + title + dim elapsed time).
+func (m Model) renderToolContent() string {
+	planPanel := m.renderPlanPanel()
 	dimStyle := lipgloss.NewStyle().Foreground(colorDimGray)
 
 	var lines []string
 	for _, msg := range m.messages {
+		if msg.Role != RoleTool {
+			continue
+		}
 		var line string
-		if msg.Role == RoleTool && msg.Status != "" {
+		if msg.Status != "" {
 			// ACP-modeled tool row: status glyph + kind icon + styled title +
 			// dim elapsed time. in_progress rows show an animated spinner and a
 			// live-updating timer; resolved rows show their final duration.
@@ -826,24 +894,19 @@ func (m Model) renderActivityContent() string {
 				line += " " + dimStyle.Render("("+dur+")")
 			}
 		} else {
-			// Format: icon + styled content
+			// Status-less tool message: icon + styled content.
 			line = fmt.Sprintf("%s %s", msg.GetIcon(), msg.GetStyle().Render(msg.Content))
 		}
 		lines = append(lines, line)
-		lines = append(lines, "") // Add empty line between messages
-	}
-
-	// Thinking/waiting indicator: when the loop is live but nothing is
-	// executing, the model is deciding its next step. Animate dots so the
-	// gap between steps reads as active rather than stalled.
-	if m.inProgressTools == 0 && !m.completed && !m.hibernating && !m.quitting && !m.timerPaused {
-		dots := strings.Repeat(".", 1+(m.spinnerFrame%3))
-		lines = append(lines, dimStyle.Italic(true).Render("💭 thinking"+dots))
+		lines = append(lines, "") // blank line between rows
 	}
 
 	content := strings.Join(lines, "\n")
 	if planPanel != "" {
-		return planPanel + "\n\n" + content
+		if content != "" {
+			return planPanel + "\n\n" + content
+		}
+		return planPanel
 	}
 	return content
 }
@@ -890,13 +953,21 @@ func (m Model) renderLayout() string {
 		statusText = "STOPPED"
 	}
 
-	// Activity panel style
-	activityStyle := lipgloss.NewStyle().
+	// Split the activity area 2:1 — a wide "thinking" pane and a narrow
+	// "tool use" pane. Each box's outer width plus its rounded border (+2) sums
+	// to m.width so the joined row fills the terminal exactly.
+	leftStyleWidth := max((m.width-4)*2/3, 1)
+	rightStyleWidth := max((m.width-4)-leftStyleWidth, 1)
+
+	paneStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
 		Padding(1, 2).
-		Width(m.width - 2).
 		Height(m.activityHeight)
+
+	thinkingPane := paneStyle.Width(leftStyleWidth).Render(m.thinkingViewport.View())
+	toolPane := paneStyle.Width(rightStyleWidth).Render(m.toolViewport.View())
+	panes := lipgloss.JoinHorizontal(lipgloss.Top, thinkingPane, toolPane)
 
 	// Centered status title at top
 	statusTitle := lipgloss.NewStyle().
@@ -906,13 +977,11 @@ func (m Model) renderLayout() string {
 		Align(lipgloss.Center).
 		Render(statusText)
 
-	activityContent := activityStyle.Render(m.viewport.View())
-
-	// Add centered status title above activity panel
+	// Add centered status title above the split activity panes
 	activityPanel := lipgloss.JoinVertical(
 		lipgloss.Left,
 		statusTitle,
-		activityContent,
+		panes,
 	)
 
 	// Render footer panels
