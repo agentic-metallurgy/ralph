@@ -65,9 +65,12 @@ type ModelPricing struct {
 	CacheRead     float64
 }
 
-// Per-token price sets by model tier (list prices, USD per token). Point releases
-// within a tier share pricing (every Opus 4.x is $5/$25, every Sonnet 4.x is
-// $3/$15), so PricingForModel matches tiers by substring rather than exact ID.
+// Per-token price sets by model tier (list prices, USD per token) for the
+// current model generation: Opus 4.5+ at $5/$25, Sonnet 4.x at $3/$15.
+// PricingForModel matches by tier substring rather than exact ID so new point
+// releases within a tier need no code change. Older Opus (4.0/4.1, listed at
+// $15/$75) would be under-estimated, but those aren't current-gen and any
+// estimate reconciles to the CLI's actual cost once a result arrives.
 var (
 	pricingOpus   = ModelPricing{5.00 / 1_000_000, 25.00 / 1_000_000, 6.25 / 1_000_000, 0.50 / 1_000_000}
 	pricingSonnet = ModelPricing{3.00 / 1_000_000, 15.00 / 1_000_000, 3.75 / 1_000_000, 0.30 / 1_000_000}
