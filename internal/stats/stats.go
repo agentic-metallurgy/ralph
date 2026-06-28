@@ -53,20 +53,61 @@ func (t *TokenStats) AddUsage(input, output, cacheCreation, cacheRead int64) {
 	t.TotalTokensCount = t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens
 }
 
-// Pricing constants for Claude Sonnet 4 (per token)
-const (
-	PriceInputPerToken         = 3.00 / 1_000_000
-	PriceOutputPerToken        = 15.00 / 1_000_000
-	PriceCacheCreationPerToken = 3.75 / 1_000_000
-	PriceCacheReadPerToken     = 0.30 / 1_000_000
+// ModelPricing holds per-token USD list prices for a Claude model tier.
+// CacheCreation uses the 5-minute cache-write rate (1.25x input); CacheRead is
+// the cache-read rate (0.1x input). The Claude CLI usage stream reports a single
+// cache_creation_input_tokens figure with no TTL breakdown, so the 5-minute rate
+// is used for the estimate (matching behavior from before pricing was model-aware).
+type ModelPricing struct {
+	Input         float64
+	Output        float64
+	CacheCreation float64
+	CacheRead     float64
+}
+
+// Per-token price sets by model tier (list prices, USD per token). Point releases
+// within a tier share pricing (every Opus 4.x is $5/$25, every Sonnet 4.x is
+// $3/$15), so PricingForModel matches tiers by substring rather than exact ID.
+var (
+	pricingOpus   = ModelPricing{5.00 / 1_000_000, 25.00 / 1_000_000, 6.25 / 1_000_000, 0.50 / 1_000_000}
+	pricingSonnet = ModelPricing{3.00 / 1_000_000, 15.00 / 1_000_000, 3.75 / 1_000_000, 0.30 / 1_000_000}
+	pricingHaiku  = ModelPricing{1.00 / 1_000_000, 5.00 / 1_000_000, 1.25 / 1_000_000, 0.10 / 1_000_000}
+	pricingFable  = ModelPricing{10.00 / 1_000_000, 50.00 / 1_000_000, 12.50 / 1_000_000, 1.00 / 1_000_000}
 )
 
-// EstimateCostFromTokens computes estimated cost from token counts using hardcoded pricing
-func EstimateCostFromTokens(input, output, cacheCreation, cacheRead int64) float64 {
-	return float64(input)*PriceInputPerToken +
-		float64(output)*PriceOutputPerToken +
-		float64(cacheCreation)*PriceCacheCreationPerToken +
-		float64(cacheRead)*PriceCacheReadPerToken
+// DefaultPricing is used when the model identifier is empty or unrecognized.
+// It mirrors Claude Sonnet rates, preserving the behavior from before pricing
+// was made model-aware.
+var DefaultPricing = pricingSonnet
+
+// PricingForModel returns the price set for a Claude model identifier (e.g.
+// "claude-opus-4-8"), matching by tier substring. Empty or unrecognized
+// identifiers fall back to DefaultPricing.
+func PricingForModel(model string) ModelPricing {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "opus"):
+		return pricingOpus
+	case strings.Contains(m, "sonnet"):
+		return pricingSonnet
+	case strings.Contains(m, "haiku"):
+		return pricingHaiku
+	case strings.Contains(m, "fable"):
+		return pricingFable
+	default:
+		return DefaultPricing
+	}
+}
+
+// EstimateCostFromTokens computes estimated cost from token counts using the
+// price set for the given model. An empty or unrecognized model uses
+// DefaultPricing.
+func EstimateCostFromTokens(model string, input, output, cacheCreation, cacheRead int64) float64 {
+	p := PricingForModel(model)
+	return float64(input)*p.Input +
+		float64(output)*p.Output +
+		float64(cacheCreation)*p.CacheCreation +
+		float64(cacheRead)*p.CacheRead
 }
 
 // AddCost adds cost to the total cost

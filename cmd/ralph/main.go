@@ -770,6 +770,7 @@ func handleParsedMessage(
 			)
 			// Estimate cost from token counts and update in real-time
 			estimate := stats.EstimateCostFromTokens(
+				jsonParser.GetModel(parsed),
 				usage.InputTokens,
 				usage.OutputTokens,
 				usage.CacheCreationInputTokens,
@@ -1005,6 +1006,7 @@ func handleParsedMessageCLI(
 			)
 			// Estimate cost from token counts and update in real-time
 			estimate := stats.EstimateCostFromTokens(
+				jsonParser.GetModel(parsed),
 				usage.InputTokens,
 				usage.OutputTokens,
 				usage.CacheCreationInputTokens,

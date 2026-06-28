@@ -250,28 +250,79 @@ func TestTotalTokensCount_UpdatedAfterAddUsage(t *testing.T) {
 
 func TestEstimateCostFromTokens(t *testing.T) {
 	tests := []struct {
-		name                                       string
-		input, output, cacheCreation, cacheRead    int64
-		expected                                   float64
+		name                                    string
+		model                                   string
+		input, output, cacheCreation, cacheRead int64
+		expected                                float64
 	}{
-		{"1M input tokens", 1_000_000, 0, 0, 0, 3.00},
-		{"1M output tokens", 0, 1_000_000, 0, 0, 15.00},
-		{"1M cache creation tokens", 0, 0, 1_000_000, 0, 3.75},
-		{"1M cache read tokens", 0, 0, 0, 1_000_000, 0.30},
-		{"all zeros", 0, 0, 0, 0, 0.0},
-		{"mixed counts", 100_000, 50_000, 20_000, 200_000, 0.30 + 0.75 + 0.075 + 0.06},
+		// Sonnet pricing ($3 / $15 / $3.75 / $0.30 per 1M)
+		{"sonnet 1M input tokens", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 3.00},
+		{"sonnet 1M output tokens", "claude-sonnet-4-6", 0, 1_000_000, 0, 0, 15.00},
+		{"sonnet 1M cache creation tokens", "claude-sonnet-4-6", 0, 0, 1_000_000, 0, 3.75},
+		{"sonnet 1M cache read tokens", "claude-sonnet-4-6", 0, 0, 0, 1_000_000, 0.30},
+		{"sonnet mixed counts", "claude-sonnet-4-6", 100_000, 50_000, 20_000, 200_000, 0.30 + 0.75 + 0.075 + 0.06},
+		{"all zeros", "claude-opus-4-8", 0, 0, 0, 0, 0.0},
+		// Opus pricing ($5 / $25 / $6.25 / $0.50 per 1M)
+		{"opus 1M input tokens", "claude-opus-4-8", 1_000_000, 0, 0, 0, 5.00},
+		{"opus 1M output tokens", "claude-opus-4-8", 0, 1_000_000, 0, 0, 25.00},
+		{"opus 1M cache creation tokens", "claude-opus-4-8", 0, 0, 1_000_000, 0, 6.25},
+		{"opus 1M cache read tokens", "claude-opus-4-8", 0, 0, 0, 1_000_000, 0.50},
+		{"opus mixed counts", "claude-opus-4-8", 100_000, 50_000, 20_000, 200_000, 0.50 + 1.25 + 0.125 + 0.10},
+		// Haiku pricing ($1 / $5 / $1.25 / $0.10 per 1M)
+		{"haiku 1M input tokens", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1.00},
+		// Fable pricing ($10 / $50 / $12.50 / $1.00 per 1M)
+		{"fable 1M output tokens", "claude-fable-5", 0, 1_000_000, 0, 0, 50.00},
+		// Empty / unrecognized model falls back to Sonnet (DefaultPricing)
+		{"empty model defaults to sonnet", "", 1_000_000, 0, 0, 0, 3.00},
+		{"unknown model defaults to sonnet", "some-other-model", 0, 1_000_000, 0, 0, 15.00},
 	}
 
 	tolerance := 0.0000001
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stats.EstimateCostFromTokens(tt.input, tt.output, tt.cacheCreation, tt.cacheRead)
+			result := stats.EstimateCostFromTokens(tt.model, tt.input, tt.output, tt.cacheCreation, tt.cacheRead)
 			diff := result - tt.expected
 			if diff < -tolerance || diff > tolerance {
-				t.Errorf("EstimateCostFromTokens(%d, %d, %d, %d) = %f, expected %f",
-					tt.input, tt.output, tt.cacheCreation, tt.cacheRead, result, tt.expected)
+				t.Errorf("EstimateCostFromTokens(%q, %d, %d, %d, %d) = %f, expected %f",
+					tt.model, tt.input, tt.output, tt.cacheCreation, tt.cacheRead, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestPricingForModel(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  stats.ModelPricing
+	}{
+		{"opus", "claude-opus-4-8", stats.PricingForModel("claude-opus-4-8")},
+		{"opus older point release", "claude-opus-4-6", stats.PricingForModel("claude-opus-4-8")},
+		{"opus dated snapshot", "claude-opus-4-5-20251101", stats.PricingForModel("claude-opus-4-8")},
+		{"opus bedrock prefix", "anthropic.claude-opus-4-8", stats.PricingForModel("claude-opus-4-8")},
+		{"opus uppercase", "Claude-OPUS-4-8", stats.PricingForModel("claude-opus-4-8")},
+		{"sonnet", "claude-sonnet-4-6", stats.PricingForModel("claude-sonnet-4-6")},
+		{"haiku", "claude-haiku-4-5", stats.PricingForModel("claude-haiku-4-5")},
+		{"fable", "claude-fable-5", stats.PricingForModel("claude-fable-5")},
+		{"empty falls back to default", "", stats.DefaultPricing},
+		{"unknown falls back to default", "gpt-4", stats.DefaultPricing},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stats.PricingForModel(tt.model)
+			if got != tt.want {
+				t.Errorf("PricingForModel(%q) = %+v, want %+v", tt.model, got, tt.want)
+			}
+		})
+	}
+
+	// Concrete rate checks so the table itself is asserted, not just self-consistency.
+	if p := stats.PricingForModel("claude-opus-4-8"); p.Input != 5.00/1_000_000 || p.Output != 25.00/1_000_000 {
+		t.Errorf("opus rates = %+v, want input 5/1M, output 25/1M", p)
+	}
+	if p := stats.DefaultPricing; p.Input != 3.00/1_000_000 || p.Output != 15.00/1_000_000 {
+		t.Errorf("default (sonnet) rates = %+v, want input 3/1M, output 15/1M", p)
 	}
 }
 
@@ -1133,6 +1184,7 @@ func replayFixture(t *testing.T, fixturePath string, dedup bool) (snap *stats.Sn
 					usage.CacheReadInputTokens,
 				)
 				estimate := stats.EstimateCostFromTokens(
+					p.GetModel(parsed),
 					usage.InputTokens,
 					usage.OutputTokens,
 					usage.CacheCreationInputTokens,

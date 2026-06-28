@@ -186,6 +186,7 @@ type ContentItem struct {
 // InnerMessage represents the message field within an assistant/user message
 type InnerMessage struct {
 	ID      string        `json:"id,omitempty"`
+	Model   string        `json:"model,omitempty"`
 	Content []ContentItem `json:"content"`
 	Usage   *Usage        `json:"usage,omitempty"`
 }
@@ -447,6 +448,15 @@ func (p *Parser) GetUsage(msg *ParsedMessage) *Usage {
 		return nil
 	}
 	return msg.Message.Usage
+}
+
+// GetModel returns the model identifier from a message (e.g. "claude-opus-4-8"),
+// or empty string if not present.
+func (p *Parser) GetModel(msg *ParsedMessage) string {
+	if msg == nil || msg.Message == nil {
+		return ""
+	}
+	return msg.Message.Model
 }
 
 // GetCost extracts the total cost from a result message
