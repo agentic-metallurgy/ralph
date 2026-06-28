@@ -128,6 +128,36 @@ func TestSplit_ScrollKeysDriveThinkingPane(t *testing.T) {
 	}
 }
 
+// TestSplit_ToolMessageKeepsThinkingScroll verifies that a tool row arriving
+// does NOT yank the thinking pane back to the bottom. The split's whole point is
+// that the thinking pane preserves the user's scroll position; only a new
+// narrative message should auto-follow it. (Regression: newMessageMsg used to
+// GotoBottom the thinking pane for every message, including tool rows.)
+func TestSplit_ToolMessageKeepsThinkingScroll(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 22})
+
+	for i := 0; i < 30; i++ {
+		model = sendTo(t, model, tui.Message{Role: tui.RoleThinking, Content: fmt.Sprintf("THINK_LINE_%02d", i)})
+	}
+	// Scroll up to the earliest line.
+	for i := 0; i < 12; i++ {
+		model, _ = updateModel(model, tea.KeyMsg{Type: tea.KeyPgUp})
+	}
+	if !strings.Contains(model.View(), "THINK_LINE_00") {
+		t.Fatalf("precondition: thinking pane should be scrolled to the top; got:\n%s", model.View())
+	}
+
+	// A tool row lands in the right pane — it must not disturb the left pane.
+	model = addToolRow(t, model, "t1", "read", "in_progress", "Read config.go")
+	if strings.Contains(model.View(), "THINK_LINE_29") {
+		t.Error("a tool message should not snap the thinking pane back to the bottom")
+	}
+	if !strings.Contains(model.View(), "THINK_LINE_00") {
+		t.Error("thinking pane scroll position should be preserved when a tool row arrives")
+	}
+}
+
 // TestSplit_NoWidthOverflow verifies the joined panes never exceed the terminal
 // width (which would wrap/garble the layout) across a range of sizes.
 func TestSplit_NoWidthOverflow(t *testing.T) {

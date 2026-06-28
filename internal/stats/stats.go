@@ -15,31 +15,31 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// tokenCounters is the single canonical list of token/cost counters. It is
+// embedded by both the lock-guarded TokenStats and the lock-free Snapshot, so a
+// new counter added here automatically flows to every snapshot consumer instead
+// of having to be repeated across three separate field lists.
+type tokenCounters struct {
+	InputTokens         int64   `json:"input_tokens"`
+	OutputTokens        int64   `json:"output_tokens"`
+	CacheCreationTokens int64   `json:"cache_creation_tokens"`
+	CacheReadTokens     int64   `json:"cache_read_tokens"`
+	TotalCostUSD        float64 `json:"total_cost"`
+	TotalTokensCount    int64   `json:"total_tokens"`
+	TotalElapsedNs      int64   `json:"elapsed_ns"`
+}
+
 // TokenStats tracks token usage and costs.
 // All mutating methods are protected by a sync.RWMutex for concurrent access
 // from the processLoopOutput goroutine (writer) and the BubbleTea TUI goroutine (reader).
 type TokenStats struct {
-	mu                  sync.RWMutex `json:"-"`
-	InputTokens         int64        `json:"input_tokens"`
-	OutputTokens        int64        `json:"output_tokens"`
-	CacheCreationTokens int64        `json:"cache_creation_tokens"`
-	CacheReadTokens     int64        `json:"cache_read_tokens"`
-	TotalCostUSD        float64      `json:"total_cost"`
-	TotalTokensCount    int64        `json:"total_tokens"`
-	TotalElapsedNs      int64        `json:"elapsed_ns"`
+	mu sync.RWMutex `json:"-"`
+	tokenCounters
 }
 
 // NewTokenStats creates a new empty TokenStats instance
 func NewTokenStats() *TokenStats {
-	return &TokenStats{
-		InputTokens:         0,
-		OutputTokens:        0,
-		CacheCreationTokens: 0,
-		CacheReadTokens:     0,
-		TotalCostUSD:        0.0,
-		TotalTokensCount:    0,
-		TotalElapsedNs:      0,
-	}
+	return &TokenStats{}
 }
 
 // AddUsage adds token usage counts to the stats
@@ -148,13 +148,7 @@ func (t *TokenStats) SetTotalElapsedNs(ns int64) {
 // store it in a struct field, pass it by value, or hand it to a fmt verb —
 // without copying a lock (which go vet's copylocks check forbids).
 type Snapshot struct {
-	InputTokens         int64
-	OutputTokens        int64
-	CacheCreationTokens int64
-	CacheReadTokens     int64
-	TotalCostUSD        float64
-	TotalTokensCount    int64
-	TotalElapsedNs      int64
+	tokenCounters
 }
 
 // Snapshot returns a consistent point-in-time copy of the stats for reading
@@ -162,15 +156,9 @@ type Snapshot struct {
 func (t *TokenStats) Snapshot() Snapshot {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return Snapshot{
-		InputTokens:         t.InputTokens,
-		OutputTokens:        t.OutputTokens,
-		CacheCreationTokens: t.CacheCreationTokens,
-		CacheReadTokens:     t.CacheReadTokens,
-		TotalCostUSD:        t.TotalCostUSD,
-		TotalTokensCount:    t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens,
-		TotalElapsedNs:      t.TotalElapsedNs,
-	}
+	c := t.tokenCounters
+	c.TotalTokensCount = c.InputTokens + c.OutputTokens + c.CacheCreationTokens + c.CacheReadTokens
+	return Snapshot{tokenCounters: c}
 }
 
 // FormatTokens formats a token count into a human-readable string

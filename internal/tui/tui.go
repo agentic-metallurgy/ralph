@@ -472,6 +472,35 @@ func waitForDone(ch <-chan struct{}) tea.Cmd {
 	}
 }
 
+// splitPaneWidths divides the activity row into a 2:1 (thinking : tool) split.
+// Each returned outer width gets a +2 rounded border when rendered, so
+// left + right + 4 == width and the joined row fills the terminal exactly. Both
+// are floored at 1 so a tiny terminal can't produce a zero/negative dimension.
+func splitPaneWidths(width int) (left, right int) {
+	left = max((width-4)*2/3, 1)
+	right = max((width-4)-left, 1)
+	return left, right
+}
+
+// refreshPanes re-renders both viewports' content. followThinking / followTool
+// control whether each pane snaps to its latest line afterward: the tool pane
+// auto-follows the latest activity, while the thinking pane only follows when a
+// new narrative message arrives so the user's scroll position is otherwise
+// preserved. No-op until the viewports have been initialized.
+func (m *Model) refreshPanes(followThinking, followTool bool) {
+	if !m.viewportReady {
+		return
+	}
+	m.thinkingViewport.SetContent(m.renderThinkingContent())
+	m.toolViewport.SetContent(m.renderToolContent())
+	if followThinking {
+		m.thinkingViewport.GotoBottom()
+	}
+	if followTool {
+		m.toolViewport.GotoBottom()
+	}
+}
+
 // Update handles messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -490,10 +519,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Split the activity area 2:1 — a wide "thinking" pane and a narrow
-		// "tool use" pane. Each box's outer width plus its rounded border (+2)
-		// sums to m.width so the row fills the terminal exactly.
-		leftStyleWidth := max((m.width-4)*2/3, 1)
-		rightStyleWidth := max((m.width-4)-leftStyleWidth, 1)
+		// "tool use" pane (see splitPaneWidths). The inner viewport width is the
+		// box width minus its rounded border (+2) and horizontal padding (+2).
+		leftStyleWidth, rightStyleWidth := splitPaneWidths(m.width)
 		leftVpWidth := max(leftStyleWidth-4, 1)
 		rightVpWidth := max(rightStyleWidth-4, 1)
 		vpHeight := max(m.activityHeight-2, 1)
@@ -503,18 +531,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinkingViewport = viewport.New(leftVpWidth, vpHeight)
 			m.toolViewport = viewport.New(rightVpWidth, vpHeight)
 			m.viewportReady = true
-			m.thinkingViewport.SetContent(m.renderThinkingContent())
-			m.toolViewport.SetContent(m.renderToolContent())
-			m.thinkingViewport.GotoBottom()
-			m.toolViewport.GotoBottom()
+			m.refreshPanes(true, true)
 		} else {
 			m.thinkingViewport.Width = leftVpWidth
 			m.thinkingViewport.Height = vpHeight
 			m.toolViewport.Width = rightVpWidth
 			m.toolViewport.Height = vpHeight
-			// Re-wrap content to the new widths.
-			m.thinkingViewport.SetContent(m.renderThinkingContent())
-			m.toolViewport.SetContent(m.renderToolContent())
+			// Re-wrap content to the new widths; keep the thinking pane's scroll
+			// position but re-pin the auto-following tool pane to the latest row.
+			m.refreshPanes(false, true)
 		}
 		return m, nil
 
@@ -614,24 +639,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Note: we do NOT call GotoBottom() here — that would override the user's
 		// scroll position every 250ms, making the viewport effectively unscrollable.
 		// GotoBottom() is only called on viewport init and when new messages arrive.
-		if m.viewportReady {
-			m.thinkingViewport.SetContent(m.renderThinkingContent())
-			m.toolViewport.SetContent(m.renderToolContent())
-			// The tool pane auto-follows the latest activity; the thinking pane
-			// preserves the user's scroll position (no GotoBottom here).
-			m.toolViewport.GotoBottom()
-		}
+		// The tool pane auto-follows the latest activity; the thinking pane
+		// preserves the user's scroll position (no GotoBottom here).
+		m.refreshPanes(false, true)
 		m.updateTmuxStatusBar()
 		return m, tickCmd()
 
 	case newMessageMsg:
-		m.AddMessage(Message(msg))
-		if m.viewportReady {
-			m.thinkingViewport.SetContent(m.renderThinkingContent())
-			m.toolViewport.SetContent(m.renderToolContent())
-			m.thinkingViewport.GotoBottom()
-			m.toolViewport.GotoBottom()
-		}
+		incoming := Message(msg)
+		m.AddMessage(incoming)
+		// Only auto-follow the thinking pane when the new message is narrative
+		// (it renders there). A tool row changes only the tool pane, so snapping
+		// the thinking pane to the bottom would needlessly discard the user's
+		// scroll position every time a tool runs.
+		m.refreshPanes(incoming.Role != RoleTool, true)
 		// Continue listening for more messages
 		if m.msgChan != nil {
 			cmds = append(cmds, waitForMessage(m.msgChan))
@@ -670,11 +691,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		if m.viewportReady {
-			m.thinkingViewport.SetContent(m.renderThinkingContent())
-			m.toolViewport.SetContent(m.renderToolContent())
-			m.toolViewport.GotoBottom()
-		}
+		m.refreshPanes(false, true)
 		return m, nil
 
 	case modeUpdateMsg:
@@ -701,11 +718,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if current != "" {
 			m.currentTask = current
 		}
-		if m.viewportReady {
-			m.thinkingViewport.SetContent(m.renderThinkingContent())
-			m.toolViewport.SetContent(m.renderToolContent())
-			m.toolViewport.GotoBottom()
-		}
+		m.refreshPanes(false, true)
 		return m, nil
 
 	case completedTasksUpdateMsg:
@@ -845,7 +858,10 @@ func (m Model) renderThinkingContent() string {
 
 	width := m.thinkingViewport.Width
 	if width < 1 {
-		width = max(m.width-4, 1)
+		// Viewport not sized yet: mirror the left-pane inner width math so the
+		// fallback wraps to the same width the pane will use, not the full row.
+		left, _ := splitPaneWidths(m.width)
+		width = max(left-4, 1)
 	}
 
 	var lines []string
@@ -863,6 +879,13 @@ func (m Model) renderThinkingContent() string {
 	if m.inProgressTools == 0 && !m.completed && !m.hibernating && !m.quitting && !m.timerPaused {
 		dots := strings.Repeat(".", 1+(m.spinnerFrame%3))
 		lines = append(lines, dimStyle.Italic(true).Render("💭 thinking"+dots))
+	}
+
+	// Every current message is a tool row (rendered in the right pane) and the
+	// idle indicator is suppressed: show the placeholder rather than leaving the
+	// pane a blank box.
+	if len(lines) == 0 {
+		return dimStyle.Render("Waiting for activity...")
 	}
 
 	return strings.Join(lines, "\n")
@@ -954,10 +977,9 @@ func (m Model) renderLayout() string {
 	}
 
 	// Split the activity area 2:1 — a wide "thinking" pane and a narrow
-	// "tool use" pane. Each box's outer width plus its rounded border (+2) sums
-	// to m.width so the joined row fills the terminal exactly.
-	leftStyleWidth := max((m.width-4)*2/3, 1)
-	rightStyleWidth := max((m.width-4)-leftStyleWidth, 1)
+	// "tool use" pane (see splitPaneWidths); each box's +2 rounded border makes
+	// the joined row fill the terminal exactly.
+	leftStyleWidth, rightStyleWidth := splitPaneWidths(m.width)
 
 	paneStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
