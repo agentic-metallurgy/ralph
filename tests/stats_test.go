@@ -324,6 +324,14 @@ func TestPricingForModel(t *testing.T) {
 	if p := stats.DefaultPricing; p.Input != 3.00/1_000_000 || p.Output != 15.00/1_000_000 {
 		t.Errorf("default (sonnet) rates = %+v, want input 3/1M, output 15/1M", p)
 	}
+	if p := stats.PricingForModel("claude-haiku-4-5"); p.Input != 1.00/1_000_000 || p.Output != 5.00/1_000_000 ||
+		p.CacheCreation != 1.25/1_000_000 || p.CacheRead != 0.10/1_000_000 {
+		t.Errorf("haiku rates = %+v, want input 1/1M, output 5/1M, cacheWrite 1.25/1M, cacheRead 0.10/1M", p)
+	}
+	if p := stats.PricingForModel("claude-fable-5"); p.Input != 10.00/1_000_000 || p.Output != 50.00/1_000_000 ||
+		p.CacheCreation != 12.50/1_000_000 || p.CacheRead != 1.00/1_000_000 {
+		t.Errorf("fable rates = %+v, want input 10/1M, output 50/1M, cacheWrite 12.50/1M, cacheRead 1.00/1M", p)
+	}
 }
 
 func TestReconcileCost(t *testing.T) {
