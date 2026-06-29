@@ -1147,7 +1147,7 @@ func TestSubagentCostAccumResetsOnNewLoop(t *testing.T) {
 // logic mirroring handleParsedMessage, with optional message-ID deduplication.
 // Returns the final TokenStats snapshot, the expected cost from the result message,
 // and the peak TotalCostUSD seen during the replay (before reconciliation).
-func replayFixture(t *testing.T, fixturePath string, dedup bool) (snap *stats.TokenStats, expectedCost float64, peakCost float64) {
+func replayFixture(t *testing.T, fixturePath string, dedup bool) (snap *stats.Snapshot, expectedCost float64, peakCost float64) {
 	t.Helper()
 	data, err := os.ReadFile(fixturePath)
 	if err != nil {
