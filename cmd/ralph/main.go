@@ -421,6 +421,7 @@ func main() {
 	model.SetLoop(claudeLoop)
 	model.SetTmuxStatusBar(tmuxBar)
 	model.SetGitContext(dbCtx.repo, dbCtx.branch)
+	model.SetPlanFile(cfg.PlanFile)
 
 	// Parse implementation plan for task counts
 	completedTasks, totalTasks := parseTaskCounts(cfg.PlanFile)
@@ -1482,6 +1483,7 @@ func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats, logFile i
 	model.SetLoopProgress(0, cfg.Iterations)
 	model.SetTmuxStatusBar(tmuxBar)
 	model.SetGitContext(dbCtx.repo, dbCtx.branch)
+	model.SetPlanFile(cfg.PlanFile)
 
 	// Parse implementation plan for task counts
 	completedTasks, totalTasks := parseTaskCounts(cfg.PlanFile)
@@ -1824,7 +1826,8 @@ func isNewLoopStart(content string) bool {
 		!strings.Contains(content, "STOPPED") &&
 		!strings.Contains(content, "COMPLETED") &&
 		!strings.Contains(content, "RESUMED") &&
-		!strings.Contains(content, "RETRY")
+		!strings.Contains(content, "RETRY") &&
+		!strings.Contains(content, "RESET")
 }
 
 // isRetryLoopStart returns true when the loop marker indicates a hibernate retry

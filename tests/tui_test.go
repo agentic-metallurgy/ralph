@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1760,3 +1761,184 @@ func TestRoleLoopStoppedStyle(t *testing.T) {
 		t.Error("Style for RoleLoopStopped rendered empty string")
 	}
 }
+
+// TestDeletePlanHotkeyOpensModal tests that pressing 'D' opens the confirmation
+// modal and the view shows the confirmation prompt.
+func TestDeletePlanHotkeyOpensModal(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Press 'D' to open the modal
+	keyD := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}}
+	model, _ = updateModel(model, keyD)
+
+	// View should contain the confirmation text
+	view := model.View()
+	if !strings.Contains(view, "Delete IMPLEMENTATION_PLAN.md?") {
+		t.Error("View should show delete-plan confirmation modal after pressing 'D'")
+	}
+}
+
+// TestDeletePlanModalCancel tests that pressing 'n' closes the modal without
+// deleting anything or resetting the loop.
+func TestDeletePlanModalCancel(t *testing.T) {
+	// Create a temp plan file
+	tmpDir := t.TempDir()
+	planPath := filepath.Join(tmpDir, "IMPLEMENTATION_PLAN.md")
+	os.WriteFile(planPath, []byte("# Plan\n## TASK 1: Test\n**Status: TODO**\n"), 0644)
+
+	cfg := loop.Config{
+		Iterations:     100,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+	l := loop.New(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	model := tui.NewModel()
+	model.SetLoop(l)
+	model.SetPlanFile(planPath)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Drain loop output
+	go func() {
+		for range l.Output() {
+		}
+	}()
+	l.Start(ctx)
+	time.Sleep(50 * time.Millisecond)
+
+	// Open modal
+	keyD := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}}
+	model, _ = updateModel(model, keyD)
+
+	// Cancel with 'n'
+	keyN := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}
+	model, _ = updateModel(model, keyN)
+
+	// View should NOT contain the modal anymore
+	view := model.View()
+	if strings.Contains(view, "Delete IMPLEMENTATION_PLAN.md?") {
+		t.Error("Modal should be closed after pressing 'n'")
+	}
+
+	// Plan file should still exist
+	if _, err := os.Stat(planPath); err != nil {
+		t.Error("Plan file should still exist after canceling delete")
+	}
+}
+
+// TestDeletePlanModalConfirm tests that pressing 'y' deletes the plan file and
+// calls Reset() on the loop.
+func TestDeletePlanModalConfirm(t *testing.T) {
+	// Create a temp plan file
+	tmpDir := t.TempDir()
+	planPath := filepath.Join(tmpDir, "IMPLEMENTATION_PLAN.md")
+	os.WriteFile(planPath, []byte("# Plan\n## TASK 1: Test\n**Status: TODO**\n"), 0644)
+
+	cfg := loop.Config{
+		Iterations:     100,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+	l := loop.New(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	model := tui.NewModel()
+	model.SetLoop(l)
+	model.SetPlanFile(planPath)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Drain loop output
+	go func() {
+		for range l.Output() {
+		}
+	}()
+	l.Start(ctx)
+	time.Sleep(50 * time.Millisecond)
+
+	// Open modal
+	keyD := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}}
+	model, _ = updateModel(model, keyD)
+
+	// Confirm with 'y'
+	keyY := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}}
+	model, _ = updateModel(model, keyY)
+
+	// Plan file should be deleted
+	if _, err := os.Stat(planPath); !os.IsNotExist(err) {
+		t.Error("Plan file should be deleted after confirming with 'y'")
+	}
+
+	// Modal should be closed
+	view := model.View()
+	if strings.Contains(view, "Delete IMPLEMENTATION_PLAN.md?") {
+		t.Error("Modal should be closed after confirming with 'y'")
+	}
+}
+
+// TestDeletePlanModalBlocksOtherKeys tests that when the modal is open, normal
+// hotkeys like 'p' and 'r' are ignored.
+func TestDeletePlanModalBlocksOtherKeys(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Open modal
+	keyD := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}}
+	model, _ = updateModel(model, keyD)
+
+	// Press 'p' — should be ignored (modal stays open)
+	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
+	model, _ = updateModel(model, keyP)
+
+	view := model.View()
+	if !strings.Contains(view, "Delete IMPLEMENTATION_PLAN.md?") {
+		t.Error("Modal should still be open after pressing 'p' (ignored while modal is active)")
+	}
+
+	// Press 'r' — should also be ignored
+	keyR := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
+	model, _ = updateModel(model, keyR)
+
+	view = model.View()
+	if !strings.Contains(view, "Delete IMPLEMENTATION_PLAN.md?") {
+		t.Error("Modal should still be open after pressing 'r' (ignored while modal is active)")
+	}
+}
+
+// TestDeletePlanModalQuitStillWorks tests that 'q' / ctrl+c still quits even
+// when the modal is open.
+func TestDeletePlanModalQuitStillWorks(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Open modal
+	keyD := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}}
+	model, _ = updateModel(model, keyD)
+
+	// Press 'q' — should quit
+	keyQ := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}
+	model, _ = updateModel(model, keyQ)
+
+	view := model.View()
+	if view != "Goodbye!\n" {
+		t.Error("Pressing 'q' from the modal should quit the application")
+	}
+}
+
+// TestDeletePlanHotkeyInHotkeyBar tests that the (D)elete plan hotkey hint
+// appears in the footer.
+func TestDeletePlanHotkeyInHotkeyBar(t *testing.T) {
+	model := tui.NewModel()
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	view := model.View()
+	if !strings.Contains(view, "(D)") {
+		t.Error("Footer hotkey bar should show (D)elete plan hint")
+	}
+}
+

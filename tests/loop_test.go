@@ -2183,3 +2183,267 @@ func TestHibernateRetryEmitsRetryMarker(t *testing.T) {
 		t.Error("Expected a normal LOOP marker after the RETRY marker (second iteration)")
 	}
 }
+
+// TestResetMidExecutionRestartFromIteration1 verifies that calling Reset()
+// while an iteration is executing interrupts it and restarts from iteration 1
+// with a LOOP RESET marker followed by a fresh LOOP 1/N marker.
+func TestResetMidExecutionRestartFromIteration1(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     3,
+		Prompt:         "test",
+		CommandBuilder: mockMediumSlowCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for the first iteration to start executing (system message means
+	// the claude process is running)
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"type":"system"`) {
+			break
+		}
+	}
+
+	// Reset mid-execution (medium-slow mock sleeps 200ms after system message)
+	l.Reset()
+
+	// We should see a LOOP RESET marker, then a fresh LOOP 1/3 marker
+	resetMarkerFound := false
+	firstIterationAfterReset := -1
+	for msg := range output {
+		if msg.Type == "loop_marker" {
+			if strings.Contains(msg.Content, "RESET") {
+				resetMarkerFound = true
+			} else if resetMarkerFound && strings.Contains(msg.Content, "/") {
+				firstIterationAfterReset = msg.Loop
+				break
+			}
+		}
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+
+	if !resetMarkerFound {
+		t.Error("Expected a LOOP RESET marker after Reset()")
+	}
+	if firstIterationAfterReset != 1 {
+		t.Errorf("Expected first iteration after reset to be 1, got %d", firstIterationAfterReset)
+	}
+
+	// Drain remaining messages
+	for msg := range output {
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+}
+
+// TestResetFromPausedState verifies that Reset() works when the loop is paused.
+// The loop should wake from pause and restart from iteration 1.
+func TestResetFromPausedState(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     3,
+		Prompt:         "test",
+		CommandBuilder: mockMediumSlowCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for the first iteration to start, then pause mid-execution
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"type":"system"`) {
+			break
+		}
+	}
+	l.Pause()
+
+	// Wait for STOPPED marker
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "STOPPED") {
+			break
+		}
+	}
+
+	// Now reset from paused state
+	l.Reset()
+
+	// Should see RESET marker then LOOP 1/3
+	resetMarkerFound := false
+	firstIterationAfterReset := -1
+	for msg := range output {
+		if msg.Type == "loop_marker" {
+			if strings.Contains(msg.Content, "RESET") {
+				resetMarkerFound = true
+			} else if resetMarkerFound && strings.Contains(msg.Content, "/") {
+				firstIterationAfterReset = msg.Loop
+				break
+			}
+		}
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+
+	if !resetMarkerFound {
+		t.Error("Expected a LOOP RESET marker after Reset() from paused state")
+	}
+	if firstIterationAfterReset != 1 {
+		t.Errorf("Expected first iteration after reset to be 1, got %d", firstIterationAfterReset)
+	}
+
+	// Drain
+	for msg := range output {
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+}
+
+// TestResetFromCompletedWaiting verifies that Reset() works when the loop has
+// completed all iterations and is waiting for more. The loop should restart
+// from iteration 1.
+func TestResetFromCompletedWaiting(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     2,
+		Prompt:         "test",
+		CommandBuilder: mockCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for completion
+	for msg := range output {
+		if msg.Type == "complete" {
+			break
+		}
+	}
+
+	// Verify the loop is in completed-waiting state
+	if !l.IsCompletedWaiting() {
+		t.Fatal("Expected loop to be in completed-waiting state after all iterations")
+	}
+
+	// Reset from completed-waiting
+	l.Reset()
+
+	// Should see RESET marker then LOOP 1/2
+	resetMarkerFound := false
+	firstIterationAfterReset := -1
+	for msg := range output {
+		if msg.Type == "loop_marker" {
+			if strings.Contains(msg.Content, "RESET") {
+				resetMarkerFound = true
+			} else if resetMarkerFound && strings.Contains(msg.Content, "/") {
+				firstIterationAfterReset = msg.Loop
+				break
+			}
+		}
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+
+	if !resetMarkerFound {
+		t.Error("Expected a LOOP RESET marker after Reset() from completed-waiting")
+	}
+	if firstIterationAfterReset != 1 {
+		t.Errorf("Expected first iteration after reset to be 1, got %d", firstIterationAfterReset)
+	}
+
+	// Drain
+	for msg := range output {
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+}
+
+// TestResetClearsResumeSessionID verifies that after Reset(), the next iteration
+// does NOT use --resume (the session starts fresh).
+func TestResetClearsResumeSessionID(t *testing.T) {
+	cfg := loop.Config{
+		Iterations:     3,
+		Prompt:         "test",
+		CommandBuilder: mockMediumSlowCommandBuilder,
+		SleepDuration:  10 * time.Millisecond,
+	}
+
+	l := loop.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	l.Start(ctx)
+	output := l.Output()
+
+	// Wait for the first iteration to start executing
+	for msg := range output {
+		if msg.Type == "output" && strings.Contains(msg.Content, `"type":"system"`) {
+			break
+		}
+	}
+
+	// Pause to capture a session ID for resume
+	l.Pause()
+	for msg := range output {
+		if msg.Type == "loop_marker" && strings.Contains(msg.Content, "STOPPED") {
+			break
+		}
+	}
+
+	// The loop should have captured a resumeSessionID
+	// Now reset instead of resuming
+	l.Reset()
+
+	// Collect output messages after reset — verify session is "fresh-session-001"
+	// (not a resumed session), proving --resume was NOT used
+	resetMarkerFound := false
+	freshSessionFound := false
+	for msg := range output {
+		if msg.Type == "loop_marker" {
+			if strings.Contains(msg.Content, "RESET") {
+				resetMarkerFound = true
+			}
+		}
+		if msg.Type == "output" && resetMarkerFound {
+			if strings.Contains(msg.Content, "fresh-session-001") {
+				freshSessionFound = true
+				cancel()
+				break
+			}
+		}
+		if msg.Type == "complete" {
+			cancel()
+		}
+	}
+
+	if !resetMarkerFound {
+		t.Error("Expected a LOOP RESET marker")
+	}
+	if !freshSessionFound {
+		t.Error("Expected fresh session after Reset() (no --resume), but did not find fresh-session-001")
+	}
+
+	// Drain
+	for range output {
+	}
+}
+
