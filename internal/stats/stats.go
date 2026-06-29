@@ -15,31 +15,31 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// tokenCounters is the single canonical list of token/cost counters. It is
+// embedded by both the lock-guarded TokenStats and the lock-free Snapshot, so a
+// new counter added here automatically flows to every snapshot consumer instead
+// of having to be repeated across three separate field lists.
+type tokenCounters struct {
+	InputTokens         int64   `json:"input_tokens"`
+	OutputTokens        int64   `json:"output_tokens"`
+	CacheCreationTokens int64   `json:"cache_creation_tokens"`
+	CacheReadTokens     int64   `json:"cache_read_tokens"`
+	TotalCostUSD        float64 `json:"total_cost"`
+	TotalTokensCount    int64   `json:"total_tokens"`
+	TotalElapsedNs      int64   `json:"elapsed_ns"`
+}
+
 // TokenStats tracks token usage and costs.
 // All mutating methods are protected by a sync.RWMutex for concurrent access
 // from the processLoopOutput goroutine (writer) and the BubbleTea TUI goroutine (reader).
 type TokenStats struct {
-	mu                  sync.RWMutex `json:"-"`
-	InputTokens         int64        `json:"input_tokens"`
-	OutputTokens        int64        `json:"output_tokens"`
-	CacheCreationTokens int64        `json:"cache_creation_tokens"`
-	CacheReadTokens     int64        `json:"cache_read_tokens"`
-	TotalCostUSD        float64      `json:"total_cost"`
-	TotalTokensCount    int64        `json:"total_tokens"`
-	TotalElapsedNs      int64        `json:"elapsed_ns"`
+	mu sync.RWMutex `json:"-"`
+	tokenCounters
 }
 
 // NewTokenStats creates a new empty TokenStats instance
 func NewTokenStats() *TokenStats {
-	return &TokenStats{
-		InputTokens:         0,
-		OutputTokens:        0,
-		CacheCreationTokens: 0,
-		CacheReadTokens:     0,
-		TotalCostUSD:        0.0,
-		TotalTokensCount:    0,
-		TotalElapsedNs:      0,
-	}
+	return &TokenStats{}
 }
 
 // AddUsage adds token usage counts to the stats
@@ -53,20 +53,64 @@ func (t *TokenStats) AddUsage(input, output, cacheCreation, cacheRead int64) {
 	t.TotalTokensCount = t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens
 }
 
-// Pricing constants for Claude Sonnet 4 (per token)
-const (
-	PriceInputPerToken         = 3.00 / 1_000_000
-	PriceOutputPerToken        = 15.00 / 1_000_000
-	PriceCacheCreationPerToken = 3.75 / 1_000_000
-	PriceCacheReadPerToken     = 0.30 / 1_000_000
+// ModelPricing holds per-token USD list prices for a Claude model tier.
+// CacheCreation uses the 5-minute cache-write rate (1.25x input); CacheRead is
+// the cache-read rate (0.1x input). The Claude CLI usage stream reports a single
+// cache_creation_input_tokens figure with no TTL breakdown, so the 5-minute rate
+// is used for the estimate (matching behavior from before pricing was model-aware).
+type ModelPricing struct {
+	Input         float64
+	Output        float64
+	CacheCreation float64
+	CacheRead     float64
+}
+
+// Per-token price sets by model tier (list prices, USD per token) for the
+// current model generation: Opus 4.5+ at $5/$25, Sonnet 4.x at $3/$15.
+// PricingForModel matches by tier substring rather than exact ID so new point
+// releases within a tier need no code change. Older Opus (4.0/4.1, listed at
+// $15/$75) would be under-estimated, but those aren't current-gen and any
+// estimate reconciles to the CLI's actual cost once a result arrives.
+var (
+	pricingOpus   = ModelPricing{5.00 / 1_000_000, 25.00 / 1_000_000, 6.25 / 1_000_000, 0.50 / 1_000_000}
+	pricingSonnet = ModelPricing{3.00 / 1_000_000, 15.00 / 1_000_000, 3.75 / 1_000_000, 0.30 / 1_000_000}
+	pricingHaiku  = ModelPricing{1.00 / 1_000_000, 5.00 / 1_000_000, 1.25 / 1_000_000, 0.10 / 1_000_000}
+	pricingFable  = ModelPricing{10.00 / 1_000_000, 50.00 / 1_000_000, 12.50 / 1_000_000, 1.00 / 1_000_000}
 )
 
-// EstimateCostFromTokens computes estimated cost from token counts using hardcoded pricing
-func EstimateCostFromTokens(input, output, cacheCreation, cacheRead int64) float64 {
-	return float64(input)*PriceInputPerToken +
-		float64(output)*PriceOutputPerToken +
-		float64(cacheCreation)*PriceCacheCreationPerToken +
-		float64(cacheRead)*PriceCacheReadPerToken
+// DefaultPricing is used when the model identifier is empty or unrecognized.
+// It mirrors Claude Sonnet rates, preserving the behavior from before pricing
+// was made model-aware.
+var DefaultPricing = pricingSonnet
+
+// PricingForModel returns the price set for a Claude model identifier (e.g.
+// "claude-opus-4-8"), matching by tier substring. Empty or unrecognized
+// identifiers fall back to DefaultPricing.
+func PricingForModel(model string) ModelPricing {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "opus"):
+		return pricingOpus
+	case strings.Contains(m, "sonnet"):
+		return pricingSonnet
+	case strings.Contains(m, "haiku"):
+		return pricingHaiku
+	case strings.Contains(m, "fable"):
+		return pricingFable
+	default:
+		return DefaultPricing
+	}
+}
+
+// EstimateCostFromTokens computes estimated cost from token counts using the
+// price set for the given model. An empty or unrecognized model uses
+// DefaultPricing.
+func EstimateCostFromTokens(model string, input, output, cacheCreation, cacheRead int64) float64 {
+	p := PricingForModel(model)
+	return float64(input)*p.Input +
+		float64(output)*p.Output +
+		float64(cacheCreation)*p.CacheCreation +
+		float64(cacheRead)*p.CacheRead
 }
 
 // AddCost adds cost to the total cost
@@ -99,20 +143,22 @@ func (t *TokenStats) SetTotalElapsedNs(ns int64) {
 	t.TotalElapsedNs = ns
 }
 
-// Snapshot returns a consistent point-in-time copy of the stats for reading.
-// The returned value has a fresh (zero) mutex and can be read without locking.
-func (t *TokenStats) Snapshot() TokenStats {
+// Snapshot is an immutable, lock-free point-in-time copy of a TokenStats's
+// counters. It deliberately carries no mutex, so callers may copy it freely —
+// store it in a struct field, pass it by value, or hand it to a fmt verb —
+// without copying a lock (which go vet's copylocks check forbids).
+type Snapshot struct {
+	tokenCounters
+}
+
+// Snapshot returns a consistent point-in-time copy of the stats for reading
+// without holding the lock.
+func (t *TokenStats) Snapshot() Snapshot {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return TokenStats{
-		InputTokens:         t.InputTokens,
-		OutputTokens:        t.OutputTokens,
-		CacheCreationTokens: t.CacheCreationTokens,
-		CacheReadTokens:     t.CacheReadTokens,
-		TotalCostUSD:        t.TotalCostUSD,
-		TotalTokensCount:    t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens,
-		TotalElapsedNs:      t.TotalElapsedNs,
-	}
+	c := t.tokenCounters
+	c.TotalTokensCount = c.InputTokens + c.OutputTokens + c.CacheCreationTokens + c.CacheReadTokens
+	return Snapshot{tokenCounters: c}
 }
 
 // FormatTokens formats a token count into a human-readable string

@@ -62,9 +62,9 @@ type loopTracker struct {
 	currentLoopID   string
 	loopStartTime   time.Time
 	loopStartCost   float64
-	loopStartSnap   stats.TokenStats
+	loopStartSnap   stats.Snapshot
 	lastFlushedCost float64
-	lastFlushedSnap stats.TokenStats
+	lastFlushedSnap stats.Snapshot
 }
 
 // expandDBPath returns the full path to the stats database (~/.ralph/ralph.db).
@@ -770,6 +770,7 @@ func handleParsedMessage(
 			)
 			// Estimate cost from token counts and update in real-time
 			estimate := stats.EstimateCostFromTokens(
+				jsonParser.GetModel(parsed),
 				usage.InputTokens,
 				usage.OutputTokens,
 				usage.CacheCreationInputTokens,
@@ -1005,6 +1006,7 @@ func handleParsedMessageCLI(
 			)
 			// Estimate cost from token counts and update in real-time
 			estimate := stats.EstimateCostFromTokens(
+				jsonParser.GetModel(parsed),
 				usage.InputTokens,
 				usage.OutputTokens,
 				usage.CacheCreationInputTokens,

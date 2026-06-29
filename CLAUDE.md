@@ -2,6 +2,7 @@
 
 ## Build & Test
 - Build: `go build -o ralph ./cmd/ralph`
+- Vet: `go vet ./...` (must be clean)
 - Test all: `go test -v ./tests/ ./cmd/ralph/`
 - Test single: `go test -v -run TestName ./tests/`
 - Test main: `go test -v ./cmd/ralph/`
