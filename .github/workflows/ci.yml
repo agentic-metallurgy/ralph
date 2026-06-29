@@ -11,6 +11,11 @@ on:
 permissions:
   contents: write
 
+env:
+  # Single source of truth: pins both the engine image tag the cache is keyed
+  # on and the CLI version the dagger action installs, so they can't drift apart.
+  DAGGER_VERSION: "0.20.0"
+
 jobs:
   test:
     name: Run Tests
@@ -19,11 +24,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Cache the dagger engine image so `dagger call` doesn't pull it from
+      # registry.dagger.io on every run. dagger checks for the image locally
+      # first (docker image inspect), so a docker-load on a cache hit skips the
+      # network pull entirely. Keyed on the version, so the tarball is written
+      # once per DAGGER_VERSION and reused until it's bumped.
+      - name: Cache dagger engine image
+        uses: actions/cache@v4
+        with:
+          path: /tmp/dagger-engine.tar
+          key: dagger-engine-v${{ env.DAGGER_VERSION }}
+
+      - name: Load (or pull + save) dagger engine image
+        run: |
+          set -euo pipefail
+          IMG="registry.dagger.io/engine:v${DAGGER_VERSION}"
+          if [ -f /tmp/dagger-engine.tar ]; then
+            echo "cache hit: loading $IMG"
+            docker load -i /tmp/dagger-engine.tar
+          else
+            echo "cache miss: pulling $IMG (with retry)"
+            for i in 1 2 3; do
+              docker pull "$IMG" && break || { echo "pull failed (attempt $i)"; sleep $((i * 5)); }
+            done
+            docker save -o /tmp/dagger-engine.tar "$IMG"
+          fi
+
       - name: Run Tests with Coverage
         id: test
         uses: dagger/dagger-for-github@v8.3.0
         with:
-          version: "0.20.0"
+          version: ${{ env.DAGGER_VERSION }}
           verb: call
           args: test-with-coverage --source=.
 
@@ -59,10 +90,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Cache the dagger engine image so `dagger call` doesn't pull it from
+      # registry.dagger.io on every run (see the test job for details). The
+      # cache key is shared, so this job reuses the tarball the test job saved.
+      - name: Cache dagger engine image
+        uses: actions/cache@v4
+        with:
+          path: /tmp/dagger-engine.tar
+          key: dagger-engine-v${{ env.DAGGER_VERSION }}
+
+      - name: Load (or pull + save) dagger engine image
+        run: |
+          set -euo pipefail
+          IMG="registry.dagger.io/engine:v${DAGGER_VERSION}"
+          if [ -f /tmp/dagger-engine.tar ]; then
+            echo "cache hit: loading $IMG"
+            docker load -i /tmp/dagger-engine.tar
+          else
+            echo "cache miss: pulling $IMG (with retry)"
+            for i in 1 2 3; do
+              docker pull "$IMG" && break || { echo "pull failed (attempt $i)"; sleep $((i * 5)); }
+            done
+            docker save -o /tmp/dagger-engine.tar "$IMG"
+          fi
+
       - name: Run Integration Tests
         uses: dagger/dagger-for-github@v8.3.0
         with:
-          version: "0.20.0"
+          version: ${{ env.DAGGER_VERSION }}
           verb: call
           args: integration-test --source=.
 
