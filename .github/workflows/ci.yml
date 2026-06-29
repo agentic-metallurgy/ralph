@@ -38,16 +38,30 @@ jobs:
       - name: Load (or pull + save) dagger engine image
         run: |
           set -euo pipefail
-          IMG="registry.dagger.io/engine:v${DAGGER_VERSION}"
+          CANONICAL="registry.dagger.io/engine:v${DAGGER_VERSION}"
+          MIRROR="ghcr.io/dagger/engine:v${DAGGER_VERSION}"
           if [ -f /tmp/dagger-engine.tar ]; then
-            echo "cache hit: loading $IMG"
+            echo "cache hit: loading $CANONICAL"
             docker load -i /tmp/dagger-engine.tar
           else
-            echo "cache miss: pulling $IMG (with retry)"
-            for i in 1 2 3; do
-              docker pull "$IMG" && break || { echo "pull failed (attempt $i)"; sleep $((i * 5)); }
+            # registry.dagger.io is regularly unreachable from GitHub runners —
+            # that's the failure we're working around. ghcr.io/dagger/engine is
+            # dagger's official mirror (byte-identical digest) and, being
+            # GitHub's own registry, is always reachable from runners. Pull the
+            # mirror first, fall back to the canonical registry, each with retry.
+            pulled=""
+            for src in "$MIRROR" "$CANONICAL"; do
+              for i in 1 2 3; do
+                if docker pull "$src"; then pulled="$src"; break; fi
+                echo "pull $src failed (attempt $i)"; sleep $((i * 5))
+              done
+              [ -n "$pulled" ] && break
             done
-            docker save -o /tmp/dagger-engine.tar "$IMG"
+            if [ -z "$pulled" ]; then echo "all engine image sources unreachable"; exit 1; fi
+            # dagger looks for the canonical tag locally before pulling, so make
+            # sure the image exists under that name no matter where we got it.
+            docker tag "$pulled" "$CANONICAL"
+            docker save -o /tmp/dagger-engine.tar "$CANONICAL"
           fi
 
       - name: Run Tests with Coverage
@@ -102,16 +116,30 @@ jobs:
       - name: Load (or pull + save) dagger engine image
         run: |
           set -euo pipefail
-          IMG="registry.dagger.io/engine:v${DAGGER_VERSION}"
+          CANONICAL="registry.dagger.io/engine:v${DAGGER_VERSION}"
+          MIRROR="ghcr.io/dagger/engine:v${DAGGER_VERSION}"
           if [ -f /tmp/dagger-engine.tar ]; then
-            echo "cache hit: loading $IMG"
+            echo "cache hit: loading $CANONICAL"
             docker load -i /tmp/dagger-engine.tar
           else
-            echo "cache miss: pulling $IMG (with retry)"
-            for i in 1 2 3; do
-              docker pull "$IMG" && break || { echo "pull failed (attempt $i)"; sleep $((i * 5)); }
+            # registry.dagger.io is regularly unreachable from GitHub runners —
+            # that's the failure we're working around. ghcr.io/dagger/engine is
+            # dagger's official mirror (byte-identical digest) and, being
+            # GitHub's own registry, is always reachable from runners. Pull the
+            # mirror first, fall back to the canonical registry, each with retry.
+            pulled=""
+            for src in "$MIRROR" "$CANONICAL"; do
+              for i in 1 2 3; do
+                if docker pull "$src"; then pulled="$src"; break; fi
+                echo "pull $src failed (attempt $i)"; sleep $((i * 5))
+              done
+              [ -n "$pulled" ] && break
             done
-            docker save -o /tmp/dagger-engine.tar "$IMG"
+            if [ -z "$pulled" ]; then echo "all engine image sources unreachable"; exit 1; fi
+            # dagger looks for the canonical tag locally before pulling, so make
+            # sure the image exists under that name no matter where we got it.
+            docker tag "$pulled" "$CANONICAL"
+            docker save -o /tmp/dagger-engine.tar "$CANONICAL"
           fi
 
       - name: Run Integration Tests
