@@ -101,6 +101,7 @@ type Loop struct {
 	hibernating      bool               // whether loop is hibernating due to rate limit
 	hibernateUntil   time.Time          // when rate limit resets
 	hibernateCh      chan struct{}      // channel to signal manual wake
+	resetRequested   bool               // whether a reset has been requested (restart from iteration 1)
 }
 
 // New creates a new Loop with the given configuration.
@@ -232,6 +233,57 @@ func (l *Loop) IsHibernating() bool {
 	return l.hibernating
 }
 
+// consumeResetRequest checks whether a reset was requested via Reset().
+// If so, it clears the flag, sends a "LOOP RESET" marker on the output channel,
+// and returns true so the caller can restart from iteration 1.
+func (l *Loop) consumeResetRequest() bool {
+	l.mu.Lock()
+	req := l.resetRequested
+	if req {
+		l.resetRequested = false
+	}
+	l.mu.Unlock()
+	if !req {
+		return false
+	}
+	total := l.GetIterations()
+	l.output <- Message{
+		Type:    "loop_marker",
+		Content: "======= LOOP RESET =======",
+		Loop:    1,
+		Total:   total,
+	}
+	return true
+}
+
+// Reset stops the current iteration and restarts the loop from iteration 1
+// with a fresh session (no --resume). Used when IMPLEMENTATION_PLAN.md is
+// deleted mid-run so the agent re-creates the plan from scratch.
+// Works whether the loop is running, paused, or completed-waiting.
+func (l *Loop) Reset() {
+	l.mu.Lock()
+	l.resetRequested = true
+	l.resumeSessionID = "" // fresh start — no --resume
+	wasPaused := l.paused
+	l.paused = false
+	cw := l.completedWaiting
+	l.mu.Unlock()
+
+	// Cancel current iteration to interrupt it immediately
+	if l.iterationCancel != nil {
+		l.iterationCancel()
+	}
+
+	// If paused or completed-waiting, wake the run goroutine so it can
+	// observe the reset flag and restart from iteration 1.
+	if wasPaused || cw {
+		select {
+		case l.resumeCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
 // GetHibernateUntil returns the time when the hibernate period ends.
 func (l *Loop) GetHibernateUntil() time.Time {
 	l.mu.Lock()
@@ -337,6 +389,12 @@ func (l *Loop) run(ctx context.Context) {
 				}
 			}
 
+			// Check if a reset was requested (covers resume from first pause)
+			if l.consumeResetRequest() {
+				i = 0 // for loop will increment to 1
+				continue
+			}
+
 			// Send loop marker
 			total := l.GetIterations()
 			markerContent := fmt.Sprintf("======= LOOP %d/%d =======", i, total)
@@ -423,6 +481,12 @@ func (l *Loop) run(ctx context.Context) {
 				continue
 			}
 
+			// Check if a reset was requested (covers interrupt during execution)
+			if l.consumeResetRequest() {
+				i = 0 // for loop will increment to 1
+				continue
+			}
+
 			if err != nil {
 				total := l.GetIterations()
 				l.output <- Message{
@@ -468,6 +532,12 @@ func (l *Loop) run(ctx context.Context) {
 			l.mu.Lock()
 			l.completedWaiting = false
 			l.mu.Unlock()
+		}
+
+		// Check if a reset was requested (covers completed-waiting state)
+		if l.consumeResetRequest() {
+			i = 1 // restart from iteration 1
+			continue
 		}
 
 		// Check if new iterations were actually added

@@ -277,6 +277,7 @@ func TestHandleLoopMarkerReturnsTrue(t *testing.T) {
 		{"======= RESUMED =======", false},
 		{"======= LOOP 1/5 (RETRY) =======", false},
 		{"======= LOOP 3/5 (RETRY) =======", false},
+		{"======= LOOP RESET =======", false},
 	}
 
 	for _, tt := range tests {
