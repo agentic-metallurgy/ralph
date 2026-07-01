@@ -1387,8 +1387,12 @@ func TestCurrentTaskDisplayedInFooter(t *testing.T) {
 	if !strings.Contains(view, "Current Task:") {
 		t.Error("View should contain 'Current Task:' label")
 	}
-	if !strings.Contains(view, "#6 Refactor config") {
-		t.Error("View should display the current task text")
+	// The quarter-width Task Progress panel word-wraps the task text, so
+	// assert the segments rather than one contiguous line.
+	for _, segment := range []string{"#6 Refactor", "config"} {
+		if !strings.Contains(view, segment) {
+			t.Errorf("View should display the current task text segment %q", segment)
+		}
 	}
 }
 

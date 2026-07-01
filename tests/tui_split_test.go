@@ -37,7 +37,7 @@ func TestSplit_ThinkingWrappedToFullLength(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// ~280 chars: comfortably wider than the ~73-col left pane, so it must wrap
+	// ~280 chars: comfortably wider than the ~54-col left pane, so it must wrap
 	// to several lines for the tail to be visible.
 	middle := strings.Repeat("reasoning step and more detail ", 8)
 	content := "THINK_HEAD " + middle + "THINK_TAIL_SENTINEL"

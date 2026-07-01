@@ -241,8 +241,8 @@ type Model struct {
 	loopBaseElapsed   time.Duration // per-loop elapsed from before pause within same loop
 	loopTimerPaused   bool          // whether per-loop timer is paused
 	loopPausedElapsed time.Duration // per-loop elapsed at time of pause
-	thinkingViewport  viewport.Model // left pane (2:1): thinking/assistant narrative, word-wrapped
-	toolViewport      viewport.Model // right pane (1:1): tool-use rows + plan panel
+	thinkingViewport  viewport.Model // left half of the 1:1 split: thinking/assistant narrative, word-wrapped
+	toolViewport      viewport.Model // right half of the 1:1 split: tool-use rows + plan panel
 	activityHeight    int
 	footerHeight      int
 	msgChan           <-chan Message
@@ -271,7 +271,7 @@ func NewModel() Model {
 		startTime:      now,
 		loopStartTime:  now,
 		activityHeight: 0,
-		footerHeight:   11,
+		footerHeight:   8,
 	}
 }
 
@@ -472,12 +472,12 @@ func waitForDone(ch <-chan struct{}) tea.Cmd {
 	}
 }
 
-// splitPaneWidths divides the activity row into a 2:1 (thinking : tool) split.
+// splitPaneWidths divides the activity row into a 1:1 (thinking : tool) split.
 // Each returned outer width gets a +2 rounded border when rendered, so
 // left + right + 4 == width and the joined row fills the terminal exactly. Both
 // are floored at 1 so a tiny terminal can't produce a zero/negative dimension.
 func splitPaneWidths(width int) (left, right int) {
-	left = max((width-4)*2/3, 1)
+	left = max((width-4)/2, 1)
 	right = max((width-4)-left, 1)
 	return left, right
 }
@@ -518,8 +518,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Split the activity area 2:1 — a wide "thinking" pane and a narrow
-		// "tool use" pane (see splitPaneWidths). The inner viewport width is the
+		// Split the activity area 1:1 — a "thinking" pane and a "tool use"
+		// pane (see splitPaneWidths). The inner viewport width is the
 		// box width minus its rounded border (+2) and horizontal padding (+2).
 		leftStyleWidth, rightStyleWidth := splitPaneWidths(m.width)
 		leftVpWidth := max(leftStyleWidth-4, 1)
@@ -844,7 +844,7 @@ func renderNarrativeLine(msg Message, width int) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, gutter, body)
 }
 
-// renderThinkingContent renders the left (2/3) pane: the thinking/assistant
+// renderThinkingContent renders the left pane: the thinking/assistant
 // narrative — every non-tool message word-wrapped to the pane width — plus the
 // idle "thinking…" indicator. Tool-use rows live in the right pane instead.
 func (m Model) renderThinkingContent() string {
@@ -891,7 +891,7 @@ func (m Model) renderThinkingContent() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderToolContent renders the right (1/3) pane: the agent's plan panel pinned
+// renderToolContent renders the right pane: the agent's plan panel pinned
 // at the top followed by the tool-use rows, each rendered exactly as before the
 // split (status glyph + kind icon + title + dim elapsed time).
 func (m Model) renderToolContent() string {
@@ -976,9 +976,9 @@ func (m Model) renderLayout() string {
 		statusText = "STOPPED"
 	}
 
-	// Split the activity area 2:1 — a wide "thinking" pane and a narrow
-	// "tool use" pane (see splitPaneWidths); each box's +2 rounded border makes
-	// the joined row fill the terminal exactly.
+	// Split the activity area 1:1 — a "thinking" pane and a "tool use" pane
+	// (see splitPaneWidths); each box's +2 rounded border makes the joined row
+	// fill the terminal exactly.
 	leftStyleWidth, rightStyleWidth := splitPaneWidths(m.width)
 
 	paneStyle := lipgloss.NewStyle().
@@ -1017,10 +1017,11 @@ func (m Model) renderLayout() string {
 	)
 }
 
-// renderFooter renders the two-panel footer with hotkey bar
+// renderFooter renders the four-panel footer with hotkey bar
 func (m Model) renderFooter() string {
-	// Calculate panel width (divide by 2, accounting for spacing)
-	panelWidth := (m.width - 6) / 2
+	// Four equal panels; each +2 rounded border makes 4*(panelWidth+2) fill
+	// the terminal width (minus the integer-division remainder).
+	panelWidth := max((m.width-8)/4, 1)
 
 	// Panel styles
 	panelStyle := lipgloss.NewStyle().
@@ -1031,9 +1032,7 @@ func (m Model) renderFooter() string {
 		Height(m.footerHeight - 3) // Leave room for hotkey bar
 
 	labelStyle := lipgloss.NewStyle().
-		Foreground(colorBlue).
-		Align(lipgloss.Right).
-		Width(17)
+		Foreground(colorBlue)
 
 	valueStyle := lipgloss.NewStyle().
 		Foreground(colorLightGray)
@@ -1046,21 +1045,33 @@ func (m Model) renderFooter() string {
 		Bold(true).
 		Foreground(colorPurple)
 
+	// row renders one "Label: value" line. Labels are left-aligned with no
+	// fixed gutter so the quarter-width panels keep as much room as possible
+	// for values; anything longer word-wraps within the panel.
+	row := func(label, value string, vs lipgloss.Style) string {
+		return lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render(label), vs.Render(" "+value))
+	}
+
 	// Take a consistent snapshot of stats for display (avoids races with writer goroutine)
 	snap := m.stats.Snapshot()
 
-	// Usage & Cost panel
-	usageCostContent := lipgloss.JoinVertical(
+	// Token Usage panel
+	tokenUsagePanel := panelStyle.Render(lipgloss.JoinVertical(
 		lipgloss.Left,
-		titleStyle.Render("Usage & Cost"),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Tokens:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(snap.TotalTokensCount)))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Input:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(snap.InputTokens)))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Output:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(snap.OutputTokens)))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Write:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(snap.CacheCreationTokens)))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Cache Read:"), valueStyle.Render(fmt.Sprintf(" %s", stats.FormatTokens(snap.CacheReadTokens)))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Cost:"), costStyle.Render(fmt.Sprintf(" $%.6f", snap.TotalCostUSD))),
-	)
-	usageCostPanel := panelStyle.Render(usageCostContent)
+		titleStyle.Render("Token Usage"),
+		row("Total Tokens:", stats.FormatTokens(snap.TotalTokensCount), valueStyle),
+		row("Input:", stats.FormatTokens(snap.InputTokens), valueStyle),
+		row("Output:", stats.FormatTokens(snap.OutputTokens), valueStyle),
+	))
+
+	// Cache & Cost panel
+	cacheCostPanel := panelStyle.Render(lipgloss.JoinVertical(
+		lipgloss.Left,
+		titleStyle.Render("Cache & Cost"),
+		row("Cache Write:", stats.FormatTokens(snap.CacheCreationTokens), valueStyle),
+		row("Cache Read:", stats.FormatTokens(snap.CacheReadTokens), valueStyle),
+		row("Total Cost:", fmt.Sprintf("$%.6f", snap.TotalCostUSD), costStyle),
+	))
 
 	// Loop Details panel
 	loopDisplay := "#0/0"
@@ -1097,38 +1108,39 @@ func (m Model) renderFooter() string {
 		statusStyle = valueStyle.Foreground(colorRed)
 	}
 
-	// Current Mode display
-	modeDisplay := " -"
-	if m.currentMode != "" {
-		modeDisplay = fmt.Sprintf(" %s", m.currentMode)
-	}
-
-	// Completed Tasks display
-	completedDisplay := fmt.Sprintf(" %d/%d", m.completedTasks, m.totalTasks)
-
-	// Current Task display
-	taskDisplay := " -"
-	if m.currentTask != "" {
-		taskDisplay = fmt.Sprintf(" %s", m.currentTask)
-	}
-
-	loopDetailsContent := lipgloss.JoinVertical(
+	loopDetailsPanel := panelStyle.Render(lipgloss.JoinVertical(
 		lipgloss.Left,
 		titleStyle.Render("Ralph Loop Details"),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Loop:"), valueStyle.Render(fmt.Sprintf(" %s", loopDisplay))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Total Time:"), valueStyle.Render(fmt.Sprintf(" %s", timeDisplay))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Status:"), statusStyle.Render(fmt.Sprintf(" %s", statusText))),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Completed Tasks:"), valueStyle.Render(completedDisplay)),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Task:"), valueStyle.Render(taskDisplay)),
-		lipgloss.JoinHorizontal(lipgloss.Left, labelStyle.Render("Current Mode:"), valueStyle.Render(modeDisplay)),
-	)
-	loopDetailsPanel := panelStyle.Render(loopDetailsContent)
+		row("Loop:", loopDisplay, valueStyle),
+		row("Total Time:", timeDisplay, valueStyle),
+		row("Status:", statusText, statusStyle),
+	))
+
+	// Task Progress panel
+	modeDisplay := "-"
+	if m.currentMode != "" {
+		modeDisplay = m.currentMode
+	}
+	taskDisplay := "-"
+	if m.currentTask != "" {
+		taskDisplay = m.currentTask
+	}
+
+	taskProgressPanel := panelStyle.Render(lipgloss.JoinVertical(
+		lipgloss.Left,
+		titleStyle.Render("Task Progress"),
+		row("Completed Tasks:", fmt.Sprintf("%d/%d", m.completedTasks, m.totalTasks), valueStyle),
+		row("Current Task:", taskDisplay, valueStyle),
+		row("Current Mode:", modeDisplay, valueStyle),
+	))
 
 	// Join panels horizontally
 	panels := lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		usageCostPanel,
+		tokenUsagePanel,
+		cacheCostPanel,
 		loopDetailsPanel,
+		taskProgressPanel,
 	)
 
 	// Hotkey bar
