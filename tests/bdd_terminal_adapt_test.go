@@ -486,8 +486,8 @@ func TestBDD_UserAdaptsToTerminal_ResizeToExactMinimumFromTiny(t *testing.T) {
 	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 40, Height: 15})
 
 	// Then: full layout is shown (not the too-small message)
-	// Note: at 40x15, viewport is only 1 row tall (15 - footerHeight(11) - 2 borders = 2,
-	// vpHeight = max(2-2, 1) = 1), so message content may not fit in the viewport.
+	// Note: at 40x15, viewport is only 3 rows tall (15 - footerHeight(8) - 2 borders = 5,
+	// vpHeight = max(5-2, 1) = 3), so message content may not fit in the viewport.
 	// We verify the layout renders, not that the tiny viewport shows all content.
 	if viewContains(m, "Terminal too small") {
 		t.Error("Should show full layout at exact minimum after resize from tiny")

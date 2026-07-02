@@ -319,13 +319,16 @@ func TestBDD_UserMonitorsBuildProgress_CurrentTaskUpdates(t *testing.T) {
 	// When: task is updated via message
 	m, _ = sendTuiMsg(m, tui.SendTaskUpdate("#6 Refactor config module"))
 
-	// Then: footer shows the task text
+	// Then: footer shows the task text (word-wrapped inside the quarter-width
+	// Task Progress panel, so assert the segments rather than one long line)
 	view := m.View()
 	if !strings.Contains(view, "Current Task:") {
 		t.Errorf("Expected 'Current Task:' label in footer")
 	}
-	if !strings.Contains(view, "#6 Refactor config module") {
-		t.Errorf("Expected task text in footer, got:\n%s", view)
+	for _, segment := range []string{"#6 Refactor", "config module"} {
+		if !strings.Contains(view, segment) {
+			t.Errorf("Expected task text segment %q in footer, got:\n%s", segment, view)
+		}
 	}
 }
 
@@ -425,7 +428,10 @@ func TestBDD_UserMonitorsBuildProgress_FooterFieldOrdering(t *testing.T) {
 	// When: the view is rendered
 	view := m.View()
 
-	// Then: fields appear in the correct order within the Ralph Loop Details panel
+	// Then: fields appear in the correct order within their panels. The footer
+	// panels sit side by side, so the view string interleaves them row by row:
+	// vertical order within a panel means a strictly increasing index, and the
+	// Ralph Loop Details panel sits left of the Task Progress panel.
 	loopIdx := strings.Index(view, "Loop:")
 	timeIdx := strings.Index(view, "Total Time:")
 	statusIdx := strings.Index(view, "Status:")
@@ -439,10 +445,17 @@ func TestBDD_UserMonitorsBuildProgress_FooterFieldOrdering(t *testing.T) {
 			loopIdx, timeIdx, statusIdx, completedIdx, taskIdx, modeIdx)
 	}
 
-	if !(loopIdx < timeIdx && timeIdx < statusIdx &&
-		statusIdx < completedIdx && completedIdx < taskIdx && taskIdx < modeIdx) {
-		t.Errorf("Footer fields not in expected order: Loop@%d < Time@%d < Status@%d < Completed@%d < Task@%d < Mode@%d",
-			loopIdx, timeIdx, statusIdx, completedIdx, taskIdx, modeIdx)
+	if !(loopIdx < timeIdx && timeIdx < statusIdx) {
+		t.Errorf("Ralph Loop Details fields not in vertical order: Loop@%d < Time@%d < Status@%d",
+			loopIdx, timeIdx, statusIdx)
+	}
+	if !(completedIdx < taskIdx && taskIdx < modeIdx) {
+		t.Errorf("Task Progress fields not in vertical order: Completed@%d < Task@%d < Mode@%d",
+			completedIdx, taskIdx, modeIdx)
+	}
+	if !(loopIdx < completedIdx) {
+		t.Errorf("Ralph Loop Details panel should be left of Task Progress panel: Loop@%d < Completed@%d",
+			loopIdx, completedIdx)
 	}
 }
 
