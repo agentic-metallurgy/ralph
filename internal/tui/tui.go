@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -253,6 +254,8 @@ type Model struct {
 	hibernateUntil    time.Time // when rate limit resets
 	repoName          string    // git repo name for tmux status bar
 	branchName        string    // git branch name for tmux status bar
+	planFile          string    // path to the implementation plan file (for delete-and-reset)
+	confirmDeletePlan bool      // whether the delete-plan confirmation modal is open
 }
 
 // NewModel creates and returns a new initialized Model
@@ -313,6 +316,11 @@ func (m *Model) SetTmuxStatusBar(sb tmuxBarUpdater) {
 func (m *Model) SetGitContext(repo, branch string) {
 	m.repoName = repo
 	m.branchName = branch
+}
+
+// SetPlanFile sets the implementation plan file path (used by the delete-and-reset hotkey).
+func (m *Model) SetPlanFile(path string) {
+	m.planFile = path
 }
 
 // SetCompletedTasks sets the completed/total task counts from the implementation plan
@@ -544,6 +552,69 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// When the delete-plan confirmation modal is open, intercept y/n/q.
+		if m.confirmDeletePlan {
+			switch msg.String() {
+			case "y", "Y":
+				m.confirmDeletePlan = false
+				// Delete the plan file if it exists
+				if m.planFile != "" {
+					if _, err := os.Stat(m.planFile); err == nil {
+						os.Remove(m.planFile)
+					}
+				}
+				// Reset the loop so the agent re-creates the plan from scratch
+				if m.loop != nil {
+					m.loop.Reset()
+					// Clear completed state and task tracking
+					m.completed = false
+					m.completedTasks = 0
+					m.totalTasks = 0
+					m.currentTask = ""
+					m.plan = nil
+					// Resume timers since reset restarts execution
+					if m.timerPaused {
+						m.baseElapsed = m.pausedElapsed
+						m.startTime = timeNow()
+						m.timerPaused = false
+					}
+					if m.loopTimerPaused {
+						m.loopBaseElapsed = m.loopPausedElapsed
+						m.loopStartTime = timeNow()
+						m.loopTimerPaused = false
+					}
+				}
+				m.AddMessage(Message{
+					Role:    RoleLoop,
+					Content: "Plan deleted — loop reset to re-create IMPLEMENTATION_PLAN.md",
+				})
+				m.refreshPanes(true, true)
+				return m, nil
+			case "n", "N", "esc":
+				m.confirmDeletePlan = false
+				return m, nil
+			case "q", "ctrl+c":
+				// Allow quit even from the modal
+				if m.stats != nil {
+					var totalElapsed time.Duration
+					if m.timerPaused {
+						totalElapsed = m.pausedElapsed
+					} else {
+						totalElapsed = m.baseElapsed + timeNow().Sub(m.startTime)
+					}
+					m.stats.SetTotalElapsedNs(totalElapsed.Nanoseconds())
+				}
+				if m.tmuxBar != nil {
+					m.tmuxBar.Restore()
+				}
+				m.quitting = true
+				return m, tea.Quit
+			default:
+				// Ignore all other keys while modal is open
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			// Persist total elapsed time to stats before quitting
@@ -629,6 +700,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.totalLoops--
 				m.loop.SetIterations(m.totalLoops)
 			}
+			return m, nil
+		case "D":
+			// Open the delete-plan confirmation modal
+			m.confirmDeletePlan = true
 			return m, nil
 		}
 
@@ -953,7 +1028,45 @@ func (m Model) View() string {
 	}
 
 	// Render the main layout
-	return m.renderLayout()
+	layout := m.renderLayout()
+
+	// Overlay the delete-plan confirmation modal if active
+	if m.confirmDeletePlan {
+		return m.renderDeletePlanModal(layout)
+	}
+
+	return layout
+}
+
+// renderDeletePlanModal overlays a centered y/n confirmation modal on top of the
+// main layout asking the user to confirm deleting the implementation plan file.
+func (m Model) renderDeletePlanModal(layout string) string {
+	modalStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorRed).
+		Padding(1, 2).
+		Background(colorDimGray).
+		Foreground(colorLightGray)
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorRed)
+	hintStyle := lipgloss.NewStyle().Foreground(colorDimGray)
+
+	lines := []string{
+		titleStyle.Render("Delete IMPLEMENTATION_PLAN.md?"),
+		"",
+		"This will delete the plan file and reset the loop",
+		"so the agent re-creates it from scratch.",
+		"",
+		hintStyle.Render("y = confirm   n = cancel"),
+	}
+	modalContent := strings.Join(lines, "\n")
+	modal := modalStyle.Render(modalContent)
+
+	// Center the modal on the terminal
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(colorDimGray),
+	)
 }
 
 // renderLayout creates the full layout with activity panel and footer
@@ -1141,6 +1254,7 @@ func (m Model) renderFooter() string {
 	resumeKey := dimStyle.Render("(r)esume")
 	loopsKey := highlightStyle.Render("(+)/(-)")
 	loopsLabel := highlightStyle.Render(" # of loops")
+	deleteKey := dimStyle.Render("(D)elete plan")
 
 	// Illuminate resume/start depending on state
 	hasPendingLoops := m.completed && m.totalLoops > m.currentLoop
@@ -1159,7 +1273,7 @@ func (m Model) renderFooter() string {
 		Width(m.width - 2).
 		Align(lipgloss.Left).
 		PaddingLeft(1).
-		Render(fmt.Sprintf("%s%s   %s   %s   %s%s", quitKey, quitLabel, resumeKey, pauseKey, loopsKey, loopsLabel))
+		Render(fmt.Sprintf("%s%s   %s   %s   %s%s   %s", quitKey, quitLabel, resumeKey, pauseKey, loopsKey, loopsLabel, deleteKey))
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
