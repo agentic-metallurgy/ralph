@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2477,7 +2478,7 @@ func TestNewCommandBuilder(t *testing.T) {
 			joined := strings.Join(args, " ")
 
 			for _, f := range baseFlags {
-				if !containsArg(args, f) {
+				if !slices.Contains(args, f) {
 					t.Errorf("expected base flag %q in args, got %v", f, args)
 				}
 			}
@@ -2485,26 +2486,17 @@ func TestNewCommandBuilder(t *testing.T) {
 			if got := containsPair(args, "--model", tc.wantModelV); got != tc.wantModel {
 				t.Errorf("--model %q presence = %v, want %v (args: %s)", tc.wantModelV, got, tc.wantModel, joined)
 			}
-			if !tc.wantModel && containsArg(args, "--model") {
+			if !tc.wantModel && slices.Contains(args, "--model") {
 				t.Errorf("did not expect --model in args, got %s", joined)
 			}
 			if got := containsPair(args, "--effort", tc.wantEffortV); got != tc.wantEffort {
 				t.Errorf("--effort %q presence = %v, want %v (args: %s)", tc.wantEffortV, got, tc.wantEffort, joined)
 			}
-			if !tc.wantEffort && containsArg(args, "--effort") {
+			if !tc.wantEffort && slices.Contains(args, "--effort") {
 				t.Errorf("did not expect --effort in args, got %s", joined)
 			}
 		})
 	}
-}
-
-func containsArg(args []string, want string) bool {
-	for _, a := range args {
-		if a == want {
-			return true
-		}
-	}
-	return false
 }
 
 // containsPair reports whether args contains flag immediately followed by value.
