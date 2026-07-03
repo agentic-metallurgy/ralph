@@ -19,16 +19,35 @@ import (
 // This allows for dependency injection in tests.
 type CommandBuilder func(ctx context.Context, prompt string) *exec.Cmd
 
-// DefaultCommandBuilder creates the standard claude CLI command.
+// DefaultCommandBuilder creates the standard claude CLI command with no model
+// or effort override (the claude CLI falls back to its own configured defaults).
 func DefaultCommandBuilder(ctx context.Context, prompt string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "claude",
-		"--print",
-		"--output-format", "stream-json",
-		"--dangerously-skip-permissions",
-		"--verbose",
-	)
-	cmd.Env = isolatedTmuxEnv()
-	return cmd
+	return NewCommandBuilder("", "")(ctx, prompt)
+}
+
+// NewCommandBuilder returns a CommandBuilder that runs the claude CLI, optionally
+// pinning the model and/or effort level. A non-empty model appends `--model
+// <model>` and a non-empty effort appends `--effort <effort>`; these override
+// any model/effort configured in .claude/settings*.json. Empty values are
+// omitted so the CLI keeps its own defaults.
+func NewCommandBuilder(model, effort string) CommandBuilder {
+	return func(ctx context.Context, prompt string) *exec.Cmd {
+		args := []string{
+			"--print",
+			"--output-format", "stream-json",
+			"--dangerously-skip-permissions",
+			"--verbose",
+		}
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		if effort != "" {
+			args = append(args, "--effort", effort)
+		}
+		cmd := exec.CommandContext(ctx, "claude", args...)
+		cmd.Env = isolatedTmuxEnv()
+		return cmd
+	}
 }
 
 // isolatedTmuxEnv returns a copy of the current environment with the inherited
@@ -73,6 +92,8 @@ func isolatedTmuxEnv() []string {
 type Config struct {
 	Iterations     int
 	Prompt         string         // The prompt content to send to Claude
+	Model          string         // Model override passed to `claude --model` (empty = CLI default)
+	Effort         string         // Effort level passed to `claude --effort` (empty = CLI default)
 	CommandBuilder CommandBuilder // Optional custom command builder (for testing)
 	SleepDuration  time.Duration  // Duration to sleep between iterations (default: 1s)
 }
@@ -108,7 +129,7 @@ type Loop struct {
 func New(cfg Config) *Loop {
 	// Set defaults
 	if cfg.CommandBuilder == nil {
-		cfg.CommandBuilder = DefaultCommandBuilder
+		cfg.CommandBuilder = NewCommandBuilder(cfg.Model, cfg.Effort)
 	}
 	if cfg.SleepDuration == 0 {
 		cfg.SleepDuration = 1 * time.Second

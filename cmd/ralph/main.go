@@ -405,6 +405,8 @@ func main() {
 	loopConfig := loop.Config{
 		Iterations: cfg.Iterations,
 		Prompt:     promptContent,
+		Model:      cfg.Model,
+		Effort:     cfg.Effort,
 	}
 
 	// Create the loop
@@ -1121,6 +1123,8 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 	claudeLoop := loop.New(loop.Config{
 		Iterations: cfg.Iterations,
 		Prompt:     promptContent,
+		Model:      cfg.Model,
+		Effort:     cfg.Effort,
 	})
 
 	// Startup budget check — wait until rolling window drops below limit
@@ -1290,6 +1294,8 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 	planLoop := loop.New(loop.Config{
 		Iterations: cfg.Iterations, // Always 1 for plan phase
 		Prompt:     planPromptContent,
+		Model:      cfg.Model,
+		Effort:     cfg.Effort,
 	})
 	planLoop.Start(ctx)
 
@@ -1387,6 +1393,8 @@ planLoop:
 	buildLoop := loop.New(loop.Config{
 		Iterations: cfg.BuildIterations,
 		Prompt:     buildPromptContent,
+		Model:      cfg.Model,
+		Effort:     cfg.Effort,
 	})
 
 	// Set the resume session ID from the plan phase
@@ -1550,6 +1558,8 @@ func runPlanAndBuildPhases(
 	planLoop := loop.New(loop.Config{
 		Iterations: cfg.Iterations, // Always 1 for plan phase
 		Prompt:     planPromptContent,
+		Model:      cfg.Model,
+		Effort:     cfg.Effort,
 	})
 
 	// Update TUI with planning phase and set loop reference for hotkey control
@@ -1585,6 +1595,8 @@ func runPlanAndBuildPhases(
 	buildLoop := loop.New(loop.Config{
 		Iterations: cfg.BuildIterations,
 		Prompt:     buildPromptContent,
+		Model:      cfg.Model,
+		Effort:     cfg.Effort,
 	})
 
 	// Set the resume session ID from the plan phase

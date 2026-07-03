@@ -30,6 +30,8 @@
 
 ## Key Flags
 - `--iterations N` — loop count (default: 5)
+- `--model <model>` — model passed to `claude --model` each iteration (overrides `.claude/settings*.json`; empty = CLI default)
+- `--effort <level>` — effort level passed to `claude --effort` each iteration (overrides `.claude/settings*.json`; empty = CLI default)
 - `--version` — print version and exit
 - `--spec-file` / `--spec-folder` — spec overrides
 - `--loop-prompt` — custom prompt override
