@@ -30,6 +30,8 @@ type Config struct {
 	Goal             string
 	PlanFile         string
 	AutoresearchFile string // path to custom experiment file for autoresearch mode
+	Model            string // model override passed to `claude --model` (empty = CLI default)
+	Effort           string // effort level passed to `claude --effort` (empty = CLI default)
 	ShowPrompt       bool
 	ShowVersion      bool
 	NoTmux           bool
@@ -78,6 +80,8 @@ func ParseFlags() *Config {
 	flag.StringVar(&cfg.LoopPrompt, "loop-prompt", "", "Path to loop prompt override (defaults to embedded prompt.md)")
 	flag.StringVar(&cfg.Goal, "goal", "", "Ultimate goal sentence to guide the agent")
 	flag.StringVar(&cfg.PlanFile, "plan-file", DefaultPlanFile, "Implementation plan filename")
+	flag.StringVar(&cfg.Model, "model", "", "`model` passed to claude --model each iteration (overrides .claude/settings*.json; empty = CLI default)")
+	flag.StringVar(&cfg.Effort, "effort", "", "`level` passed to claude --effort each iteration (overrides .claude/settings*.json; empty = CLI default)")
 	flag.BoolVar(&cfg.ShowPrompt, "show-prompt", false, "Print the embedded loop prompt and exit")
 	flag.BoolVar(&cfg.ShowVersion, "version", false, "Print version and exit")
 	flag.BoolVar(&cfg.NoTmux, "no-tmux", false, "Run without tmux wrapper")

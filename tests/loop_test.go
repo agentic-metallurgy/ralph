@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2447,3 +2448,63 @@ func TestResetClearsResumeSessionID(t *testing.T) {
 	}
 }
 
+// TestNewCommandBuilder verifies that model/effort overrides are appended to the
+// claude CLI args only when non-empty, and that the base flags are always present.
+func TestNewCommandBuilder(t *testing.T) {
+	baseFlags := []string{"--print", "--output-format", "stream-json", "--dangerously-skip-permissions", "--verbose"}
+
+	tests := []struct {
+		name        string
+		model       string
+		effort      string
+		wantModel   bool
+		wantEffort  bool
+		wantModelV  string
+		wantEffortV string
+	}{
+		{name: "no overrides", model: "", effort: ""},
+		{name: "model only", model: "claude-opus-4-8", wantModel: true, wantModelV: "claude-opus-4-8"},
+		{name: "effort only", effort: "high", wantEffort: true, wantEffortV: "high"},
+		{name: "both", model: "claude-sonnet-5", effort: "low", wantModel: true, wantEffort: true, wantModelV: "claude-sonnet-5", wantEffortV: "low"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := loop.NewCommandBuilder(tc.model, tc.effort)
+			cmd := builder(context.Background(), "prompt")
+
+			// args[0] is the command path ("claude"); the rest are flags.
+			args := cmd.Args[1:]
+			joined := strings.Join(args, " ")
+
+			for _, f := range baseFlags {
+				if !slices.Contains(args, f) {
+					t.Errorf("expected base flag %q in args, got %v", f, args)
+				}
+			}
+
+			if got := containsPair(args, "--model", tc.wantModelV); got != tc.wantModel {
+				t.Errorf("--model %q presence = %v, want %v (args: %s)", tc.wantModelV, got, tc.wantModel, joined)
+			}
+			if !tc.wantModel && slices.Contains(args, "--model") {
+				t.Errorf("did not expect --model in args, got %s", joined)
+			}
+			if got := containsPair(args, "--effort", tc.wantEffortV); got != tc.wantEffort {
+				t.Errorf("--effort %q presence = %v, want %v (args: %s)", tc.wantEffortV, got, tc.wantEffort, joined)
+			}
+			if !tc.wantEffort && slices.Contains(args, "--effort") {
+				t.Errorf("did not expect --effort in args, got %s", joined)
+			}
+		})
+	}
+}
+
+// containsPair reports whether args contains flag immediately followed by value.
+func containsPair(args []string, flag, value string) bool {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
