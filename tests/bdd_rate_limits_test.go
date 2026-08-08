@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 // rate-limited: banner display, countdown timer, wake action, hotkey bar
 // changes, and activity feed messages. Covers state transitions, boundary
 // conditions, negative paths, and cross-feature interactions.
-// Organized by user goal following specs/bdd-agent-prompt.md methodology.
+// Organized by user goal: one scenario per user-observable behaviour.
 // ============================================================================
 
 // --- Helpers ---
@@ -544,25 +545,29 @@ func TestBDD_UserHandlesRateLimits_LoopProgressVisibleDuringHibernate(t *testing
 
 // --- Helper ---
 
-// extractFooterSection extracts a substring around a keyword for diagnostic output.
+// extractFooterSection returns a window of view around the first occurrence of
+// keyword, for diagnostic output in test failure messages. The window is sliced
+// by rune, because a rendered view is full of multi-byte box-drawing glyphs that
+// byte offsets would split mid-rune. Returns "" when the keyword is absent,
+// rather than silently returning the start of the view.
 func extractFooterSection(view, keyword string) string {
-	idx := 0
-	for i := range view {
-		if i > 0 && view[i-1:i] == keyword[:1] {
-			// Simple prefix match
-			if len(view) >= i+len(keyword)-1 && view[i-1:i+len(keyword)-1] == keyword {
-				idx = i - 1
-				break
-			}
-		}
+	const context = 20
+
+	byteIdx := strings.Index(view, keyword)
+	if byteIdx < 0 {
+		return ""
 	}
-	start := idx - 20
+
+	runes := []rune(view)
+	idx := len([]rune(view[:byteIdx]))
+
+	start := idx - context
 	if start < 0 {
 		start = 0
 	}
-	end := idx + len(keyword) + 20
-	if end > len(view) {
-		end = len(view)
+	end := idx + len([]rune(keyword)) + context
+	if end > len(runes) {
+		end = len(runes)
 	}
-	return view[start:end]
+	return string(runes[start:end])
 }

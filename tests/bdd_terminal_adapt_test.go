@@ -17,7 +17,7 @@ import (
 // normal, message preservation across resizes, boundary conditions, and
 // pre-init state. Covers state transitions, boundary conditions, negative
 // paths, and cross-feature interactions.
-// Organized by user goal following specs/bdd-agent-prompt.md methodology.
+// Organized by user goal: one scenario per user-observable behaviour.
 // ============================================================================
 
 // --- Scenario 1: Too-small terminal shows warning message ---

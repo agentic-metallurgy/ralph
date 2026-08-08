@@ -17,7 +17,7 @@ import (
 //
 // These tests verify the complete state machine for loop control:
 // pause, resume, add/subtract loops, start after completion, hibernate wake.
-// Organized by user goal following specs/bdd-agent-prompt.md methodology.
+// Organized by user goal: one scenario per user-observable behaviour.
 // ============================================================================
 
 // --- Helpers ---

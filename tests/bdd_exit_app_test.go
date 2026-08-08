@@ -18,7 +18,7 @@ import (
 //
 // These tests verify all exit paths from the TUI: quit via 'q' key, quit via
 // Ctrl+C, elapsed time persistence to stats, and tmux status bar restoration.
-// Organized by user goal following specs/bdd-agent-prompt.md methodology.
+// Organized by user goal: one scenario per user-observable behaviour.
 // ============================================================================
 
 // --- Scenario 1: Quit via 'q' key ---
