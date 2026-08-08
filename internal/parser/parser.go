@@ -375,10 +375,9 @@ func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
 					inputJSON = string(jsonBytes)
 				}
 			}
-			// Truncate to 150 characters like Python version
-			if len(inputJSON) > 150 {
-				inputJSON = inputJSON[:150]
-			}
+			// Keep only a short preview of the input; truncate counts runes so
+			// multibyte UTF-8 is never split mid-rune.
+			inputJSON = truncate(inputJSON, 150)
 			location := ExtractFilePathFromInput(item.Input)
 			kind := ClassifyToolKind(item.Name)
 			content.ToolUses = append(content.ToolUses, ToolUse{
@@ -611,10 +610,7 @@ func ExtractFilePathFromInput(input map[string]interface{}) string {
 	}
 	// Try command (Bash) - truncate to first 50 chars
 	if cmd, ok := input["command"].(string); ok && cmd != "" {
-		if len(cmd) > 50 {
-			return cmd[:50] + "..."
-		}
-		return cmd
+		return truncate(cmd, 50)
 	}
 	// Try description (Task)
 	if desc, ok := input["description"].(string); ok && desc != "" {

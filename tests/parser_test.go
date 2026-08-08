@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cloudosai/ralph-go/internal/parser"
 )
@@ -572,8 +573,103 @@ func TestToolUseTruncation(t *testing.T) {
 		t.Fatalf("Expected 1 tool use, got %d", len(content.ToolUses))
 	}
 
-	if len(content.ToolUses[0].InputJSON) > 150 {
-		t.Errorf("Expected InputJSON to be truncated to 150 chars, got %d", len(content.ToolUses[0].InputJSON))
+	inputJSON := content.ToolUses[0].InputJSON
+	if got := utf8.RuneCountInString(inputJSON); got != 150+len("...") {
+		t.Errorf("Expected InputJSON truncated to 150 runes + ellipsis (%d), got %d runes",
+			150+len("..."), got)
+	}
+	if !strings.HasSuffix(inputJSON, "...") {
+		t.Errorf("Expected truncated InputJSON to end with an ellipsis, got %q", inputJSON)
+	}
+}
+
+// multibyteCommand returns a Bash command whose ASCII prefix is exactly
+// prefixLen characters long, followed by 3-byte CJK runes. Truncating it at any
+// character offset >= prefixLen therefore lands inside a multibyte rune when the
+// cut is made by byte index instead of by rune.
+func multibyteCommand(prefixLen int) string {
+	return strings.Repeat("a", prefixLen) + "日本語のコマンド"
+}
+
+// TestExtractFilePathFromInputRuneSafe guards the Bash-command truncation in
+// ExtractFilePathFromInput against splitting a multibyte rune. The result is
+// user-visible: cmd/ralph/main.go appends it to the tool row shown in the TUI,
+// so a split rune renders as mojibake.
+func TestExtractFilePathFromInputRuneSafe(t *testing.T) {
+	// 48 ASCII chars + CJK puts a 3-byte rune across the 50-character cut.
+	cmd := multibyteCommand(48)
+	got := parser.ExtractFilePathFromInput(map[string]interface{}{"command": cmd})
+
+	if !utf8.ValidString(got) {
+		t.Errorf("Expected valid UTF-8 after truncation, got %q", got)
+	}
+	want := string([]rune(cmd)[:50]) + "..."
+	if got != want {
+		t.Errorf("Expected first 50 runes + ellipsis\n want %q\n  got %q", want, got)
+	}
+	if n := utf8.RuneCountInString(got); n != 53 {
+		t.Errorf("Expected 53 runes (50 + ellipsis), got %d", n)
+	}
+}
+
+// TestToolUseInputJSONRuneSafe guards the 150-character tool-input preview
+// against splitting a multibyte rune.
+func TestToolUseInputJSONRuneSafe(t *testing.T) {
+	p := parser.NewParser()
+
+	// MarshalIndent wraps the command in 19 characters ({\n  "command": "…"\n}),
+	// so a 130-char ASCII prefix followed by CJK puts the 150th character — and
+	// byte offset 150 — inside a 3-byte rune.
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"` +
+		multibyteCommand(130) + `"}}]}}`
+
+	content := p.ExtractContent(p.ParseLine(line))
+	if len(content.ToolUses) != 1 {
+		t.Fatalf("Expected 1 tool use, got %d", len(content.ToolUses))
+	}
+
+	inputJSON := content.ToolUses[0].InputJSON
+	if !utf8.ValidString(inputJSON) {
+		t.Errorf("Expected valid UTF-8 after truncation, got %q", inputJSON)
+	}
+	if n := utf8.RuneCountInString(inputJSON); n != 153 {
+		t.Errorf("Expected 153 runes (150 + ellipsis), got %d", n)
+	}
+}
+
+// TestToolTitleRuneSafe locks in rune-safe truncation for the tool titles built
+// from search patterns, Bash commands, and fetch URLs.
+func TestToolTitleRuneSafe(t *testing.T) {
+	p := parser.NewParser()
+
+	tests := []struct {
+		name     string
+		toolName string
+		key      string
+	}{
+		{"Bash command", "Bash", "command"},
+		{"Grep pattern", "Grep", "pattern"},
+		{"WebFetch url", "WebFetch", "url"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"` +
+				tt.toolName + `","input":{"` + tt.key + `":"` + multibyteCommand(48) + `"}}]}}`
+
+			content := p.ExtractContent(p.ParseLine(line))
+			if len(content.ToolUses) != 1 {
+				t.Fatalf("Expected 1 tool use, got %d", len(content.ToolUses))
+			}
+
+			title := content.ToolUses[0].Title
+			if !utf8.ValidString(title) {
+				t.Errorf("Expected valid UTF-8 title, got %q", title)
+			}
+			if !strings.HasSuffix(title, "...") {
+				t.Errorf("Expected truncated title to end with an ellipsis, got %q", title)
+			}
+		})
 	}
 }
 
