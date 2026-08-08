@@ -1652,23 +1652,31 @@ func TestHibernateRoleStyle(t *testing.T) {
 	}
 }
 
-// TestHibernateMsgUpdate tests that hibernateMsg updates the model's hibernate state
-func TestHibernateMsgUpdate(t *testing.T) {
+// TestHibernateStateFollowsLoop tests that the TUI's rate-limit state is read
+// straight off the loop rather than tracked separately: the same model shows no
+// rate limit before the loop hibernates and shows one immediately after, with no
+// message sent to the TUI in between.
+func TestHibernateStateFollowsLoop(t *testing.T) {
 	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Send hibernate message
-	hibernateUntil := time.Now().Add(5 * time.Minute)
-	hibernateCmd := tui.SendHibernate(hibernateUntil)
-	hibernateMsg := hibernateCmd()
+	// Before: the loop is not hibernating, so nothing claims a rate limit
+	if strings.Contains(model.View(), "RATE LIMITED") {
+		t.Fatal("Precondition: view should not show 'RATE LIMITED' before the loop hibernates")
+	}
 
-	model, _ = updateModel(model, hibernateMsg)
+	// When: the loop hibernates (no TUI message involved)
+	l.Hibernate(time.Now().Add(5 * time.Minute))
 
-	// After tick, the view should update (we can't directly check internal state,
-	// but we can verify the model renders properly)
+	// Then: the very next render picks the state up from the loop
 	view := model.View()
 	if view == "" || view == "Goodbye!\n" {
-		t.Error("Model should render properly after hibernate message")
+		t.Fatalf("Model should still render properly while hibernating, got: %q", view)
+	}
+	if !strings.Contains(view, "RATE LIMITED") {
+		t.Error("View should contain 'RATE LIMITED' once the loop is hibernating")
 	}
 }
 
@@ -1681,11 +1689,6 @@ func TestHibernateDisplayShowsRateLimited(t *testing.T) {
 
 	// Hibernate the loop
 	l.Hibernate(time.Now().Add(5 * time.Minute))
-
-	// Send hibernate message to TUI
-	hibernateCmd := tui.SendHibernate(time.Now().Add(5 * time.Minute))
-	hibernateMsg := hibernateCmd()
-	model, _ = updateModel(model, hibernateMsg)
 
 	view := model.View()
 
@@ -1703,13 +1706,7 @@ func TestHibernateDisplayShowsCountdown(t *testing.T) {
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	// Hibernate for 5 minutes (300 seconds)
-	hibernateUntil := time.Now().Add(5 * time.Minute)
-	l.Hibernate(hibernateUntil)
-
-	// Send hibernate message to TUI
-	hibernateCmd := tui.SendHibernate(hibernateUntil)
-	hibernateMsg := hibernateCmd()
-	model, _ = updateModel(model, hibernateMsg)
+	l.Hibernate(time.Now().Add(5 * time.Minute))
 
 	view := model.View()
 
@@ -1732,11 +1729,6 @@ func TestHibernateRKeyWake(t *testing.T) {
 
 	// Hibernate the loop
 	l.Hibernate(time.Now().Add(10 * time.Second))
-
-	// Send hibernate message to TUI
-	hibernateCmd := tui.SendHibernate(time.Now().Add(10 * time.Second))
-	hibernateMsg := hibernateCmd()
-	model, _ = updateModel(model, hibernateMsg)
 
 	// Verify loop is hibernating
 	if !l.IsHibernating() {
@@ -1764,22 +1756,6 @@ func TestHibernateMessageInActivityFeed(t *testing.T) {
 	// Should show 💤 emoji in activity feed
 	if !strings.Contains(view, "💤") {
 		t.Error("Activity feed should show 💤 emoji for hibernate messages")
-	}
-}
-
-// TestSendHibernateCmd tests the SendHibernate helper function
-func TestSendHibernateCmd(t *testing.T) {
-	until := time.Now().Add(5 * time.Minute)
-	cmd := tui.SendHibernate(until)
-
-	if cmd == nil {
-		t.Error("SendHibernate should return a command")
-	}
-
-	// Execute the command and verify it returns a message
-	result := cmd()
-	if result == nil {
-		t.Error("Command should return a hibernate message")
 	}
 }
 

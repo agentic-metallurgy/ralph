@@ -22,12 +22,12 @@ import (
 // --- Helpers ---
 
 // setupHibernatingModel creates a ready model with a loop in hibernate state.
-// Both loop-level and TUI-level hibernate state are set, matching the real pipeline.
+// The loop is the single source of truth for rate-limit state — the TUI reads it
+// back off the loop on every render — so hibernating the loop is all that is
+// needed to put the whole UI into the rate-limited state.
 func setupHibernatingModel(current, total int, hibernateDuration time.Duration) (tui.Model, *loop.Loop) {
 	m, l := setupReadyModelWithLoop(current, total)
-	until := time.Now().Add(hibernateDuration)
-	l.Hibernate(until)
-	m, _ = sendTuiMsg(m, tui.SendHibernate(until))
+	l.Hibernate(time.Now().Add(hibernateDuration))
 	return m, l
 }
 
@@ -45,20 +45,15 @@ func TestBDD_UserHandlesRateLimits_HibernateShowsRateLimitedBanner(t *testing.T)
 
 func TestBDD_UserHandlesRateLimits_HibernateBannerReplacesRunning(t *testing.T) {
 	// Given: a model that was previously showing RUNNING
-	m, _ := setupReadyModelWithLoop(2, 5)
+	m, l := setupReadyModelWithLoop(2, 5)
 
 	// Precondition: shows RUNNING before hibernate
 	if !viewContains(m, "RUNNING") {
 		t.Fatal("Precondition: should show RUNNING before hibernate")
 	}
 
-	// When: hibernate is triggered
-	until := time.Now().Add(5 * time.Minute)
-	m, _ = sendTuiMsg(m, tui.SendHibernate(until))
-	// Note: we also need the loop to be hibernating for renderLayout to detect it
-	// The view checks m.loop.IsHibernating(), so we need the loop reference
-	// Re-setup with full hibernate state
-	m, _ = setupHibernatingModel(2, 5, 5*time.Minute)
+	// When: hibernate is triggered on the loop the model already holds
+	l.Hibernate(time.Now().Add(5 * time.Minute))
 
 	// Then: RATE LIMITED replaces RUNNING
 	if !viewContains(m, "RATE LIMITED") {
@@ -75,9 +70,7 @@ func TestBDD_UserHandlesRateLimits_HibernateOverridesStoppedDisplay(t *testing.T
 	m, l := setupReadyModelWithLoop(2, 5)
 
 	// Hibernate the loop (this internally sets hibernating=true)
-	until := time.Now().Add(5 * time.Minute)
-	l.Hibernate(until)
-	m, _ = sendTuiMsg(m, tui.SendHibernate(until))
+	l.Hibernate(time.Now().Add(5 * time.Minute))
 
 	// Precondition: view shows RATE LIMITED
 	if !viewContains(m, "RATE LIMITED") {
@@ -141,9 +134,7 @@ func TestBDD_UserHandlesRateLimits_CountdownShowsRateLimitedPrefix(t *testing.T)
 func TestBDD_UserHandlesRateLimits_CountdownAtZeroBoundary(t *testing.T) {
 	// Given: a hibernating loop where the deadline has already passed
 	m, l := setupReadyModelWithLoop(2, 5)
-	past := time.Now().Add(-1 * time.Second)
-	l.Hibernate(past)
-	m, _ = sendTuiMsg(m, tui.SendHibernate(past))
+	l.Hibernate(time.Now().Add(-1 * time.Second))
 
 	// Precondition: view shows RATE LIMITED (loop stays hibernating even if deadline passed)
 	if !viewContains(m, "RATE LIMITED") {
@@ -260,6 +251,54 @@ func TestBDD_UserHandlesRateLimits_SKeyAlsoWakesFromHibernate(t *testing.T) {
 	// Then: RATE LIMITED should be cleared
 	if viewContains(m, "RATE LIMITED") {
 		t.Error("RATE LIMITED should be cleared after 's' key wake")
+	}
+}
+
+// TestBDD_UserHandlesRateLimits_AutoWakeClearsRateLimitedDisplayWithoutKeypress
+//
+// The loop wakes itself once the rate-limit deadline passes — the hibernate
+// branch of the run goroutine in internal/loop/loop.go clears the hibernating
+// flag with no user involvement at all. Calling l.Wake() directly here stands in
+// for that automatic wake.
+//
+// The absence of a keypress is the whole point of this test. While the TUI kept
+// its own copy of the hibernate flag, that copy was only ever cleared by the
+// 'r'/'s' key handler, so every automatic wake left the display stuck: the tmux
+// bar pinned at "RATE LIMITED 💤 00:00" and the 💭 thinking indicator suppressed
+// for the rest of the session. Do NOT send a key anywhere below — the display
+// must recover from the loop's own state change alone.
+func TestBDD_UserHandlesRateLimits_AutoWakeClearsRateLimitedDisplayWithoutKeypress(t *testing.T) {
+	// Given: a hibernating loop whose TUI and tmux bar both show the rate limit
+	m, l := setupHibernatingModel(2, 5, 5*time.Minute)
+	fakeBar := &tui.FakeStatusBarForTest{}
+	m.SetTmuxStatusBar(fakeBar)
+
+	if !viewContains(m, "RATE LIMITED") {
+		t.Fatal("Precondition: view should show RATE LIMITED while hibernating")
+	}
+	m = triggerTick(m)
+	if !strings.Contains(fakeBar.LastContent, "RATE LIMITED") {
+		t.Fatalf("Precondition: tmux bar should show RATE LIMITED while hibernating, got: %q", fakeBar.LastContent)
+	}
+
+	// When: the loop wakes itself because the deadline elapsed — no keypress
+	l.Wake()
+
+	// Then: the banner stops claiming a rate limit
+	if viewContains(m, "RATE LIMITED") {
+		t.Error("View still shows RATE LIMITED after the loop auto-woke — the TUI is holding a stale copy of the hibernate state")
+	}
+
+	// And: the next tick puts normal per-loop stats back on the tmux bar
+	triggerTick(m)
+	if strings.Contains(fakeBar.LastContent, "RATE LIMITED") {
+		t.Errorf("tmux bar still shows RATE LIMITED after the loop auto-woke, got: %q", fakeBar.LastContent)
+	}
+	if !strings.Contains(fakeBar.LastContent, "loop:") {
+		t.Errorf("Expected the 'loop:' stats field back on the tmux bar after auto-wake, got: %q", fakeBar.LastContent)
+	}
+	if !strings.Contains(fakeBar.LastContent, "elapsed:") {
+		t.Errorf("Expected the 'elapsed:' stats field back on the tmux bar after auto-wake, got: %q", fakeBar.LastContent)
 	}
 }
 
@@ -396,9 +435,7 @@ func TestBDD_UserHandlesRateLimits_HibernateDuringCompletedState(t *testing.T) {
 	}
 
 	// When: hibernate is triggered (edge case: rate limit after completion)
-	until := time.Now().Add(3 * time.Minute)
-	l.Hibernate(until)
-	m, _ = sendTuiMsg(m, tui.SendHibernate(until))
+	l.Hibernate(time.Now().Add(3 * time.Minute))
 
 	// Then: COMPLETED takes precedence over RATE LIMITED
 	// (completed is checked first in renderLayout)
@@ -468,21 +505,23 @@ func TestBDD_UserHandlesRateLimits_WakeWhenNotHibernating(t *testing.T) {
 }
 
 func TestBDD_UserHandlesRateLimits_HibernateWithoutLoop(t *testing.T) {
-	// Given: a model with no loop set
+	// Given: a model with no loop set (edge case: the TUI is rendered before the
+	// loop reference has been wired in)
 	m := setupReadyModel()
 
-	// When: hibernate message is sent (edge case: message arrives before loop is set)
-	until := time.Now().Add(5 * time.Minute)
-	m, _ = sendTuiMsg(m, tui.SendHibernate(until))
-
-	// Then: no crash — model renders without RATE LIMITED in the banner
-	// (renderLayout checks m.loop != nil && m.loop.IsHibernating())
+	// Then: the model renders without crashing...
 	view := m.View()
 	if view == "" {
-		t.Error("Expected non-empty view after hibernate message without loop")
+		t.Error("Expected non-empty view for a model with no loop")
 	}
-	// The RATE LIMITED banner requires both TUI state AND loop state
-	// Without a loop, the banner check returns false
+	// ...and is by definition NOT rate-limited: the loop owns that state, so a
+	// model with no loop has nothing that could put it into hibernation.
+	if strings.Contains(view, "RATE LIMITED") {
+		t.Error("A model with no loop must never show 'RATE LIMITED'")
+	}
+	if strings.Contains(view, "Rate Limited") {
+		t.Error("A model with no loop must never show the 'Rate Limited' countdown")
+	}
 }
 
 // --- State transition: Multiple hibernate/wake cycles ---
@@ -493,9 +532,7 @@ func TestBDD_UserHandlesRateLimits_MultipleHibernateWakeCycles(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		// When: hibernate is triggered
-		until := time.Now().Add(5 * time.Minute)
-		l.Hibernate(until)
-		m, _ = sendTuiMsg(m, tui.SendHibernate(until))
+		l.Hibernate(time.Now().Add(5 * time.Minute))
 
 		// Then: shows RATE LIMITED
 		if !viewContains(m, "RATE LIMITED") {
@@ -517,9 +554,7 @@ func TestBDD_UserHandlesRateLimits_HibernateExtendsDeadline(t *testing.T) {
 	m, l := setupHibernatingModel(2, 5, 2*time.Minute)
 
 	// When: a second hibernate extends the deadline to 10 minutes
-	longerUntil := time.Now().Add(10 * time.Minute)
-	l.Hibernate(longerUntil)
-	m, _ = sendTuiMsg(m, tui.SendHibernate(longerUntil))
+	l.Hibernate(time.Now().Add(10 * time.Minute))
 
 	// Then: countdown shows the extended time (~10 minutes)
 	if !viewContains(m, "09:") && !viewContains(m, "10:") {

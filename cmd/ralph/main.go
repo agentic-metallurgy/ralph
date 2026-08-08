@@ -500,7 +500,6 @@ func processLoopOutput(
 
 	// Startup budget check — hibernate before first iteration if budget already exceeded
 	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, claudeLoop); exceeded {
-		program.Send(tui.SendHibernate(nextHour)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr) at startup, pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
@@ -519,7 +518,6 @@ func processLoopOutput(
 		case <-ticker.C:
 			lt.flushDelta(dbCtx, tokenStats)
 			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, claudeLoop); exceeded {
-				program.Send(tui.SendHibernate(nextHour)())
 				msgChan <- tui.Message{
 					Role:    tui.RoleHibernate,
 					Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
@@ -686,7 +684,6 @@ func handleParsedMessage(
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
 		claudeLoop.Hibernate(resetsAt)
-		program.Send(tui.SendHibernate(resetsAt)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("Rate limited until %s", resetsAt.Format(time.Kitchen)),
@@ -707,7 +704,6 @@ func handleParsedMessage(
 		}
 		resetsAt := time.Now().Add(backoffDuration)
 		claudeLoop.Hibernate(resetsAt)
-		program.Send(tui.SendHibernate(resetsAt)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("API overloaded (529), retry %d/%d, hibernating %s until %s", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen)),
@@ -728,7 +724,6 @@ func handleParsedMessage(
 		}
 		resetsAt := time.Now().Add(backoffDuration)
 		claudeLoop.Hibernate(resetsAt)
-		program.Send(tui.SendHibernate(resetsAt)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("API server error (500), retry %d/%d, hibernating %s until %s", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen)),
@@ -1630,7 +1625,6 @@ func processPlanPhase(
 
 	// Startup budget check — hibernate before first iteration if budget already exceeded
 	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, planLoop); exceeded {
-		program.Send(tui.SendHibernate(nextHour)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr) at startup, pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
@@ -1649,7 +1643,6 @@ func processPlanPhase(
 		case <-ticker.C:
 			lt.flushDelta(dbCtx, tokenStats)
 			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, planLoop); exceeded {
-				program.Send(tui.SendHibernate(nextHour)())
 				msgChan <- tui.Message{
 					Role:    tui.RoleHibernate,
 					Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
@@ -1736,7 +1729,6 @@ func processBuildPhase(
 
 	// Startup budget check — hibernate before first iteration if budget already exceeded
 	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, buildLoop); exceeded {
-		program.Send(tui.SendHibernate(nextHour)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr) at startup, pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
@@ -1755,7 +1747,6 @@ func processBuildPhase(
 		case <-ticker.C:
 			lt.flushDelta(dbCtx, tokenStats)
 			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, buildLoop); exceeded {
-				program.Send(tui.SendHibernate(nextHour)())
 				msgChan <- tui.Message{
 					Role:    tui.RoleHibernate,
 					Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),

@@ -219,11 +219,11 @@ func TestBDD_TmuxStatusBar_LoopTokensShownAndResetOnNewLoop(t *testing.T) {
 
 // TestBDD_TmuxStatusBar_RateLimitedLabelShownDuringHibernate
 //
-// Given: a model in hibernating state (both loop and TUI state set)
+// Given: a model whose loop is hibernating
 // When: a tick occurs
 // Then: the tmux bar shows "RATE LIMITED" and omits the token/elapsed fields
 func TestBDD_TmuxStatusBar_RateLimitedLabelShownDuringHibernate(t *testing.T) {
-	// Given: model and loop both in hibernate state (matches real pipeline)
+	// Given: the loop in hibernate state (matches real pipeline)
 	m, _ := setupHibernatingModel(2, 5, 5*time.Minute)
 	fakeBar := &tui.FakeStatusBarForTest{}
 	m.SetTmuxStatusBar(fakeBar)
@@ -263,12 +263,12 @@ func TestBDD_TmuxStatusBar_SleepEmojiCountdownShownDuringHibernate(t *testing.T)
 	tui.SetTimeNowForTest(func() time.Time { return baseTime })
 	defer tui.SetTimeNowForTest(time.Now)
 
-	// Given: model and loop both in hibernate state with 3m30s remaining
+	// Given: the loop hibernating with 3m30s remaining
 	// hibernateUntil is baseTime + 3m30s; timeNow() is baseTime → 3m30s remain
 	hibernateUntil := baseTime.Add(3*time.Minute + 30*time.Second)
-	m, _ := setupReadyModelWithLoop(2, 5)
+	m, l := setupReadyModelWithLoop(2, 5)
 	m.SetGitContext("ralph", "main")
-	m, _ = sendTuiMsg(m, tui.SendHibernate(hibernateUntil))
+	l.Hibernate(hibernateUntil)
 
 	fakeBar := &tui.FakeStatusBarForTest{}
 	m.SetTmuxStatusBar(fakeBar)

@@ -624,9 +624,7 @@ func TestBDD_AutoresearchMode_HibernateShowsRateLimitedWhileResearching(t *testi
 	m, _ = sendTuiMsg(m, tui.SendModeUpdate("Researching"))
 
 	// When: the loop enters hibernate
-	until := time.Now().Add(5 * time.Minute)
-	l.Hibernate(until)
-	m, _ = sendTuiMsg(m, tui.SendHibernate(until))
+	l.Hibernate(time.Now().Add(5 * time.Minute))
 
 	// Then: status shows RATE LIMITED but mode still shows "Researching"
 	if !viewContains(m, "RATE LIMITED") {

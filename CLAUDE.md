@@ -8,6 +8,7 @@
 - Test single: `go test -v -run TestName ./tests/`
 - Test main: `go test -v ./cmd/ralph/`
 - Gotcha: `make test` runs only `./tests` — use `go test ./tests/ ./cmd/ralph/` as the authoritative command
+- Gotcha: Go caches test results — add `-count=1` to force a real re-run (required for mutation testing, or a broken mutant "passes" from cache)
 
 ## Project Structure
 - `cmd/ralph/main.go` — entry point, wires loop/parser/tui together

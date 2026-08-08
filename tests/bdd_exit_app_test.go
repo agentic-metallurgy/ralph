@@ -466,12 +466,11 @@ func TestBDD_UserExitsApplication_CompletedStatePersistsElapsed(t *testing.T) {
 
 func TestBDD_UserExitsApplication_HibernatingStatePersistsElapsed(t *testing.T) {
 	// Given: a hibernating model with stats
-	m, _ := setupReadyModelWithLoop(2, 5)
+	m, l := setupReadyModelWithLoop(2, 5)
 	tokenStats := stats.NewTokenStats()
 	m.SetStats(tokenStats)
 	m.SetBaseElapsed(20 * time.Minute)
-	until := time.Now().Add(5 * time.Minute)
-	m, _ = sendTuiMsg(m, tui.SendHibernate(until))
+	l.Hibernate(time.Now().Add(5 * time.Minute))
 
 	// When: user quits while hibernating
 	m, _ = pressKey(m, 'q')

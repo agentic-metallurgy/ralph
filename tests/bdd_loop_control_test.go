@@ -432,7 +432,6 @@ func TestBDD_UserControlsLoopExecution_HibernateOverridesStoppedDisplay(t *testi
 	// Given: a loop that is hibernating (which internally may pause)
 	m, l := setupReadyModelWithLoop(2, 5)
 	l.Hibernate(time.Now().Add(3 * time.Minute))
-	m, _ = sendTuiMsg(m, tui.SendHibernate(time.Now().Add(3*time.Minute)))
 
 	// Then: status should show RATE LIMITED (not STOPPED)
 	if viewContains(m, "STOPPED") && viewNotContains(m, "RATE LIMITED") {
