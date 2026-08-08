@@ -1222,117 +1222,230 @@ func TestTUIPauseResumeWithRunningLoop(t *testing.T) {
 
 // ============================================================================
 // Tests: Per-Loop Stats in Tmux Status Bar (Spec 19)
+//
+// Per-loop tokens and elapsed time are observable through the tmux status bar:
+// updateTmuxStatusBar runs once per tick and renders
+// "[repo | branch | loop: N/M, tokens: X, elapsed: HH:MM:SS]" for the CURRENT
+// loop iteration (never the cumulative session). These tests drive a model with
+// a mocked clock and read back tui.FakeStatusBarForTest.LastContent.
 // ============================================================================
 
-// TestSendLoopStartedCmd tests the SendLoopStarted helper command
+// perLoopFakeClock is a mutable clock for the per-loop status bar tests.
+type perLoopFakeClock struct{ now time.Time }
+
+// advance moves the fake clock forward by d.
+func (c *perLoopFakeClock) advance(d time.Duration) { c.now = c.now.Add(d) }
+
+// newPerLoopStatusBarModel builds a ready model wired to a fake tmux status bar
+// and a mocked clock. The clock is installed before tui.NewModel() so both the
+// session start time and the loop start time are the clock's zero point.
+// Pass a non-nil loop to enable the pause/resume hotkeys; it is attached before
+// the tea.WindowSizeMsg because the model is copied by value on every Update.
+// Callers must `defer tui.SetTimeNowForTest(time.Now)`.
+func newPerLoopStatusBarModel(l *loop.Loop) (tui.Model, *tui.FakeStatusBarForTest, *perLoopFakeClock) {
+	clock := &perLoopFakeClock{now: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	tui.SetTimeNowForTest(func() time.Time { return clock.now })
+
+	model := tui.NewModel()
+	if l != nil {
+		model.SetLoop(l)
+	}
+	model.SetGitContext("ralph", "main")
+	model.SetLoopProgress(2, 5)
+	fakeBar := &tui.FakeStatusBarForTest{}
+	model.SetTmuxStatusBar(fakeBar)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	return model, fakeBar, clock
+}
+
+// tickPerLoopBar drives one tick and returns the content pushed to the bar.
+func tickPerLoopBar(m tui.Model, bar *tui.FakeStatusBarForTest) (tui.Model, string) {
+	m, _ = updateModel(m, tui.TickMsgForTest())
+	return m, bar.LastContent
+}
+
+// perLoopBar renders the expected status bar content for the fixture model.
+func perLoopBar(tokens, elapsed string) string {
+	return "[ralph | main | loop: 2/5, tokens: " + tokens + ", elapsed: " + elapsed + "]"
+}
+
+// TestSendLoopStartedCmd tests that SendLoopStarted returns a command whose
+// message resets both per-loop counters visible on the tmux status bar.
 func TestSendLoopStartedCmd(t *testing.T) {
+	defer tui.SetTimeNowForTest(time.Now)
+	model, bar, clock := newPerLoopStatusBarModel(nil)
+
+	// Accumulate per-loop state: 12k tokens over 30 seconds.
+	model, _ = updateModel(model, tui.SendLoopStatsUpdate(12000)())
+	clock.advance(30 * time.Second)
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("12k", "00:00:30"); got != want {
+		t.Fatalf("Precondition: status bar = %q, want %q", got, want)
+	}
+
 	cmd := tui.SendLoopStarted()
 	if cmd == nil {
-		t.Error("SendLoopStarted should return a command")
+		t.Fatal("SendLoopStarted should return a command")
 	}
-	result := cmd()
-	if result == nil {
-		t.Error("Command should return a loopStartedMsg")
+	msg := cmd()
+	if msg == nil {
+		t.Fatal("SendLoopStarted's command should produce a loopStartedMsg")
+	}
+
+	// Feeding that message in must reset both per-loop tokens and elapsed.
+	model, _ = updateModel(model, msg)
+	_, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:00"); got != want {
+		t.Errorf("After loopStartedMsg: status bar = %q, want %q", got, want)
 	}
 }
 
-// TestSendLoopStatsUpdateCmd tests the SendLoopStatsUpdate helper command
+// TestSendLoopStatsUpdateCmd tests that SendLoopStatsUpdate returns a command
+// whose message sets the per-loop token count shown on the tmux status bar.
 func TestSendLoopStatsUpdateCmd(t *testing.T) {
+	defer tui.SetTimeNowForTest(time.Now)
+	model, bar, _ := newPerLoopStatusBarModel(nil)
+
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:00"); got != want {
+		t.Fatalf("Precondition: status bar = %q, want %q", got, want)
+	}
+
 	cmd := tui.SendLoopStatsUpdate(12345)
 	if cmd == nil {
-		t.Error("SendLoopStatsUpdate should return a command")
+		t.Fatal("SendLoopStatsUpdate should return a command")
 	}
-	result := cmd()
-	if result == nil {
-		t.Error("Command should return a loopStatsUpdateMsg")
+	msg := cmd()
+	if msg == nil {
+		t.Fatal("SendLoopStatsUpdate's command should produce a loopStatsUpdateMsg")
+	}
+
+	// 12345 tokens render through stats.FormatTokens as "12.3k".
+	model, _ = updateModel(model, msg)
+	_, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("12.3k", "00:00:00"); got != want {
+		t.Errorf("After loopStatsUpdateMsg: status bar = %q, want %q", got, want)
 	}
 }
 
-// TestPerLoopTokensResetOnNewLoop tests that per-loop tokens reset when a new loop starts
+// TestPerLoopTokensResetOnNewLoop tests that the token count on the tmux status
+// bar drops back to zero when a new loop iteration starts.
 func TestPerLoopTokensResetOnNewLoop(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	defer tui.SetTimeNowForTest(time.Now)
+	model, bar, _ := newPerLoopStatusBarModel(nil)
 
-	// Set loop stats to some value
-	cmd := tui.SendLoopStatsUpdate(50000)
-	model, _ = updateModel(model, cmd())
+	model, _ = updateModel(model, tui.SendLoopStatsUpdate(50000)())
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("50k", "00:00:00"); got != want {
+		t.Fatalf("With 50000 per-loop tokens: status bar = %q, want %q", got, want)
+	}
 
-	// Signal a new loop started
-	cmd = tui.SendLoopStarted()
-	model, _ = updateModel(model, cmd())
+	model, _ = updateModel(model, tui.SendLoopStarted()())
+	model, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:00"); got != want {
+		t.Fatalf("After new loop started: status bar = %q, want %q", got, want)
+	}
 
-	// Per-loop tokens should be reset to 0
-	// Verify by sending another loop stats update with a small value
-	cmd = tui.SendLoopStatsUpdate(100)
-	model, _ = updateModel(model, cmd())
-
-	// The model should work without errors after reset
-	view := model.View()
-	if view == "" {
-		t.Error("View should render after per-loop stats reset")
+	// The counter keeps working after the reset: it counts from zero again.
+	model, _ = updateModel(model, tui.SendLoopStatsUpdate(100)())
+	_, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("100", "00:00:00"); got != want {
+		t.Errorf("After 100 tokens in the new loop: status bar = %q, want %q", got, want)
 	}
 }
 
-// TestPerLoopTimerResetsOnNewLoop tests that per-loop elapsed timer resets when a new loop starts
+// TestPerLoopTimerResetsOnNewLoop tests that the elapsed time on the tmux status
+// bar is per-loop, not per-session: it restarts at 00:00:00 on a new iteration
+// while the session's "Total Time" in the TUI footer keeps counting.
 func TestPerLoopTimerResetsOnNewLoop(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	defer tui.SetTimeNowForTest(time.Now)
+	model, bar, clock := newPerLoopStatusBarModel(nil)
 
-	// Wait a bit so the loop timer accumulates
-	time.Sleep(50 * time.Millisecond)
+	clock.advance(65 * time.Second)
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:01:05"); got != want {
+		t.Fatalf("After 65s in the first loop: status bar = %q, want %q", got, want)
+	}
 
-	// Signal a new loop started — should reset per-loop timer
-	cmd := tui.SendLoopStarted()
-	model, _ = updateModel(model, cmd())
+	// A new loop iteration begins 65s into the session.
+	model, _ = updateModel(model, tui.SendLoopStarted()())
+	model, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:00"); got != want {
+		t.Fatalf("A new loop must restart the bar's clock: status bar = %q, want %q", got, want)
+	}
+	// ...while the session total is unaffected — that is the per-loop/session split.
+	if view := model.View(); !strings.Contains(view, "00:01:05") {
+		t.Error("Footer 'Total Time' should still show the 65s session elapsed after a new loop starts")
+	}
 
-	// The per-loop timer should now be near-zero (just reset)
-	// We can't directly inspect it, but the view should render without error
-	view := model.View()
-	if view == "" {
-		t.Error("View should render after per-loop timer reset")
+	clock.advance(5 * time.Second)
+	model, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:05"); got != want {
+		t.Errorf("5s into the new loop: status bar = %q, want %q", got, want)
+	}
+	if view := model.View(); !strings.Contains(view, "00:01:10") {
+		t.Error("Footer 'Total Time' should show 00:01:10 while the bar shows 00:00:05")
 	}
 }
 
-// TestPerLoopTimerFreezesOnPause tests that the per-loop timer freezes when paused
+// TestPerLoopTimerFreezesOnPause tests that pausing with 'p' freezes the per-loop
+// elapsed time on the tmux status bar even as the mocked clock keeps moving.
 func TestPerLoopTimerFreezesOnPause(t *testing.T) {
-	model := tui.NewModel()
+	defer tui.SetTimeNowForTest(time.Now)
 	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
-	model.SetLoop(l)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	model, bar, clock := newPerLoopStatusBarModel(l)
 
-	// Pause
-	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
-	model, _ = updateModel(model, keyP)
+	clock.advance(10 * time.Second)
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:10"); got != want {
+		t.Fatalf("Before pause: status bar = %q, want %q", got, want)
+	}
 
-	// After pausing, two consecutive views should be identical
-	// (both total and per-loop timers are frozen)
-	view1 := model.View()
-	time.Sleep(50 * time.Millisecond)
-	view2 := model.View()
+	// Pause at +10s: the per-loop timer freezes at 00:00:10.
+	model, _ = updateModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 
-	if view1 != view2 {
-		t.Error("With paused timers (including per-loop), consecutive views should be identical")
+	clock.advance(35 * time.Second)
+	model, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:10"); got != want {
+		t.Fatalf("35s after pausing: status bar = %q, want %q (frozen)", got, want)
+	}
+
+	clock.advance(2 * time.Minute)
+	_, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:10"); got != want {
+		t.Errorf("2m35s after pausing: status bar = %q, want %q (still frozen)", got, want)
 	}
 }
 
-// TestPerLoopTimerResumesAfterPause tests that the per-loop timer resumes after unpause
+// TestPerLoopTimerResumesAfterPause tests that resuming with 'r' continues the
+// per-loop timer from the frozen value rather than restarting or back-filling
+// the paused interval: 10s before the pause + 10s after the resume = 00:00:20.
 func TestPerLoopTimerResumesAfterPause(t *testing.T) {
-	model := tui.NewModel()
+	defer tui.SetTimeNowForTest(time.Now)
 	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
-	model.SetLoop(l)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	model, bar, clock := newPerLoopStatusBarModel(l)
 
-	// Pause then resume
-	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
-	model, _ = updateModel(model, keyP)
+	// Pause at +10s (10s accumulated), resume at +30s (20s spent paused).
+	clock.advance(10 * time.Second)
+	model, _ = updateModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 
-	keyR := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
-	model, _ = updateModel(model, keyR)
+	clock.advance(20 * time.Second)
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:10"); got != want {
+		t.Fatalf("While paused: status bar = %q, want %q", got, want)
+	}
 
-	// After resume, view should render without error
-	view := model.View()
-	if view == "" {
-		t.Error("View should render after resuming per-loop timer")
+	model, _ = updateModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:10"); got != want {
+		t.Fatalf("At the instant of resume: status bar = %q, want %q", got, want)
+	}
+
+	// 10s after the resume: the 20s paused interval is never counted.
+	clock.advance(10 * time.Second)
+	_, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:20"); got != want {
+		t.Errorf("10s after resuming: status bar = %q, want %q", got, want)
 	}
 }
 

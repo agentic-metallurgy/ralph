@@ -634,23 +634,64 @@ func TestBDD_UserMonitorsBuildProgress_LongMessageNotTruncated(t *testing.T) {
 	}
 }
 
-// Scenario: Loop started resets per-loop tracking
+// Scenario: Loop started resets per-loop tracking without disturbing session totals
 
+// TestBDD_UserMonitorsBuildProgress_LoopStartedResetsPerLoopStats
+//
+// The user watches two complementary surfaces: the tmux status bar reports the
+// CURRENT iteration, the TUI footer reports the whole session.
+//
+// Given: a build with 360k cumulative session tokens, 50k of them spent in the
+//
+//	current loop iteration
+//
+// When: a new loop iteration starts
+// Then: the tmux bar's per-loop counter resets to 0 and then tracks only the new
+//
+//	iteration, while the footer keeps reporting the cumulative "Total Tokens:"
+//	(360k) and the RUNNING status — the per-loop reset must not eat the session
+//	totals the user is monitoring.
 func TestBDD_UserMonitorsBuildProgress_LoopStartedResetsPerLoopStats(t *testing.T) {
-	// Given: a model with per-loop stats accumulated
-	m := setupReadyModel()
+	// Given: a running build reporting both cumulative and per-loop usage
+	m, fakeBar := setupModelWithFakeBar(2, 5)
+
+	sessionStats := stats.NewTokenStats()
+	sessionStats.AddUsage(200000, 50000, 10000, 100000) // 360k cumulative
+	m, _ = sendTuiMsg(m, tui.SendStatsUpdate(sessionStats))
 	m, _ = sendTuiMsg(m, tui.SendLoopStatsUpdate(50000))
+	m = triggerTick(m)
+
+	if !strings.Contains(fakeBar.LastContent, "tokens: 50k") {
+		t.Fatalf("Precondition: expected 'tokens: 50k' on tmux bar, got: %q", fakeBar.LastContent)
+	}
+	if !viewContains(m, "360k") {
+		t.Fatalf("Precondition: footer should report cumulative '360k', got:\n%s", m.View())
+	}
 
 	// When: a new loop iteration starts
 	m, _ = sendTuiMsg(m, tui.SendLoopStarted())
+	m = triggerTick(m)
 
-	// Then: the model still renders with the stats panel present
-	// (per-loop tokens are reset internally; the total stats panel remains visible)
+	// Then: the per-loop counter on the tmux bar resets to zero
+	if !strings.Contains(fakeBar.LastContent, "tokens: 0") {
+		t.Errorf("Expected per-loop tokens to reset to 'tokens: 0', got: %q", fakeBar.LastContent)
+	}
+
+	// And: further usage is attributed to the new iteration only
 	m, _ = sendTuiMsg(m, tui.SendLoopStatsUpdate(100))
+	m = triggerTick(m)
+	if !strings.Contains(fakeBar.LastContent, "tokens: 100") {
+		t.Errorf("Expected new iteration's 'tokens: 100' on tmux bar, got: %q", fakeBar.LastContent)
+	}
+
+	// And: the cumulative session figures in the footer are untouched
 	if !viewContains(m, "Total Tokens:") {
-		t.Error("Stats panel should still be present after loop started reset")
+		t.Error("Footer stats panel should still be present after per-loop reset")
+	}
+	if !viewContains(m, "360k") {
+		t.Errorf("Cumulative session total '360k' should survive the per-loop reset, got:\n%s", m.View())
 	}
 	if !viewContains(m, "RUNNING") {
-		t.Error("Status should still show RUNNING after loop started reset")
+		t.Error("Status should still show RUNNING after per-loop reset")
 	}
 }

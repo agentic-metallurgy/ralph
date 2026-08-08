@@ -1285,8 +1285,9 @@ func (m Model) renderFooter() string {
 	)
 }
 
-// updateTmuxStatusBar updates the tmux status-right bar with current loop stats
-// (spec: stats should be about the current loop, not cumulative)
+// updateTmuxStatusBar updates the tmux status-right bar with stats for the
+// current loop iteration (spec: stats should be about the current loop, not
+// cumulative). Called once per tick.
 func (m Model) updateTmuxStatusBar() {
 	if m.tmuxBar == nil || !m.tmuxBar.IsActive() {
 		return
@@ -1301,7 +1302,7 @@ func (m Model) updateTmuxStatusBar() {
 		mins := int(remaining.Minutes())
 		secs := int(remaining.Seconds()) % 60
 		hibernateDisplay := fmt.Sprintf("RATE LIMITED 💤 %02d:%02d", mins, secs)
-		m.tmuxBar.Update(tmux.FormatStatusRight(m.repoName, m.branchName, hibernateDisplay, ""))
+		m.tmuxBar.Update(tmux.FormatStatusRight(m.repoName, m.branchName, hibernateDisplay, "", ""))
 		return
 	}
 
@@ -1310,14 +1311,18 @@ func (m Model) updateTmuxStatusBar() {
 		loopDisplay = fmt.Sprintf("%d/%d", m.currentLoop, m.totalLoops)
 	}
 
-	// Total session uptime
-	elapsed := m.getElapsed()
+	// Elapsed time and tokens for the CURRENT loop iteration, not the whole
+	// session: both reset on loopStartedMsg. The cumulative session figures stay
+	// in the TUI footer ("Total Time" / "Total Tokens"), so the two surfaces
+	// complement each other instead of duplicating.
+	elapsed := m.getLoopElapsed()
 	hours := int(elapsed.Hours())
 	minutes := int(elapsed.Minutes()) % 60
 	seconds := int(elapsed.Seconds()) % 60
 	timeDisplay := fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
+	tokenDisplay := stats.FormatTokens(m.loopTotalTokens)
 
-	m.tmuxBar.Update(tmux.FormatStatusRight(m.repoName, m.branchName, loopDisplay, timeDisplay))
+	m.tmuxBar.Update(tmux.FormatStatusRight(m.repoName, m.branchName, loopDisplay, tokenDisplay, timeDisplay))
 }
 
 // SendMessage is a helper command to send a message to the TUI
