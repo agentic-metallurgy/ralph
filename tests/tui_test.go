@@ -806,14 +806,16 @@ func TestViewportScrollPreservedOnTick(t *testing.T) {
 	}
 }
 
-// TestModeDisplayDefault tests that the mode row shows "-" by default
+// TestModeDisplayDefault tests that the mode row renders by default in the
+// Model Details panel. Note "Model:" does not contain the substring "Mode:",
+// so this assertion is specific to the mode row.
 func TestModeDisplayDefault(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	view := model.View()
-	if !strings.Contains(view, "Current Mode:") {
-		t.Error("View should contain 'Current Mode:' label")
+	if !strings.Contains(view, "Mode:") {
+		t.Error("View should contain 'Mode:' label")
 	}
 }
 
@@ -913,7 +915,7 @@ func TestQuitHotkeyAlwaysHighlighted(t *testing.T) {
 	}
 }
 
-// TestCurrentModeDisplayFormat tests the "Current Mode:" display format
+// TestCurrentModeDisplayFormat tests the "Mode: <value>" display format
 func TestCurrentModeDisplayFormat(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -924,8 +926,8 @@ func TestCurrentModeDisplayFormat(t *testing.T) {
 	model, _ = updateModel(model, modeMsg)
 
 	view := model.View()
-	if !strings.Contains(view, "Current Mode:") {
-		t.Error("View should contain 'Current Mode:' label")
+	if !strings.Contains(view, "Mode:") {
+		t.Error("View should contain 'Mode:' label")
 	}
 	if !strings.Contains(view, "Planning") {
 		t.Error("View should display the mode")
@@ -969,32 +971,6 @@ func TestSetTmuxStatusBar(t *testing.T) {
 	view := model.View()
 	if view == "" {
 		t.Error("View should render with inactive tmux status bar")
-	}
-}
-
-// TestSendCompletedTasksUpdateCmd tests the SendCompletedTasksUpdate helper command
-func TestSendCompletedTasksUpdateCmd(t *testing.T) {
-	cmd := tui.SendCompletedTasksUpdate(3, 8)
-
-	if cmd == nil {
-		t.Error("SendCompletedTasksUpdate should return a command")
-	}
-
-	result := cmd()
-	if result == nil {
-		t.Error("Command should return a completed tasks update message")
-	}
-}
-
-// TestSetCompletedTasks tests the SetCompletedTasks setter method
-func TestSetCompletedTasks(t *testing.T) {
-	model := tui.NewModel()
-	model.SetCompletedTasks(5, 10)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "5/10") {
-		t.Error("View should show '5/10' after SetCompletedTasks")
 	}
 }
 
@@ -1371,29 +1347,6 @@ func TestRalphLoopDetailsTitle(t *testing.T) {
 	view := model.View()
 	if !strings.Contains(view, "Ralph Loop Details") {
 		t.Error("View should contain 'Ralph Loop Details' title (renamed from 'Ralph Details')")
-	}
-}
-
-// ============================================================================
-// Tests: Current Task Display in Footer
-// ============================================================================
-
-// TestCurrentTaskDisplayedInFooter tests that the currentTask field renders in the footer
-func TestCurrentTaskDisplayedInFooter(t *testing.T) {
-	model := tui.NewModel()
-	model.SetCurrentTask("#6 Refactor config")
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "Current Task:") {
-		t.Error("View should contain 'Current Task:' label")
-	}
-	// The quarter-width Task Progress panel word-wraps the task text, so
-	// assert the segments rather than one contiguous line.
-	for _, segment := range []string{"#6 Refactor", "config"} {
-		if !strings.Contains(view, segment) {
-			t.Errorf("View should display the current task text segment %q", segment)
-		}
 	}
 }
 
@@ -1943,6 +1896,144 @@ func TestDeletePlanHotkeyInHotkeyBar(t *testing.T) {
 	view := model.View()
 	if !strings.Contains(view, "(D)") {
 		t.Error("Footer hotkey bar should show (D)elete plan hint")
+	}
+}
+
+// ============================================================================
+// Tests: Model Details Footer Panel
+//
+// The fourth footer panel shows what the loop is actually running with:
+// "Model:", "Effort:" and "Mode:" rows. Known model tiers collapse to their
+// short name, unknown ids render verbatim, and an empty flag reads "default"
+// (i.e. whatever the claude CLI resolves on its own).
+// ============================================================================
+
+// setupModelDetailsModel builds a ready model with the given --model/--effort
+// flag values. The footer panels are (width-8)/4 wide, so a wide terminal keeps
+// short values on one line and avoids word-wrap-sensitive assertions.
+func setupModelDetailsModel(model, effort string) tui.Model {
+	m := tui.NewModel()
+	m.SetModelInfo(model, effort)
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 200, Height: 40})
+	return m
+}
+
+// TestModelDetailsPanelTitleRendered tests that the fourth footer panel is titled
+// "Model Details".
+func TestModelDetailsPanelTitleRendered(t *testing.T) {
+	model := setupModelDetailsModel("", "")
+
+	view := model.View()
+	if !strings.Contains(view, "Model Details") {
+		t.Error("View should contain the 'Model Details' panel title")
+	}
+}
+
+// TestModelDetailsShowsOpusTierAndEffort tests that a full opus model id collapses
+// to its tier name and the effort level is shown alongside it.
+func TestModelDetailsShowsOpusTierAndEffort(t *testing.T) {
+	model := setupModelDetailsModel("claude-opus-4-8", "high")
+
+	view := model.View()
+	for _, want := range []string{"Model:", "opus", "Effort:", "high"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("View should contain %q in the Model Details panel", want)
+		}
+	}
+	// The verbose id should be collapsed, not printed in full.
+	if strings.Contains(view, "claude-opus-4-8") {
+		t.Error("View should collapse 'claude-opus-4-8' to the tier name 'opus'")
+	}
+}
+
+// TestModelDetailsCollapsesSonnetTier tests the sonnet tier collapse and that an
+// unset effort flag reads "default".
+func TestModelDetailsCollapsesSonnetTier(t *testing.T) {
+	model := setupModelDetailsModel("claude-sonnet-4-6", "")
+
+	view := model.View()
+	if !strings.Contains(view, "sonnet") {
+		t.Error("View should collapse 'claude-sonnet-4-6' to the tier name 'sonnet'")
+	}
+	if !strings.Contains(view, "default") {
+		t.Error("View should show 'default' effort when --effort was not passed")
+	}
+}
+
+// TestModelDetailsEmptyFlagsShowDefault tests that an unset model and effort both
+// render as "default" (the claude CLI decides).
+func TestModelDetailsEmptyFlagsShowDefault(t *testing.T) {
+	model := setupModelDetailsModel("", "")
+
+	view := model.View()
+	if !strings.Contains(view, "Model:") || !strings.Contains(view, "Effort:") {
+		t.Fatal("View should contain the 'Model:' and 'Effort:' rows")
+	}
+	// "default" is only ever produced by the model and effort rows, so both
+	// rows falling back means exactly two occurrences.
+	if got := strings.Count(view, "default"); got != 2 {
+		t.Errorf("Expected both the model and effort rows to read 'default' (2 occurrences), got %d", got)
+	}
+}
+
+// TestModelDetailsUnknownModelRendersVerbatim tests that a model id with no known
+// tier is shown as-is.
+func TestModelDetailsUnknownModelRendersVerbatim(t *testing.T) {
+	model := setupModelDetailsModel("zeta-9", "low")
+
+	view := model.View()
+	if !strings.Contains(view, "zeta-9") {
+		t.Error("View should render an unrecognized model id verbatim")
+	}
+	if strings.Contains(view, "Model: default") {
+		t.Error("An unrecognized model id should not fall back to 'default'")
+	}
+}
+
+// TestModelDetailsEffortLowercased tests that the effort level is lowercased for display.
+func TestModelDetailsEffortLowercased(t *testing.T) {
+	model := setupModelDetailsModel("", "XHIGH")
+
+	view := model.View()
+	if !strings.Contains(view, "xhigh") {
+		t.Error("View should lowercase the effort level ('XHIGH' -> 'xhigh')")
+	}
+	if strings.Contains(view, "XHIGH") {
+		t.Error("View should not show the raw uppercase effort level")
+	}
+}
+
+// TestModelDetailsStreamModelOverridesFlag tests that the effective model reported
+// by the stream overrides the model set from the --model flag.
+func TestModelDetailsStreamModelOverridesFlag(t *testing.T) {
+	model := setupModelDetailsModel("claude-opus-4-8", "high")
+
+	cmd := tui.SendModelUpdate("claude-haiku-4-5")
+	model, _ = updateModel(model, cmd())
+
+	view := model.View()
+	if !strings.Contains(view, "haiku") {
+		t.Error("View should show 'haiku' after the stream reports the effective model")
+	}
+	if strings.Contains(view, "opus") {
+		t.Error("View should no longer show the flag model 'opus' after a stream model update")
+	}
+}
+
+// TestModelDetailsEmptyStreamModelIgnored tests that an empty model update does not
+// clobber the already-known model.
+func TestModelDetailsEmptyStreamModelIgnored(t *testing.T) {
+	model := setupModelDetailsModel("claude-opus-4-8", "high")
+
+	cmd := tui.SendModelUpdate("")
+	model, _ = updateModel(model, cmd())
+
+	view := model.View()
+	if !strings.Contains(view, "opus") {
+		t.Error("An empty model update should not clear the previously-set model")
+	}
+	if strings.Contains(view, "Model: default") {
+		t.Error("An empty model update should not reset the model row to 'default'")
 	}
 }
 

@@ -290,6 +290,35 @@ func TestEstimateCostFromTokens(t *testing.T) {
 	}
 }
 
+func TestModelTier(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  string
+	}{
+		{"opus", "claude-opus-4-8", "opus"},
+		{"sonnet", "claude-sonnet-4-6", "sonnet"},
+		{"haiku", "claude-haiku-4-5", "haiku"},
+		{"fable", "claude-fable-5", "fable"},
+		{"opus dated snapshot", "claude-opus-4-5-20251101", "opus"},
+		{"bedrock prefix", "anthropic.claude-sonnet-4-6", "sonnet"},
+		{"mixed case", "Claude-OPUS-4-8", "opus"},
+		{"uppercase bare tier", "HAIKU", "haiku"},
+		{"bare tier name without claude prefix", "sonnet", "sonnet"},
+		{"empty", "", ""},
+		{"unknown", "gpt-4", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stats.ModelTier(tt.model)
+			if got != tt.want {
+				t.Errorf("ModelTier(%q) = %q, want %q", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPricingForModel(t *testing.T) {
 	tests := []struct {
 		name  string

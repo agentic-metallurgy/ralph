@@ -543,23 +543,23 @@ func TestBDD_AutoresearchMode_SubtractLoopInResearchingMode(t *testing.T) {
 func TestBDD_AutoresearchMode_FooterFieldOrderingWithResearching(t *testing.T) {
 	// Given: a model with all footer fields populated in Researching mode
 	m, _ := setupReadyModelWithLoop(2, 5)
-	m, _ = sendTuiMsg(m, tui.SendCompletedTasksUpdate(1, 3))
-	m, _ = sendTuiMsg(m, tui.SendTaskUpdate("#1 Run baseline"))
+	m.SetModelInfo("claude-opus-4-8", "high")
+	m, _ = sendTuiMsg(m, tui.SendModelUpdate("claude-opus-4-8"))
 	m, _ = sendTuiMsg(m, tui.SendModeUpdate("Researching"))
 
 	// Then: footer fields appear in expected order with "Researching" last
 	view := m.View()
 	loopIdx := strings.Index(view, "Loop:")
-	modeIdx := strings.Index(view, "Current Mode:")
+	modeIdx := strings.Index(view, "Mode:")
 	researchIdx := strings.Index(view, "Researching")
 
 	if loopIdx == -1 || modeIdx == -1 || researchIdx == -1 {
-		t.Fatalf("Expected Loop, Current Mode, and Researching in view. Loop=%d Mode=%d Researching=%d",
+		t.Fatalf("Expected Loop, Mode, and Researching in view. Loop=%d Mode=%d Researching=%d",
 			loopIdx, modeIdx, researchIdx)
 	}
 
 	if !(loopIdx < modeIdx) {
-		t.Error("Loop should appear before Current Mode in footer")
+		t.Error("Loop should appear before Mode in footer")
 	}
 }
 

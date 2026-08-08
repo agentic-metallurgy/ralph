@@ -424,10 +424,7 @@ func main() {
 	model.SetTmuxStatusBar(tmuxBar)
 	model.SetGitContext(dbCtx.repo, dbCtx.branch)
 	model.SetPlanFile(cfg.PlanFile)
-
-	// Parse implementation plan for task counts
-	completedTasks, totalTasks := parseTaskCounts(cfg.PlanFile)
-	model.SetCompletedTasks(completedTasks, totalTasks)
+	model.SetModelInfo(cfg.Model, cfg.Effort)
 
 	// Set current mode for TUI display
 	if cfg.IsPlanMode() {
@@ -772,13 +769,20 @@ func handleParsedMessage(
 				usage.CacheReadInputTokens,
 			)
 			// Estimate cost from token counts and update in real-time
+			msgModel := jsonParser.GetModel(parsed)
 			estimate := stats.EstimateCostFromTokens(
-				jsonParser.GetModel(parsed),
+				msgModel,
 				usage.InputTokens,
 				usage.OutputTokens,
 				usage.CacheCreationInputTokens,
 				usage.CacheReadInputTokens,
 			)
+			// Report the effective model to the Model Details panel. Subagent
+			// messages are skipped — they may run a different model than the
+			// main loop.
+			if msgModel != "" && !jsonParser.IsSubagentMessage(parsed) {
+				program.Send(tui.SendModelUpdate(msgModel)())
+			}
 			tokenStats.AddCost(estimate)
 			*iterEstimate += estimate
 			program.Send(tui.SendStatsUpdate(tokenStats)())
@@ -818,7 +822,12 @@ func handleParsedMessage(
 	// Process message content based on type
 	switch parsed.Type {
 	case parser.MessageTypeSystem:
-		// Skip system messages (as Python version does)
+		// System messages aren't displayed, but the init line names the model
+		// the session actually resolved to — the only source when --model was
+		// not passed. Feed it to the Model Details panel before dropping it.
+		if mdl := jsonParser.GetModel(parsed); mdl != "" && !jsonParser.IsSubagentMessage(parsed) {
+			program.Send(tui.SendModelUpdate(mdl)())
+		}
 		return
 
 	case parser.MessageTypeAssistant:
@@ -840,7 +849,7 @@ func handleParsedMessage(
 			fmt.Fprintf(logFile, "[thinking] %s\n\n", content.Thinking)
 		}
 
-		// Display text content and scan for task references
+		// Display text content
 		for _, text := range content.TextContent {
 			if text != "" {
 				msgChan <- tui.Message{
@@ -848,14 +857,6 @@ func handleParsedMessage(
 					Content: text,
 				}
 				fmt.Fprintf(logFile, "[assistant] %s\n\n", text)
-				// Detect IMPLEMENTATION_PLAN.md task references
-				if ref := jsonParser.ExtractTaskReference(text); ref != nil {
-					taskLabel := fmt.Sprintf("#%d", ref.Number)
-					if ref.Description != "" {
-						taskLabel = fmt.Sprintf("#%d %s", ref.Number, ref.Description)
-					}
-					program.Send(tui.SendTaskUpdate(taskLabel)())
-				}
 			}
 		}
 
@@ -888,8 +889,7 @@ func handleParsedMessage(
 
 	case parser.MessageTypeUser:
 		// Skip tool result content in TUI mode (file dumps are too verbose).
-		// Flip the matching tool row to completed/failed, and still scan for
-		// task references in the results.
+		// Flip the matching tool row to completed/failed.
 		content := jsonParser.ExtractContent(parsed)
 		for _, toolResult := range content.ToolResults {
 			if toolResult.ToolUseID != "" {
@@ -898,15 +898,6 @@ func handleParsedMessage(
 					status = parser.ToolStatusFailed
 				}
 				program.Send(tui.SendToolStatusUpdate(toolResult.ToolUseID, string(status))())
-			}
-			if toolResult.Content != "" {
-				if ref := jsonParser.ExtractTaskReference(toolResult.Content); ref != nil {
-					taskLabel := fmt.Sprintf("#%d", ref.Number)
-					if ref.Description != "" {
-						taskLabel = fmt.Sprintf("#%d %s", ref.Number, ref.Description)
-					}
-					program.Send(tui.SendTaskUpdate(taskLabel)())
-				}
 			}
 		}
 
@@ -1492,10 +1483,7 @@ func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats, logFile i
 	model.SetTmuxStatusBar(tmuxBar)
 	model.SetGitContext(dbCtx.repo, dbCtx.branch)
 	model.SetPlanFile(cfg.PlanFile)
-
-	// Parse implementation plan for task counts
-	completedTasks, totalTasks := parseTaskCounts(cfg.PlanFile)
-	model.SetCompletedTasks(completedTasks, totalTasks)
+	model.SetModelInfo(cfg.Model, cfg.Effort)
 
 	// Start in planning mode
 	model.SetCurrentMode("Planning")
@@ -1846,24 +1834,4 @@ func isNewLoopStart(content string) bool {
 // (the iteration is being retried after a 529/500 hibernate, not a fresh start).
 func isRetryLoopStart(content string) bool {
 	return strings.Contains(content, "LOOP") && strings.Contains(content, "RETRY")
-}
-
-// parseTaskCounts reads an IMPLEMENTATION_PLAN.md file and returns the number of
-// completed (DONE) tasks and the total number of tasks.
-func parseTaskCounts(filepath string) (completed, total int) {
-	data, err := os.ReadFile(filepath)
-	if err != nil {
-		return 0, 0
-	}
-
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "## TASK ") {
-			total++
-		}
-		if strings.Contains(trimmed, "**Status: DONE**") || strings.Contains(trimmed, "**Status: NOT NEEDED**") {
-			completed++
-		}
-	}
-	return completed, total
 }

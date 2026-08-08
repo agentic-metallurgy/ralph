@@ -83,19 +83,38 @@ var (
 // was made model-aware.
 var DefaultPricing = pricingSonnet
 
+// ModelTier returns the short tier name for a Claude model identifier
+// ("claude-opus-4-8" → "opus"), matching by substring so new point releases
+// within a tier need no code change. Returns "" when the identifier is empty
+// or belongs to no known tier.
+func ModelTier(model string) string {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "opus"):
+		return "opus"
+	case strings.Contains(m, "sonnet"):
+		return "sonnet"
+	case strings.Contains(m, "haiku"):
+		return "haiku"
+	case strings.Contains(m, "fable"):
+		return "fable"
+	default:
+		return ""
+	}
+}
+
 // PricingForModel returns the price set for a Claude model identifier (e.g.
 // "claude-opus-4-8"), matching by tier substring. Empty or unrecognized
 // identifiers fall back to DefaultPricing.
 func PricingForModel(model string) ModelPricing {
-	m := strings.ToLower(model)
-	switch {
-	case strings.Contains(m, "opus"):
+	switch ModelTier(model) {
+	case "opus":
 		return pricingOpus
-	case strings.Contains(m, "sonnet"):
+	case "sonnet":
 		return pricingSonnet
-	case strings.Contains(m, "haiku"):
+	case "haiku":
 		return pricingHaiku
-	case strings.Contains(m, "fable"):
+	case "fable":
 		return pricingFable
 	default:
 		return DefaultPricing

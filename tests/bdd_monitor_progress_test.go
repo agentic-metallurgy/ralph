@@ -15,8 +15,9 @@ import (
 // BDD Test Suite: User Monitors Build Progress
 //
 // User goal: As a user, I want to monitor the progress of my build by seeing
-// activity messages, loop progress, token usage, agent counts, current task,
-// and mode — so I can understand what Ralph is doing at all times.
+// activity messages, loop progress, token usage, the agent's plan, and the
+// model/effort/mode it is running with — so I can understand what Ralph is
+// doing at all times.
 // =============================================================================
 
 // --- Scenario 1: Empty state shows waiting message ---
@@ -310,58 +311,75 @@ func TestBDD_UserMonitorsBuildProgress_StatsLargeValues(t *testing.T) {
 	}
 }
 
-// --- Scenario 9: Current task updates ---
+// --- Scenario 9: Model details ---
+//
+// Task progress moved to the plan panel above the footer, so the fourth footer
+// panel now answers "what is this loop actually running with?": model + effort.
 
-func TestBDD_UserMonitorsBuildProgress_CurrentTaskUpdates(t *testing.T) {
-	// Given: a ready model
+func TestBDD_UserMonitorsBuildProgress_ModelDetailsShowModelAndEffort(t *testing.T) {
+	// Given: a ready model configured with --model and --effort
 	m := setupReadyModel()
+	m.SetModelInfo("claude-opus-4-8", "high")
 
-	// When: task is updated via message
-	m, _ = sendTuiMsg(m, tui.SendTaskUpdate("#6 Refactor config module"))
-
-	// Then: footer shows the task text (word-wrapped inside the quarter-width
-	// Task Progress panel, so assert the segments rather than one long line)
+	// When: the view is rendered
 	view := m.View()
-	if !strings.Contains(view, "Current Task:") {
-		t.Errorf("Expected 'Current Task:' label in footer")
+
+	// Then: the Model Details panel shows both labels with the model collapsed
+	// to its tier (the quarter-width panel has no room for the full identifier)
+	if !strings.Contains(view, "Model:") {
+		t.Errorf("Expected 'Model:' label in footer, got:\n%s", view)
 	}
-	for _, segment := range []string{"#6 Refactor", "config module"} {
-		if !strings.Contains(view, segment) {
-			t.Errorf("Expected task text segment %q in footer, got:\n%s", segment, view)
-		}
+	if !strings.Contains(view, "Effort:") {
+		t.Errorf("Expected 'Effort:' label in footer, got:\n%s", view)
+	}
+	if !strings.Contains(view, "opus") {
+		t.Errorf("Expected model tier 'opus' in footer, got:\n%s", view)
+	}
+	if !strings.Contains(view, "high") {
+		t.Errorf("Expected effort 'high' in footer, got:\n%s", view)
+	}
+	if strings.Contains(view, "claude-opus-4-8") {
+		t.Errorf("Expected the full model identifier to be collapsed to its tier, got:\n%s", view)
 	}
 }
 
-func TestBDD_UserMonitorsBuildProgress_CurrentTaskDefaultDash(t *testing.T) {
-	// Given: a fresh model with no task set
+func TestBDD_UserMonitorsBuildProgress_ModelUpdateRefinesModel(t *testing.T) {
+	// Given: a model started with --model claude-sonnet-4-5
+	m := setupReadyModel()
+	m.SetModelInfo("claude-sonnet-4-5", "medium")
+	if !viewContains(m, "sonnet") {
+		t.Fatal("Precondition: footer should show the configured 'sonnet' tier")
+	}
+
+	// When: the stream reports a different effective model at runtime
+	m, _ = sendTuiMsg(m, tui.SendModelUpdate("claude-opus-4-8"))
+
+	// Then: the footer shows the effective model and no longer the configured one
+	if !viewContains(m, "opus") {
+		t.Errorf("Expected refined model tier 'opus' in footer, got:\n%s", m.View())
+	}
+	if viewContains(m, "sonnet") {
+		t.Error("Stale model tier 'sonnet' should be replaced by the effective model")
+	}
+	// And: effort is untouched by a model update
+	if !viewContains(m, "medium") {
+		t.Error("Effort should persist across a model update")
+	}
+}
+
+func TestBDD_UserMonitorsBuildProgress_ModelDetailsDefaultWhenUnset(t *testing.T) {
+	// Given: a fresh model with neither --model nor --effort passed
 	m := setupReadyModel()
 
 	// When: the view is rendered
 	view := m.View()
 
-	// Then: shows "Current Task:" label with "-" as default
-	if !strings.Contains(view, "Current Task:") {
-		t.Errorf("Expected 'Current Task:' label in footer")
+	// Then: both rows read "default" — i.e. whatever the claude CLI resolves
+	if !strings.Contains(view, "Model:") || !strings.Contains(view, "Effort:") {
+		t.Fatalf("Expected 'Model:' and 'Effort:' labels in footer, got:\n%s", view)
 	}
-}
-
-func TestBDD_UserMonitorsBuildProgress_CurrentTaskOverwritesPrevious(t *testing.T) {
-	// Given: a model with a task set
-	m := setupReadyModel()
-	m, _ = sendTuiMsg(m, tui.SendTaskUpdate("#1 Old task"))
-	if !viewContains(m, "#1 Old task") {
-		t.Fatal("Precondition: old task should be visible")
-	}
-
-	// When: a new task update arrives
-	m, _ = sendTuiMsg(m, tui.SendTaskUpdate("#2 New task"))
-
-	// Then: only the new task is shown
-	if viewContains(m, "#1 Old task") {
-		t.Error("Old task should not be visible after new task update")
-	}
-	if !viewContains(m, "#2 New task") {
-		t.Error("New task should be visible after update")
+	if n := strings.Count(view, "default"); n < 2 {
+		t.Errorf("Expected model and effort to both render as 'default' (found %d), got:\n%s", n, view)
 	}
 }
 
@@ -386,43 +404,13 @@ func TestBDD_UserMonitorsBuildProgress_ModeTransitions(t *testing.T) {
 
 // --- Additional BDD scenarios for completeness ---
 
-// Scenario: Completed tasks update in footer
-
-func TestBDD_UserMonitorsBuildProgress_CompletedTasksUpdate(t *testing.T) {
-	// Given: a ready model
-	m := setupReadyModel()
-
-	// When: completed tasks are updated
-	m, _ = sendTuiMsg(m, tui.SendCompletedTasksUpdate(4, 7))
-
-	// Then: footer shows "4/7"
-	if !viewContains(m, "4/7") {
-		t.Errorf("Expected completed tasks '4/7' in footer, got:\n%s", m.View())
-	}
-	if !viewContains(m, "Completed Tasks:") {
-		t.Errorf("Expected 'Completed Tasks:' label in footer")
-	}
-}
-
-func TestBDD_UserMonitorsBuildProgress_CompletedTasksDefaultZero(t *testing.T) {
-	// Given: a fresh model with no completed tasks updates
-	m := setupReadyModel()
-
-	// When: the view is rendered
-	// Then: shows "0/0" as default
-	if !viewContains(m, "0/0") {
-		t.Errorf("Expected default completed tasks '0/0' in footer")
-	}
-}
-
 // Scenario: Footer panel ordering
 
 func TestBDD_UserMonitorsBuildProgress_FooterFieldOrdering(t *testing.T) {
 	// Given: a model with all footer fields populated
 	m := setupReadyModel()
+	m.SetModelInfo("claude-opus-4-8", "high")
 	m, _ = sendTuiMsg(m, tui.SendLoopUpdate(2, 5))
-	m, _ = sendTuiMsg(m, tui.SendCompletedTasksUpdate(1, 4))
-	m, _ = sendTuiMsg(m, tui.SendTaskUpdate("#3 Build widget"))
 	m, _ = sendTuiMsg(m, tui.SendModeUpdate("Building"))
 
 	// When: the view is rendered
@@ -431,31 +419,34 @@ func TestBDD_UserMonitorsBuildProgress_FooterFieldOrdering(t *testing.T) {
 	// Then: fields appear in the correct order within their panels. The footer
 	// panels sit side by side, so the view string interleaves them row by row:
 	// vertical order within a panel means a strictly increasing index, and the
-	// Ralph Loop Details panel sits left of the Task Progress panel.
+	// Ralph Loop Details panel sits left of the Model Details panel.
+	//
+	// Note "Model:" and "Mode:" both start with "Mo" but neither is a prefix of
+	// the other ("Model:" is not matched by "Mode:"), so plain Index is safe.
 	loopIdx := strings.Index(view, "Loop:")
 	timeIdx := strings.Index(view, "Total Time:")
 	statusIdx := strings.Index(view, "Status:")
-	completedIdx := strings.Index(view, "Completed Tasks:")
-	taskIdx := strings.Index(view, "Current Task:")
-	modeIdx := strings.Index(view, "Current Mode:")
+	modelIdx := strings.Index(view, "Model:")
+	effortIdx := strings.Index(view, "Effort:")
+	modeIdx := strings.Index(view, "Mode:")
 
 	if loopIdx == -1 || timeIdx == -1 || statusIdx == -1 ||
-		completedIdx == -1 || taskIdx == -1 || modeIdx == -1 {
-		t.Fatalf("Not all footer fields found. Loop=%d Time=%d Status=%d Completed=%d Task=%d Mode=%d",
-			loopIdx, timeIdx, statusIdx, completedIdx, taskIdx, modeIdx)
+		modelIdx == -1 || effortIdx == -1 || modeIdx == -1 {
+		t.Fatalf("Not all footer fields found. Loop=%d Time=%d Status=%d Model=%d Effort=%d Mode=%d",
+			loopIdx, timeIdx, statusIdx, modelIdx, effortIdx, modeIdx)
 	}
 
 	if !(loopIdx < timeIdx && timeIdx < statusIdx) {
 		t.Errorf("Ralph Loop Details fields not in vertical order: Loop@%d < Time@%d < Status@%d",
 			loopIdx, timeIdx, statusIdx)
 	}
-	if !(completedIdx < taskIdx && taskIdx < modeIdx) {
-		t.Errorf("Task Progress fields not in vertical order: Completed@%d < Task@%d < Mode@%d",
-			completedIdx, taskIdx, modeIdx)
+	if !(modelIdx < effortIdx && effortIdx < modeIdx) {
+		t.Errorf("Model Details fields not in vertical order: Model@%d < Effort@%d < Mode@%d",
+			modelIdx, effortIdx, modeIdx)
 	}
-	if !(loopIdx < completedIdx) {
-		t.Errorf("Ralph Loop Details panel should be left of Task Progress panel: Loop@%d < Completed@%d",
-			loopIdx, completedIdx)
+	if !(loopIdx < modelIdx) {
+		t.Errorf("Ralph Loop Details panel should be left of Model Details panel: Loop@%d < Model@%d",
+			loopIdx, modelIdx)
 	}
 }
 
@@ -534,15 +525,17 @@ func TestBDD_UserMonitorsBuildProgress_StatsPersistAcrossAgentChange(t *testing.
 		t.Fatal("Precondition: cost should show $1.500000")
 	}
 
-	// When: task is updated
-	m, _ = sendTuiMsg(m, tui.SendTaskUpdate("#5 Some task"))
+	// When: the agent's plan is updated (task progress lives in the plan panel)
+	m, _ = sendTuiMsg(m, tui.SendPlanUpdate([]tui.PlanItem{
+		{Content: "#5 Some task", Status: "in_progress"},
+	}))
 
 	// Then: stats still show the same cost
 	if !viewContains(m, "$1.500000") {
-		t.Error("Stats should persist when task changes")
+		t.Error("Stats should persist when the plan changes")
 	}
 	if !viewContains(m, "#5 Some task") {
-		t.Error("Task should update to '#5 Some task'")
+		t.Error("Plan panel should show '#5 Some task'")
 	}
 }
 

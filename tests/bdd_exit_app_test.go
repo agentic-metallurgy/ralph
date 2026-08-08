@@ -576,7 +576,7 @@ func TestBDD_UserExitsApplication_QuitWithFullState(t *testing.T) {
 	m.SetTmuxStatusBar(sb)
 	m.AddMessage(tui.Message{Role: tui.RoleAssistant, Content: "Working hard"})
 	m, _ = sendTuiMsg(m, tui.SendModeUpdate("Building"))
-	m, _ = sendTuiMsg(m, tui.SendTaskUpdate("Implementing feature X"))
+	m, _ = sendTuiMsg(m, tui.SendModelUpdate("claude-opus-4-8"))
 	// When: user quits
 	m, cmd := pressKey(m, 'q')
 

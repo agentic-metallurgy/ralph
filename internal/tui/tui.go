@@ -227,11 +227,10 @@ type Model struct {
 	stats          *stats.TokenStats
 	currentLoop    int
 	totalLoops     int
-	currentTask    string // Current task (e.g., "#6 Change the lib/gold into lib/silver")
-	completedTasks int    // Number of completed tasks from plan
-	totalTasks     int    // Total number of tasks from plan
 	plan           []PlanItem // Agent's TodoWrite-authored plan (ACP plan panel)
 	currentMode    string // Current mode display ("Planning", "Building", or "")
+	modelName      string // Model in use: the --model override, then the effective id from the stream
+	effort         string // Effort level from --effort ("" = claude CLI default)
 	startTime      time.Time
 	baseElapsed    time.Duration // elapsed time from previous sessions
 	timerPaused    bool          // whether elapsed time tracking is paused
@@ -323,20 +322,18 @@ func (m *Model) SetPlanFile(path string) {
 	m.planFile = path
 }
 
-// SetCompletedTasks sets the completed/total task counts from the implementation plan
-func (m *Model) SetCompletedTasks(completed, total int) {
-	m.completedTasks = completed
-	m.totalTasks = total
-}
-
 // SetCurrentMode sets the current mode display ("Planning", "Building", or "")
 func (m *Model) SetCurrentMode(mode string) {
 	m.currentMode = mode
 }
 
-// SetCurrentTask sets the initial current task display value
-func (m *Model) SetCurrentTask(task string) {
-	m.currentTask = task
+// SetModelInfo sets the model and effort shown in the Model Details panel.
+// Both come from the CLI flags and may be empty, meaning "whatever the claude
+// CLI defaults to"; the model is refined at runtime by SendModelUpdate once the
+// stream reports the effective model.
+func (m *Model) SetModelInfo(model, effort string) {
+	m.modelName = model
+	m.effort = effort
 }
 
 // getElapsed returns the current total elapsed time
@@ -390,11 +387,6 @@ type statsUpdateMsg struct {
 	stats *stats.TokenStats
 }
 
-// taskUpdateMsg is sent to update the current IMPLEMENTATION_PLAN.md task
-type taskUpdateMsg struct {
-	task string
-}
-
 // toolStatusUpdateMsg is sent to flip an existing tool row's lifecycle status
 // (e.g. in_progress → completed/failed) by matching its tool_use ID.
 type toolStatusUpdateMsg struct {
@@ -407,15 +399,14 @@ type modeUpdateMsg struct {
 	mode string
 }
 
+// modelUpdateMsg is sent to update the effective model reported by the stream
+type modelUpdateMsg struct {
+	model string
+}
+
 // planUpdateMsg replaces the agent's plan (a full-list TodoWrite snapshot).
 type planUpdateMsg struct {
 	items []PlanItem
-}
-
-// completedTasksUpdateMsg is sent to update the completed/total task counts
-type completedTasksUpdateMsg struct {
-	completed int
-	total     int
 }
 
 // loopStartedMsg is sent when a new loop iteration begins (resets per-loop stats)
@@ -566,11 +557,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Reset the loop so the agent re-creates the plan from scratch
 				if m.loop != nil {
 					m.loop.Reset()
-					// Clear completed state and task tracking
+					// Clear completed state and the plan
 					m.completed = false
-					m.completedTasks = 0
-					m.totalTasks = 0
-					m.currentTask = ""
 					m.plan = nil
 					// Resume timers since reset restarts execution
 					if m.timerPaused {
@@ -743,10 +731,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stats = msg.stats
 		return m, nil
 
-	case taskUpdateMsg:
-		m.currentTask = msg.task
-		return m, nil
-
 	case toolStatusUpdateMsg:
 		// Find the most recent tool row with this ID and update its status
 		// in place. No-op if not found (e.g. row evicted by maxMessages cap).
@@ -773,32 +757,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentMode = msg.mode
 		return m, nil
 
-	case planUpdateMsg:
-		// Full-list replace. Derive the footer counters from the plan so the
-		// panel and footer share a single source of truth.
-		m.plan = msg.items
-		completed, current := 0, ""
-		for _, it := range msg.items {
-			switch it.Status {
-			case "completed":
-				completed++
-			case "in_progress":
-				if current == "" {
-					current = it.Content
-				}
-			}
+	case modelUpdateMsg:
+		// The stream reports the effective model, which is authoritative over
+		// the --model flag (and is the only source when the flag is empty).
+		if msg.model != "" {
+			m.modelName = msg.model
 		}
-		m.completedTasks = completed
-		m.totalTasks = len(msg.items)
-		if current != "" {
-			m.currentTask = current
-		}
-		m.refreshPanes(false, true)
 		return m, nil
 
-	case completedTasksUpdateMsg:
-		m.completedTasks = msg.completed
-		m.totalTasks = msg.total
+	case planUpdateMsg:
+		// Full-list replace. The plan panel counts progress off m.plan, so this
+		// is the single source of truth for task progress.
+		m.plan = msg.items
+		m.refreshPanes(false, true)
 		return m, nil
 
 	case loopStartedMsg:
@@ -1130,6 +1101,29 @@ func (m Model) renderLayout() string {
 	)
 }
 
+// formatModelName renders a model identifier for the narrow Model Details
+// panel: known tiers collapse to their short name ("claude-opus-4-8" → "opus"),
+// anything else is shown verbatim, and an unknown model reads as "default"
+// (i.e. whatever the claude CLI resolves on its own).
+func formatModelName(model string) string {
+	if model == "" {
+		return "default"
+	}
+	if tier := stats.ModelTier(model); tier != "" {
+		return tier
+	}
+	return model
+}
+
+// formatEffort renders the effort level, or "default" when --effort was not
+// passed and the claude CLI decides.
+func formatEffort(effort string) string {
+	if effort == "" {
+		return "default"
+	}
+	return strings.ToLower(effort)
+}
+
 // renderFooter renders the four-panel footer with hotkey bar
 func (m Model) renderFooter() string {
 	// Four equal panels; each +2 rounded border makes 4*(panelWidth+2) fill
@@ -1229,22 +1223,19 @@ func (m Model) renderFooter() string {
 		row("Status:", statusText, statusStyle),
 	))
 
-	// Task Progress panel
+	// Model Details panel. Task progress lives in the plan panel above, so this
+	// quarter shows what the loop is actually running with.
 	modeDisplay := "-"
 	if m.currentMode != "" {
 		modeDisplay = m.currentMode
 	}
-	taskDisplay := "-"
-	if m.currentTask != "" {
-		taskDisplay = m.currentTask
-	}
 
-	taskProgressPanel := panelStyle.Render(lipgloss.JoinVertical(
+	modelDetailsPanel := panelStyle.Render(lipgloss.JoinVertical(
 		lipgloss.Left,
-		titleStyle.Render("Task Progress"),
-		row("Completed Tasks:", fmt.Sprintf("%d/%d", m.completedTasks, m.totalTasks), valueStyle),
-		row("Current Task:", taskDisplay, valueStyle),
-		row("Current Mode:", modeDisplay, valueStyle),
+		titleStyle.Render("Model Details"),
+		row("Model:", formatModelName(m.modelName), valueStyle),
+		row("Effort:", formatEffort(m.effort), valueStyle),
+		row("Mode:", modeDisplay, valueStyle),
 	))
 
 	// Join panels horizontally
@@ -1253,7 +1244,7 @@ func (m Model) renderFooter() string {
 		tokenUsagePanel,
 		cacheCostPanel,
 		loopDetailsPanel,
-		taskProgressPanel,
+		modelDetailsPanel,
 	)
 
 	// Hotkey bar
@@ -1350,13 +1341,6 @@ func SendStatsUpdate(s *stats.TokenStats) tea.Cmd {
 	}
 }
 
-// SendTaskUpdate is a helper command to update the current task
-func SendTaskUpdate(task string) tea.Cmd {
-	return func() tea.Msg {
-		return taskUpdateMsg{task: task}
-	}
-}
-
 // SendToolStatusUpdate is a helper command to update a tool row's lifecycle
 // status (completed/failed) by its tool_use ID.
 func SendToolStatusUpdate(toolUseID, status string) tea.Cmd {
@@ -1365,8 +1349,8 @@ func SendToolStatusUpdate(toolUseID, status string) tea.Cmd {
 	}
 }
 
-// SendPlanUpdate is a helper command to replace the agent's plan (the panel +
-// footer counters are derived from it).
+// SendPlanUpdate is a helper command to replace the agent's plan (the plan
+// panel is derived from it).
 func SendPlanUpdate(items []PlanItem) tea.Cmd {
 	return func() tea.Msg {
 		return planUpdateMsg{items: items}
@@ -1380,10 +1364,11 @@ func SendModeUpdate(mode string) tea.Cmd {
 	}
 }
 
-// SendCompletedTasksUpdate is a helper command to update completed/total task counts
-func SendCompletedTasksUpdate(completed, total int) tea.Cmd {
+// SendModelUpdate is a helper command to update the effective model shown in
+// the Model Details panel (from the stream's system-init/assistant messages).
+func SendModelUpdate(model string) tea.Cmd {
 	return func() tea.Msg {
-		return completedTasksUpdateMsg{completed: completed, total: total}
+		return modelUpdateMsg{model: model}
 	}
 }
 
