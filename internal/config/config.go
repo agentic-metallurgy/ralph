@@ -35,9 +35,9 @@ type Config struct {
 	ShowPrompt       bool
 	ShowVersion      bool
 	NoTmux           bool
-	CLI             bool
-	MaxCostPerHour  float64 // maximum USD cost per rolling hour (0 = no limit)
-	Subcommand      string  // "plan", "build", "plan-and-build", "autoresearch", or "" (default: build mode)
+	CLI              bool
+	MaxCostPerHour   float64 // maximum USD cost per rolling hour (0 = no limit)
+	Subcommand       string  // "plan", "build", "plan-and-build", "autoresearch", or "" (default: build mode)
 }
 
 // NewConfig returns a new Config with default values

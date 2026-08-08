@@ -94,7 +94,10 @@ func TestBDD_UserControlsLoopExecution_PauseShowsStoppedStatus(t *testing.T) {
 	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	l.Start(ctx)
-	go func() { for range l.Output() {} }()
+	go func() {
+		for range l.Output() {
+		}
+	}()
 	time.Sleep(50 * time.Millisecond)
 
 	// When: user presses 'p' to pause
@@ -127,7 +130,10 @@ func TestBDD_UserControlsLoopExecution_ResumeShowsRunningStatus(t *testing.T) {
 	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	l.Start(ctx)
-	go func() { for range l.Output() {} }()
+	go func() {
+		for range l.Output() {
+		}
+	}()
 	time.Sleep(50 * time.Millisecond)
 
 	m, _ = pressKey(m, 'p')
@@ -587,7 +593,10 @@ func TestBDD_UserControlsLoopExecution_PauseResumeWithRealLoop(t *testing.T) {
 	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	l.Start(ctx)
-	go func() { for range l.Output() {} }()
+	go func() {
+		for range l.Output() {
+		}
+	}()
 
 	time.Sleep(50 * time.Millisecond)
 

@@ -488,12 +488,12 @@ func processLoopOutput(
 	defer close(msgChan)
 
 	loopOutput := claudeLoop.Output()
-	var loopTotalTokens int64       // per-loop token tracking for tmux status bar
-	var iterEstimate float64        // per-iteration estimated cost from token counts
-	var subagentCostAccum float64   // per-iteration accumulated subagent actual costs for reconciliation
-	var lastResultCost float64      // tracks previous result's cumulative total_cost_usd for delta computation
-	var iterToolUseCount int        // per-iteration tool use count for exit loop detection
-	var noopStreak int              // consecutive no-op iterations for exit loop detection
+	var loopTotalTokens int64           // per-loop token tracking for tmux status bar
+	var iterEstimate float64            // per-iteration estimated cost from token counts
+	var subagentCostAccum float64       // per-iteration accumulated subagent actual costs for reconciliation
+	var lastResultCost float64          // tracks previous result's cumulative total_cost_usd for delta computation
+	var iterToolUseCount int            // per-iteration tool use count for exit loop detection
+	var noopStreak int                  // consecutive no-op iterations for exit loop detection
 	seenMsgIDs := make(map[string]bool) // dedup: CLI emits multiple chunks per message ID with identical usage
 	lt := &loopTracker{}
 	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors

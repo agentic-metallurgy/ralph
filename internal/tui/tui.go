@@ -57,7 +57,7 @@ var (
 	colorGreen     = lipgloss.Color("#9ECE6A")
 	colorDimGray   = lipgloss.Color("#565F89")
 	colorLightGray = lipgloss.Color("#C0CAF5")
-colorRed       = lipgloss.Color("#F7768E")
+	colorRed       = lipgloss.Color("#F7768E")
 	colorOrange    = lipgloss.Color("#FF9E64")
 )
 
@@ -214,33 +214,33 @@ func (m Message) GetStyle() lipgloss.Style {
 
 // Model represents the TUI application state
 type Model struct {
-	ready          bool
-	viewportReady  bool
-	width          int
-	height         int
-	quitting       bool
-	completed      bool // whether the loop has finished all iterations
-	messages       []Message
-	maxMessages    int
+	ready           bool
+	viewportReady   bool
+	width           int
+	height          int
+	quitting        bool
+	completed       bool // whether the loop has finished all iterations
+	messages        []Message
+	maxMessages     int
 	spinnerFrame    int // advances each tick to animate in_progress rows
 	inProgressTools int // count of tool rows currently in_progress
-	stats          *stats.TokenStats
-	currentLoop    int
-	totalLoops     int
-	plan           []PlanItem // Agent's TodoWrite-authored plan (ACP plan panel)
-	currentMode    string // Current mode display ("Planning", "Building", or "")
-	modelName      string // Model in use: the --model override, then the effective id from the stream
-	effort         string // Effort level from --effort ("" = claude CLI default)
-	startTime      time.Time
-	baseElapsed    time.Duration // elapsed time from previous sessions
-	timerPaused    bool          // whether elapsed time tracking is paused
-	pausedElapsed  time.Duration // elapsed time when paused (for display)
+	stats           *stats.TokenStats
+	currentLoop     int
+	totalLoops      int
+	plan            []PlanItem // Agent's TodoWrite-authored plan (ACP plan panel)
+	currentMode     string     // Current mode display ("Planning", "Building", or "")
+	modelName       string     // Model in use: the --model override, then the effective id from the stream
+	effort          string     // Effort level from --effort ("" = claude CLI default)
+	startTime       time.Time
+	baseElapsed     time.Duration // elapsed time from previous sessions
+	timerPaused     bool          // whether elapsed time tracking is paused
+	pausedElapsed   time.Duration // elapsed time when paused (for display)
 	// Per-loop tracking for tmux status bar (spec: stats should be about current loop)
-	loopTotalTokens   int64         // tokens accumulated in the current loop iteration
-	loopStartTime     time.Time     // when the current loop iteration started
-	loopBaseElapsed   time.Duration // per-loop elapsed from before pause within same loop
-	loopTimerPaused   bool          // whether per-loop timer is paused
-	loopPausedElapsed time.Duration // per-loop elapsed at time of pause
+	loopTotalTokens   int64          // tokens accumulated in the current loop iteration
+	loopStartTime     time.Time      // when the current loop iteration started
+	loopBaseElapsed   time.Duration  // per-loop elapsed from before pause within same loop
+	loopTimerPaused   bool           // whether per-loop timer is paused
+	loopPausedElapsed time.Duration  // per-loop elapsed at time of pause
 	thinkingViewport  viewport.Model // left half of the 1:1 split: thinking/assistant narrative, word-wrapped
 	toolViewport      viewport.Model // right half of the 1:1 split: tool-use rows + plan panel
 	activityHeight    int
@@ -1434,4 +1434,3 @@ func (m *Model) SetMaxMessagesForTest(n int) {
 func (m *Model) MessageCountForTest() int {
 	return len(m.messages)
 }
-

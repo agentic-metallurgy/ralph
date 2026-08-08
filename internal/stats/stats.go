@@ -197,7 +197,6 @@ func FormatTokens(count int64) string {
 	}
 }
 
-
 // GenerateSessionID returns a 6-char lowercase hex string from crypto/rand.
 func GenerateSessionID() (string, error) {
 	b := make([]byte, 3)
@@ -408,17 +407,17 @@ func ProjectKey(owner, repo string) string {
 
 // CheckpointParams holds parameters for a checkpoint row insert.
 type CheckpointParams struct {
-	LoopID            string
-	SessionID         string
-	Owner             string
-	Repo              string
-	Branch            string
-	DeltaCost         float64
-	DeltaInputTokens  int64
-	DeltaOutputTokens int64
+	LoopID             string
+	SessionID          string
+	Owner              string
+	Repo               string
+	Branch             string
+	DeltaCost          float64
+	DeltaInputTokens   int64
+	DeltaOutputTokens  int64
 	DeltaCacheCreation int64
-	DeltaCacheRead    int64
-	Timestamp         string
+	DeltaCacheRead     int64
+	Timestamp          string
 }
 
 // FlushCheckpoint inserts a checkpoint row into the database.
@@ -562,4 +561,3 @@ func QueryRollingWakeTime(db *sql.DB, owner, repo string, limit float64) (time.T
 	// Fallback: no single row's aging-out is sufficient
 	return time.Now().UTC().Add(60 * time.Minute), nil
 }
-

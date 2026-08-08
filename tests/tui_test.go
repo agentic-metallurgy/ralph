@@ -2036,4 +2036,3 @@ func TestModelDetailsEmptyStreamModelIgnored(t *testing.T) {
 		t.Error("An empty model update should not reset the model row to 'default'")
 	}
 }
-

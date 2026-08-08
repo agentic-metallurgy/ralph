@@ -172,15 +172,15 @@ type RateLimitInfo struct {
 
 // ContentItem represents a single content item in a message
 type ContentItem struct {
-	Type           ContentType            `json:"type"`
-	Text           string                 `json:"text,omitempty"`
-	ID             string                 `json:"id,omitempty"`          // Tool use ID for tool_use
-	Name           string                 `json:"name,omitempty"`        // Tool name for tool_use
-	Input          map[string]interface{} `json:"input,omitempty"`       // Tool input for tool_use
-	ToolUseID      string                 `json:"tool_use_id,omitempty"` // Tool use ID for tool_result
-	Content        interface{}            `json:"content,omitempty"`     // Tool result content
-	ThinkingText   string                 `json:"thinking,omitempty"`    // Thinking content for thinking items
-	IsError        bool                   `json:"is_error,omitempty"`    // True for failed tool_result
+	Type         ContentType            `json:"type"`
+	Text         string                 `json:"text,omitempty"`
+	ID           string                 `json:"id,omitempty"`          // Tool use ID for tool_use
+	Name         string                 `json:"name,omitempty"`        // Tool name for tool_use
+	Input        map[string]interface{} `json:"input,omitempty"`       // Tool input for tool_use
+	ToolUseID    string                 `json:"tool_use_id,omitempty"` // Tool use ID for tool_result
+	Content      interface{}            `json:"content,omitempty"`     // Tool result content
+	ThinkingText string                 `json:"thinking,omitempty"`    // Thinking content for thinking items
+	IsError      bool                   `json:"is_error,omitempty"`    // True for failed tool_result
 }
 
 // InnerMessage represents the message field within an assistant/user message
@@ -193,17 +193,17 @@ type InnerMessage struct {
 
 // ParsedMessage represents a parsed Claude message
 type ParsedMessage struct {
-	Type            MessageType    `json:"type"`
-	SessionID       string         `json:"session_id,omitempty"`
-	Model           string         `json:"model,omitempty"` // top-level model (system init messages)
-	Message         *InnerMessage  `json:"message,omitempty"`
-	TotalCostUSD    float64        `json:"total_cost_usd,omitempty"`
-	CostUSD         float64        `json:"cost_usd,omitempty"`
-	ParentToolUseID *string        `json:"parent_tool_use_id,omitempty"`
-	IsError         bool              `json:"is_error,omitempty"`
-	ErrorRaw        json.RawMessage   `json:"error,omitempty"`
-	RateLimitInfo   *RateLimitInfo    `json:"rate_limit_info,omitempty"`
-	RawJSON         string         `json:"-"` // Original JSON for debugging
+	Type            MessageType     `json:"type"`
+	SessionID       string          `json:"session_id,omitempty"`
+	Model           string          `json:"model,omitempty"` // top-level model (system init messages)
+	Message         *InnerMessage   `json:"message,omitempty"`
+	TotalCostUSD    float64         `json:"total_cost_usd,omitempty"`
+	CostUSD         float64         `json:"cost_usd,omitempty"`
+	ParentToolUseID *string         `json:"parent_tool_use_id,omitempty"`
+	IsError         bool            `json:"is_error,omitempty"`
+	ErrorRaw        json.RawMessage `json:"error,omitempty"`
+	RateLimitInfo   *RateLimitInfo  `json:"rate_limit_info,omitempty"`
+	RawJSON         string          `json:"-"` // Original JSON for debugging
 }
 
 // LoopMarker represents a loop marker extracted from output

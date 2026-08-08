@@ -532,4 +532,3 @@ func TestBDD_UserAdaptsToTerminal_TickDuringPreInit(t *testing.T) {
 		t.Error("View should remain empty during pre-init even after tick")
 	}
 }
-

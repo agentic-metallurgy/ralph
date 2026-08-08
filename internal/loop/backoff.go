@@ -18,11 +18,11 @@ const (
 // Backoff tracks exponential backoff state for API 529 (overloaded) errors.
 // It is safe for concurrent use.
 type Backoff struct {
-	mu             sync.Mutex
-	initialBackoff time.Duration
-	maxBackoff     time.Duration
-	maxRetries     int
-	jitterFraction float64
+	mu              sync.Mutex
+	initialBackoff  time.Duration
+	maxBackoff      time.Duration
+	maxRetries      int
+	jitterFraction  float64
 	consecutiveHits int
 }
 
