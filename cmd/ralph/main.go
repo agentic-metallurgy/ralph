@@ -424,7 +424,7 @@ func main() {
 	model.SetTmuxStatusBar(tmuxBar)
 	model.SetGitContext(dbCtx.repo, dbCtx.branch)
 	model.SetPlanFile(cfg.PlanFile)
-	model.SetModelInfo(cfg.Model, cfg.Effort)
+	model.SetModelInfo(cfg.Model, config.ResolveEffort(cfg.Effort))
 
 	// Set current mode for TUI display
 	if cfg.IsPlanMode() {
@@ -540,6 +540,46 @@ func processLoopOutput(
 	}
 }
 
+// transcriptEffortInterval and transcriptEffortAttempts bound the wait for the
+// claude CLI to write its first assistant record, which is where the transcript
+// first names the effort level. ~30s covers a slow first turn; giving up leaves
+// the settings-derived value in the panel.
+const (
+	transcriptEffortInterval = 500 * time.Millisecond
+	transcriptEffortAttempts = 60
+)
+
+// trackSession records the session ID for --resume support and, whenever the
+// session changes, starts one background read of that session's transcript for
+// the effort level the CLI resolved. An empty ID means the message did not
+// carry one and is ignored.
+func trackSession(claudeLoop *loop.Loop, sessionID string, program *tea.Program) {
+	if sessionID == "" {
+		return
+	}
+	// GetSessionID still holds the previous session here, so this fires once
+	// per session rather than once per system message.
+	if program != nil && sessionID != claudeLoop.GetSessionID() {
+		go refineEffortFromTranscript(sessionID, program)
+	}
+	claudeLoop.SetSessionID(sessionID)
+}
+
+// refineEffortFromTranscript polls the session transcript until the claude CLI
+// records the effort level it is running at, then reports it to the Model
+// Details panel. The stream never carries the effort, so this readback is the
+// only runtime source; it is best-effort and silently gives up, since the panel
+// already shows the level resolved from --effort or the settings chain.
+func refineEffortFromTranscript(sessionID string, program *tea.Program) {
+	for range transcriptEffortAttempts {
+		if effort := config.TranscriptEffort(sessionID); effort != "" {
+			program.Send(tui.SendEffortUpdate(effort)())
+			return
+		}
+		time.Sleep(transcriptEffortInterval)
+	}
+}
+
 // processMessage handles a single message from the loop
 func processMessage(
 	msg loop.Message,
@@ -573,9 +613,7 @@ func processMessage(
 		parsed := jsonParser.ParseLine(msg.Content)
 		if parsed != nil {
 			// Capture session ID from system messages for --resume support
-			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
-				claudeLoop.SetSessionID(sessionID)
-			}
+			trackSession(claudeLoop, jsonParser.GetSessionID(parsed), program)
 			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile, iterEstimate, subagentCostAccum, lastResultCost, iterToolUseCount, noopStreak, apiBackoff, seenMsgIDs)
 		} else {
 			// Check if it's a loop marker in the output stream
@@ -1478,7 +1516,7 @@ func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats, logFile i
 	model.SetTmuxStatusBar(tmuxBar)
 	model.SetGitContext(dbCtx.repo, dbCtx.branch)
 	model.SetPlanFile(cfg.PlanFile)
-	model.SetModelInfo(cfg.Model, cfg.Effort)
+	model.SetModelInfo(cfg.Model, config.ResolveEffort(cfg.Effort))
 
 	// Start in planning mode
 	model.SetCurrentMode("Planning")
@@ -1665,9 +1703,7 @@ func processPlanPhase(
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
 				if parsed != nil {
-					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
-						planLoop.SetSessionID(sessionID)
-					}
+					trackSession(planLoop, jsonParser.GetSessionID(parsed), program)
 					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
@@ -1773,9 +1809,7 @@ func processBuildPhase(
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
 				if parsed != nil {
-					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
-						buildLoop.SetSessionID(sessionID)
-					}
+					trackSession(buildLoop, jsonParser.GetSessionID(parsed), program)
 					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {

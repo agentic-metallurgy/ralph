@@ -1994,8 +1994,10 @@ func TestDeletePlanHotkeyInHotkeyBar(t *testing.T) {
 //
 // The fourth footer panel shows what the loop is actually running with:
 // "Model:", "Effort:" and "Mode:" rows. Known model tiers collapse to their
-// short name, unknown ids render verbatim, and an empty flag reads "default"
-// (i.e. whatever the claude CLI resolves on its own).
+// short name and unknown ids render verbatim; an unset model reads "default"
+// (whatever the claude CLI resolves on its own, refined once the stream reports
+// it). Effort has no such fallback name — the levels are low/medium/high/xhigh/
+// max — so an unresolved one reads "-", the same placeholder the Mode row uses.
 // ============================================================================
 
 // setupModelDetailsModel builds a ready model with the given --model/--effort
@@ -2140,23 +2142,29 @@ func TestModelDetailsCollapsesSonnetTier(t *testing.T) {
 	if strings.Contains(panel, "claude-sonnet-4-6") {
 		t.Errorf("Panel should not print the full model id, got panel:\n%s", panel)
 	}
-	if !panelHasRow(rows, "Effort: default") {
-		t.Errorf("Panel should show 'Effort: default' when --effort was not passed, got rows: %q", rows)
+	if !panelHasRow(rows, "Effort: -") {
+		t.Errorf("Panel should show 'Effort: -' when no effort level could be resolved, got rows: %q", rows)
 	}
 }
 
-// TestModelDetailsEmptyFlagsShowDefault tests that an unset model and effort both
-// render as "default" (the claude CLI decides).
-func TestModelDetailsEmptyFlagsShowDefault(t *testing.T) {
+// TestModelDetailsUnresolvedEffortIsNotDefault tests that an unresolved effort
+// renders as the "-" placeholder, not as "default". The claude CLI's levels are
+// low/medium/high/xhigh/max; "default" is not one of them, so showing it reads
+// as a level that does not exist.
+func TestModelDetailsUnresolvedEffortIsNotDefault(t *testing.T) {
 	model := setupModelDetailsModel("", "")
 
-	// Both rows must fall back independently — asserted as complete rows rather
-	// than by counting "default" occurrences across the whole view.
+	// The model row keeps its own "default" fallback (the stream refines it
+	// later), so the rows must be asserted independently rather than by counting
+	// "default" occurrences across the whole view.
 	rows := modelDetailsRows(t, model.View())
-	for _, want := range []string{"Model: default", "Effort: default"} {
+	for _, want := range []string{"Model: default", "Effort: -"} {
 		if !panelHasRow(rows, want) {
 			t.Errorf("Model Details panel should contain the row %q, got rows: %q", want, rows)
 		}
+	}
+	if panelHasRow(rows, "Effort: default") {
+		t.Errorf("'default' is not an effort level and must not render as one, got rows: %q", rows)
 	}
 }
 
@@ -2235,5 +2243,71 @@ func TestModelDetailsEmptyStreamModelIgnored(t *testing.T) {
 	}
 	if panelHasRow(rows, "Model: default") {
 		t.Errorf("An empty model update should not reset the model row to 'default', got rows: %q", rows)
+	}
+}
+
+// TestModelDetailsTranscriptEffortOverridesFlag tests that the level read back
+// from the session transcript replaces the one Ralph resolved up front. The
+// transcript is what the CLI actually ran at, so it wins even over --effort —
+// enterprise managed settings can override the flag on the command line.
+func TestModelDetailsTranscriptEffortOverridesFlag(t *testing.T) {
+	model := setupModelDetailsModel("claude-opus-4-8", "high")
+
+	cmd := tui.SendEffortUpdate("max")
+	model, _ = updateModel(model, cmd())
+
+	view := model.View()
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Effort: max") {
+		t.Errorf("Panel should show the transcript's effort level, got rows: %q", rows)
+	}
+	if strings.Contains(panel, "high") {
+		t.Errorf("Panel should no longer show the flag's effort level 'high', got panel:\n%s", panel)
+	}
+	// And: the model row is untouched by an effort update.
+	if !panelHasRow(rows, "Model: opus") {
+		t.Errorf("Model should persist across an effort update, got rows: %q", rows)
+	}
+}
+
+// TestModelDetailsUnresolvedEffortRefinedByTranscript tests the case the
+// transcript readback exists for: nothing configured a level up front, so the
+// panel starts at "-" and fills in once the session reports one.
+func TestModelDetailsUnresolvedEffortRefinedByTranscript(t *testing.T) {
+	model := setupModelDetailsModel("", "")
+
+	if rows := modelDetailsRows(t, model.View()); !panelHasRow(rows, "Effort: -") {
+		t.Fatalf("Panel should start at the '-' placeholder, got rows: %q", rows)
+	}
+
+	cmd := tui.SendEffortUpdate("xhigh")
+	model, _ = updateModel(model, cmd())
+
+	rows := modelDetailsRows(t, model.View())
+	if !panelHasRow(rows, "Effort: xhigh") {
+		t.Errorf("Panel should show the effort level once the transcript reports it, got rows: %q", rows)
+	}
+	if panelHasRow(rows, "Effort: -") {
+		t.Errorf("Panel should drop the placeholder once a level is known, got rows: %q", rows)
+	}
+}
+
+// TestModelDetailsEmptyEffortUpdateIgnored tests that an empty effort update —
+// what a transcript read returns before the CLI has recorded a level — does not
+// wipe the value already resolved from the flag or settings.
+func TestModelDetailsEmptyEffortUpdateIgnored(t *testing.T) {
+	model := setupModelDetailsModel("claude-opus-4-8", "medium")
+
+	cmd := tui.SendEffortUpdate("")
+	model, _ = updateModel(model, cmd())
+
+	rows := modelDetailsRows(t, model.View())
+	if !panelHasRow(rows, "Effort: medium") {
+		t.Errorf("An empty effort update should not clear the resolved level, got rows: %q", rows)
+	}
+	if panelHasRow(rows, "Effort: -") {
+		t.Errorf("An empty effort update should not reset the row to the '-' placeholder, got rows: %q", rows)
 	}
 }

@@ -326,9 +326,11 @@ func (m *Model) SetCurrentMode(mode string) {
 }
 
 // SetModelInfo sets the model and effort shown in the Model Details panel.
-// Both come from the CLI flags and may be empty, meaning "whatever the claude
-// CLI defaults to"; the model is refined at runtime by SendModelUpdate once the
-// stream reports the effective model.
+// The model comes from --model and may be empty, meaning "whatever the claude
+// CLI defaults to"; it is refined at runtime by SendModelUpdate once the stream
+// reports the effective model. Effort has no such stream signal, so callers
+// pass config.ResolveEffort's value — the flag or the settings chain behind it —
+// and empty means no source configured a level at all.
 func (m *Model) SetModelInfo(model, effort string) {
 	m.modelName = model
 	m.effort = effort
@@ -423,6 +425,12 @@ type modeUpdateMsg struct {
 // modelUpdateMsg is sent to update the effective model reported by the stream
 type modelUpdateMsg struct {
 	model string
+}
+
+// effortUpdateMsg is sent to update the effort level read back from the claude
+// session transcript.
+type effortUpdateMsg struct {
+	effort string
 }
 
 // planUpdateMsg replaces the agent's plan (a full-list TodoWrite snapshot).
@@ -780,6 +788,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case effortUpdateMsg:
+		// The transcript records the level the CLI resolved for itself, which
+		// outranks both --effort and the settings chain SetModelInfo read.
+		if msg.effort != "" {
+			m.effort = msg.effort
+		}
+		return m, nil
+
 	case planUpdateMsg:
 		// Full-list replace. The plan panel counts progress off m.plan, so this
 		// is the single source of truth for task progress.
@@ -1125,11 +1141,14 @@ func formatModelName(model string) string {
 	return model
 }
 
-// formatEffort renders the effort level, or "default" when --effort was not
-// passed and the claude CLI decides.
+// formatEffort renders the effort level. "default" is not one of them (the
+// levels are low/medium/high/xhigh/max), so an unknown level renders as the
+// same "-" placeholder the Mode row uses. Callers pass the level resolved from
+// --effort or the claude settings chain, so "-" means genuinely unknown rather
+// than merely unflagged.
 func formatEffort(effort string) string {
 	if effort == "" {
-		return "default"
+		return "-"
 	}
 	return strings.ToLower(effort)
 }
@@ -1378,6 +1397,15 @@ func SendModeUpdate(mode string) tea.Cmd {
 func SendModelUpdate(model string) tea.Cmd {
 	return func() tea.Msg {
 		return modelUpdateMsg{model: model}
+	}
+}
+
+// SendEffortUpdate is a helper command to update the effort level shown in the
+// Model Details panel, read back from the claude session transcript. The stream
+// never reports the effort in use, so this is the only runtime source.
+func SendEffortUpdate(effort string) tea.Cmd {
+	return func() tea.Msg {
+		return effortUpdateMsg{effort: effort}
 	}
 }
 

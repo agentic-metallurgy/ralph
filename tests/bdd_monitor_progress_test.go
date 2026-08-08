@@ -383,14 +383,20 @@ func TestBDD_UserMonitorsBuildProgress_ModelDetailsDefaultWhenUnset(t *testing.T
 	// When: the view is rendered
 	view := m.View()
 
-	// Then: both rows read "default" — i.e. whatever the claude CLI resolves.
+	// Then: the model row reads "default" — whatever the claude CLI resolves,
+	// until the stream reports the effective model. Effort has no such fallback
+	// name: the levels are low/medium/high/xhigh/max, so an unresolved one shows
+	// the "-" placeholder instead of inventing a level that does not exist.
 	// Asserted as complete rows in the Model Details panel rather than by
-	// counting "default" occurrences across the whole view.
+	// counting occurrences across the whole view.
 	rows := modelDetailsRows(t, view)
-	for _, want := range []string{"Model: default", "Effort: default"} {
+	for _, want := range []string{"Model: default", "Effort: -"} {
 		if !panelHasRow(rows, want) {
 			t.Errorf("Expected the row %q in the Model Details panel, got rows: %q", want, rows)
 		}
+	}
+	if panelHasRow(rows, "Effort: default") {
+		t.Errorf("'default' is not an effort level and must not be shown as one, got rows: %q", rows)
 	}
 }
 

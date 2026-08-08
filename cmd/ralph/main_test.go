@@ -694,3 +694,30 @@ func TestModelUpdateSkipsSubagentMessages(t *testing.T) {
 		t.Errorf("last reported model = %q, want %q (subagent model must not win)", lastReported, "claude-opus-4-8")
 	}
 }
+
+// TestTrackSessionRecordsSessionID tests that trackSession keeps the loop's
+// session ID up to date for --resume support, which the three call sites in the
+// TUI message pumps depend on.
+func TestTrackSessionRecordsSessionID(t *testing.T) {
+	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+
+	// A nil program means no TUI to refine the effort level for; the session
+	// bookkeeping still has to happen.
+	trackSession(claudeLoop, "a50b7b11-7b8d-44a7-bdf5-0433d84f3fb1", nil)
+	if got := claudeLoop.GetSessionID(); got != "a50b7b11-7b8d-44a7-bdf5-0433d84f3fb1" {
+		t.Errorf("GetSessionID = %q, want the tracked session", got)
+	}
+
+	// Most stream lines carry no session ID; those must not wipe the stored one
+	// or the next iteration loses its --resume target.
+	trackSession(claudeLoop, "", nil)
+	if got := claudeLoop.GetSessionID(); got != "a50b7b11-7b8d-44a7-bdf5-0433d84f3fb1" {
+		t.Errorf("GetSessionID = %q after an empty ID, want the previously tracked session", got)
+	}
+
+	// A new session replaces it.
+	trackSession(claudeLoop, "b61c8c22-8c9e-4bf8-cfe6-1544981e4c62", nil)
+	if got := claudeLoop.GetSessionID(); got != "b61c8c22-8c9e-4bf8-cfe6-1544981e4c62" {
+		t.Errorf("GetSessionID = %q, want the newest session", got)
+	}
+}
