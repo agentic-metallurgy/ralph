@@ -3,9 +3,11 @@
 ## Build & Test
 - Build: `go build -o ralph ./cmd/ralph`
 - Vet: `go vet ./...` (must be clean)
+- Format: `gofmt -l .` (must print nothing)
 - Test all: `go test -v ./tests/ ./cmd/ralph/`
 - Test single: `go test -v -run TestName ./tests/`
 - Test main: `go test -v ./cmd/ralph/`
+- Gotcha: `make test` runs only `./tests` — use `go test ./tests/ ./cmd/ralph/` as the authoritative command
 
 ## Project Structure
 - `cmd/ralph/main.go` — entry point, wires loop/parser/tui together
@@ -17,7 +19,7 @@
 - `internal/tmux/` — auto-wrap in tmux session
 - `internal/tui/` — BubbleTea TUI (activity panel, footer, hotkeys)
 - `tests/` — BDD and unit tests for internal packages
-- `cmd/ralph/main_test.go` — tests for main.go functions (parseTaskCounts, isNewLoopStart)
+- `cmd/ralph/main_test.go` — tests for main.go functions (isNewLoopStart, isRetryLoopStart, checkCostPacing)
 - `specs/` — feature specifications
 
 ## Subcommands
