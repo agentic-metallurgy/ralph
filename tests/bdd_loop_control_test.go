@@ -17,7 +17,7 @@ import (
 //
 // These tests verify the complete state machine for loop control:
 // pause, resume, add/subtract loops, start after completion, hibernate wake.
-// Organized by user goal following specs/bdd-agent-prompt.md methodology.
+// Organized by user goal: one scenario per user-observable behaviour.
 // ============================================================================
 
 // --- Helpers ---
@@ -94,7 +94,10 @@ func TestBDD_UserControlsLoopExecution_PauseShowsStoppedStatus(t *testing.T) {
 	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	l.Start(ctx)
-	go func() { for range l.Output() {} }()
+	go func() {
+		for range l.Output() {
+		}
+	}()
 	time.Sleep(50 * time.Millisecond)
 
 	// When: user presses 'p' to pause
@@ -127,7 +130,10 @@ func TestBDD_UserControlsLoopExecution_ResumeShowsRunningStatus(t *testing.T) {
 	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	l.Start(ctx)
-	go func() { for range l.Output() {} }()
+	go func() {
+		for range l.Output() {
+		}
+	}()
 	time.Sleep(50 * time.Millisecond)
 
 	m, _ = pressKey(m, 'p')
@@ -426,7 +432,6 @@ func TestBDD_UserControlsLoopExecution_HibernateOverridesStoppedDisplay(t *testi
 	// Given: a loop that is hibernating (which internally may pause)
 	m, l := setupReadyModelWithLoop(2, 5)
 	l.Hibernate(time.Now().Add(3 * time.Minute))
-	m, _ = sendTuiMsg(m, tui.SendHibernate(time.Now().Add(3*time.Minute)))
 
 	// Then: status should show RATE LIMITED (not STOPPED)
 	if viewContains(m, "STOPPED") && viewNotContains(m, "RATE LIMITED") {
@@ -587,7 +592,10 @@ func TestBDD_UserControlsLoopExecution_PauseResumeWithRealLoop(t *testing.T) {
 	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	l.Start(ctx)
-	go func() { for range l.Output() {} }()
+	go func() {
+		for range l.Output() {
+		}
+	}()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -612,22 +620,46 @@ func TestBDD_UserControlsLoopExecution_PauseResumeWithRealLoop(t *testing.T) {
 	cancel()
 }
 
-// TestBDD_UserControlsLoopExecution_PerLoopStatsResetOnNewLoop tests that per-loop
-// statistics (tokens, timer) reset when a new loop iteration begins.
+// TestBDD_UserControlsLoopExecution_PerLoopStatsResetOnNewLoop tests that the
+// per-loop token counter on the tmux status bar starts from scratch every time
+// the loop the user is driving rolls over into its next iteration.
+//
+// Given: a running loop whose current iteration has already burned 50k tokens,
+//
+//	reported on the tmux status bar as "tokens: 50k"
+//
+// When: the next loop iteration starts
+// Then: the bar's counter resets to "tokens: 0" and subsequent usage is
+//
+//	attributed to the new iteration alone ("tokens: 100"), so the user always
+//	sees what the iteration in front of them is costing.
 func TestBDD_UserControlsLoopExecution_PerLoopStatsResetOnNewLoop(t *testing.T) {
-	// Given: a model with accumulated per-loop stats
-	m := setupReadyModel()
+	// Given: a running loop with 50k tokens spent in the current iteration
+	m, fakeBar := setupModelWithFakeBar(2, 5)
 	m, _ = sendTuiMsg(m, tui.SendLoopStatsUpdate(50000))
+	m = triggerTick(m)
 
-	// When: a new loop starts
+	if !strings.Contains(fakeBar.LastContent, "tokens: 50k") {
+		t.Fatalf("Precondition: expected 'tokens: 50k' on tmux bar, got: %q", fakeBar.LastContent)
+	}
+
+	// When: a new loop iteration starts
 	m, _ = sendTuiMsg(m, tui.SendLoopStarted())
+	m = triggerTick(m)
 
-	// Then: per-loop stats should be reset
-	// We verify by updating with a small value and checking the model still renders
+	// Then: the per-loop counter is back to zero
+	if !strings.Contains(fakeBar.LastContent, "tokens: 0") {
+		t.Errorf("Expected per-loop tokens to reset to 'tokens: 0', got: %q", fakeBar.LastContent)
+	}
+	if strings.Contains(fakeBar.LastContent, "50k") {
+		t.Errorf("Previous iteration's '50k' should be gone after reset, got: %q", fakeBar.LastContent)
+	}
+
+	// And: usage reported afterwards counts only against the new iteration
 	m, _ = sendTuiMsg(m, tui.SendLoopStatsUpdate(100))
-	view := m.View()
-	if view == "" {
-		t.Error("View should render after per-loop stats reset")
+	triggerTick(m)
+	if !strings.Contains(fakeBar.LastContent, "tokens: 100") {
+		t.Errorf("Expected new iteration's 'tokens: 100' on tmux bar, got: %q", fakeBar.LastContent)
 	}
 }
 

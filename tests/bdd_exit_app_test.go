@@ -18,7 +18,7 @@ import (
 //
 // These tests verify all exit paths from the TUI: quit via 'q' key, quit via
 // Ctrl+C, elapsed time persistence to stats, and tmux status bar restoration.
-// Organized by user goal following specs/bdd-agent-prompt.md methodology.
+// Organized by user goal: one scenario per user-observable behaviour.
 // ============================================================================
 
 // --- Scenario 1: Quit via 'q' key ---
@@ -466,12 +466,11 @@ func TestBDD_UserExitsApplication_CompletedStatePersistsElapsed(t *testing.T) {
 
 func TestBDD_UserExitsApplication_HibernatingStatePersistsElapsed(t *testing.T) {
 	// Given: a hibernating model with stats
-	m, _ := setupReadyModelWithLoop(2, 5)
+	m, l := setupReadyModelWithLoop(2, 5)
 	tokenStats := stats.NewTokenStats()
 	m.SetStats(tokenStats)
 	m.SetBaseElapsed(20 * time.Minute)
-	until := time.Now().Add(5 * time.Minute)
-	m, _ = sendTuiMsg(m, tui.SendHibernate(until))
+	l.Hibernate(time.Now().Add(5 * time.Minute))
 
 	// When: user quits while hibernating
 	m, _ = pressKey(m, 'q')
@@ -576,7 +575,7 @@ func TestBDD_UserExitsApplication_QuitWithFullState(t *testing.T) {
 	m.SetTmuxStatusBar(sb)
 	m.AddMessage(tui.Message{Role: tui.RoleAssistant, Content: "Working hard"})
 	m, _ = sendTuiMsg(m, tui.SendModeUpdate("Building"))
-	m, _ = sendTuiMsg(m, tui.SendTaskUpdate("Implementing feature X"))
+	m, _ = sendTuiMsg(m, tui.SendModelUpdate("claude-opus-4-8"))
 	// When: user quits
 	m, cmd := pressKey(m, 'q')
 

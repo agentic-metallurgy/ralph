@@ -15,187 +15,6 @@ import (
 	"github.com/cloudosai/ralph-go/internal/stats"
 )
 
-func TestParseTaskCountsNoFile(t *testing.T) {
-	completed, total := parseTaskCounts("/nonexistent/path/IMPLEMENTATION_PLAN.md")
-	if completed != 0 || total != 0 {
-		t.Errorf("expected (0, 0) for missing file, got (%d, %d)", completed, total)
-	}
-}
-
-func TestParseTaskCountsEmptyFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "IMPLEMENTATION_PLAN.md")
-	os.WriteFile(path, []byte(""), 0644)
-
-	completed, total := parseTaskCounts(path)
-	if completed != 0 || total != 0 {
-		t.Errorf("expected (0, 0) for empty file, got (%d, %d)", completed, total)
-	}
-}
-
-func TestParseTaskCountsSingleTaskTodo(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "IMPLEMENTATION_PLAN.md")
-	content := `# Implementation Plan
-
-## TASK 1: Add feature X
-**Priority: HIGH**
-**Status: TODO**
-`
-	os.WriteFile(path, []byte(content), 0644)
-
-	completed, total := parseTaskCounts(path)
-	if total != 1 {
-		t.Errorf("expected total=1, got %d", total)
-	}
-	if completed != 0 {
-		t.Errorf("expected completed=0, got %d", completed)
-	}
-}
-
-func TestParseTaskCountsSingleTaskDone(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "IMPLEMENTATION_PLAN.md")
-	content := `# Implementation Plan
-
-## TASK 1: Add feature X
-**Priority: HIGH**
-**Status: DONE**
-`
-	os.WriteFile(path, []byte(content), 0644)
-
-	completed, total := parseTaskCounts(path)
-	if total != 1 {
-		t.Errorf("expected total=1, got %d", total)
-	}
-	if completed != 1 {
-		t.Errorf("expected completed=1, got %d", completed)
-	}
-}
-
-func TestParseTaskCountsNotNeeded(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "IMPLEMENTATION_PLAN.md")
-	content := `# Implementation Plan
-
-## TASK 1: Deprecated feature
-**Status: NOT NEEDED**
-`
-	os.WriteFile(path, []byte(content), 0644)
-
-	completed, total := parseTaskCounts(path)
-	if total != 1 {
-		t.Errorf("expected total=1, got %d", total)
-	}
-	if completed != 1 {
-		t.Errorf("expected completed=1, got %d", completed)
-	}
-}
-
-func TestParseTaskCountsMultipleTasks(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "IMPLEMENTATION_PLAN.md")
-	content := `# Implementation Plan
-
-## TASK 1: First feature
-**Status: DONE**
-
-## TASK 2: Second feature
-**Status: IN PROGRESS**
-
-## TASK 3: Third feature
-**Status: TODO**
-
-## TASK 4: Fourth feature
-**Status: DONE**
-
-## TASK 5: Fifth feature
-**Status: NOT NEEDED**
-`
-	os.WriteFile(path, []byte(content), 0644)
-
-	completed, total := parseTaskCounts(path)
-	if total != 5 {
-		t.Errorf("expected total=5, got %d", total)
-	}
-	if completed != 3 {
-		t.Errorf("expected completed=3 (2 DONE + 1 NOT NEEDED), got %d", completed)
-	}
-}
-
-func TestParseTaskCountsNoTaskHeaders(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "IMPLEMENTATION_PLAN.md")
-	content := `# Implementation Plan
-
-Some general notes about the project.
-
-**Status: DONE**
-`
-	os.WriteFile(path, []byte(content), 0644)
-
-	completed, total := parseTaskCounts(path)
-	if total != 0 {
-		t.Errorf("expected total=0 (no ## TASK headers), got %d", total)
-	}
-	// Status line without a TASK header still counts as completed
-	if completed != 1 {
-		t.Errorf("expected completed=1 (status line exists), got %d", completed)
-	}
-}
-
-func TestParseTaskCountsStatusOnSameLineAsHeader(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "IMPLEMENTATION_PLAN.md")
-	content := `## TASK 1: Feature — **Status: DONE**
-## TASK 2: Other feature
-**Status: TODO**
-`
-	os.WriteFile(path, []byte(content), 0644)
-
-	completed, total := parseTaskCounts(path)
-	if total != 2 {
-		t.Errorf("expected total=2, got %d", total)
-	}
-	if completed != 1 {
-		t.Errorf("expected completed=1, got %d", completed)
-	}
-}
-
-func TestParseTaskCountsReflectsFileChanges(t *testing.T) {
-	// Verifies that repeated calls to parseTaskCounts pick up file modifications,
-	// which is the basis for live recount at iteration boundaries.
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "IMPLEMENTATION_PLAN.md")
-
-	// Initial: 1 done out of 3
-	initial := "## TASK 1\n**Status: DONE**\n## TASK 2\n**Status: TODO**\n## TASK 3\n**Status: TODO**\n"
-	os.WriteFile(path, []byte(initial), 0644)
-
-	completed, total := parseTaskCounts(path)
-	if completed != 1 || total != 3 {
-		t.Errorf("initial: expected 1/3, got %d/%d", completed, total)
-	}
-
-	// Simulate Claude marking task 2 as DONE during an iteration
-	updated := "## TASK 1\n**Status: DONE**\n## TASK 2\n**Status: DONE**\n## TASK 3\n**Status: TODO**\n"
-	os.WriteFile(path, []byte(updated), 0644)
-
-	completed, total = parseTaskCounts(path)
-	if completed != 2 || total != 3 {
-		t.Errorf("after update: expected 2/3, got %d/%d", completed, total)
-	}
-
-	// Simulate adding a new task during the session
-	expanded := updated + "## TASK 4\n**Status: TODO**\n"
-	os.WriteFile(path, []byte(expanded), 0644)
-
-	completed, total = parseTaskCounts(path)
-	if completed != 2 || total != 4 {
-		t.Errorf("after expansion: expected 2/4, got %d/%d", completed, total)
-	}
-}
-
 func TestCheckCostPacingDisabled(t *testing.T) {
 	// maxCostPerHour=0 means disabled — should be a no-op
 	exceeded, hourCost, nextHour := checkCostPacing(&dbContext{}, 0, nil)
@@ -783,5 +602,122 @@ func TestStartNewLoopNotCalledOnHibernateRetry(t *testing.T) {
 	}
 	if startNewLoopCallCount != 2 {
 		t.Errorf("expected startNewLoop call count=2 after second fresh loop, got %d", startNewLoopCallCount)
+	}
+}
+
+// shouldSendModelUpdate mirrors the gate handleParsedMessage applies at both of
+// its model-reporting call sites (the assistant-usage branch and the system
+// branch):
+//
+//	msgModel := jsonParser.GetModel(parsed)
+//	if msgModel != "" && !jsonParser.IsSubagentMessage(parsed) { ...send model update... }
+func shouldSendModelUpdate(p *parser.Parser, msg *parser.ParsedMessage) (string, bool) {
+	model := p.GetModel(msg)
+	return model, model != "" && !p.IsSubagentMessage(msg)
+}
+
+// TestModelUpdateSkipsSubagentMessages locks in the Model Details panel's source
+// of truth: the effective model is reported from main-loop messages only. A
+// subagent may run a different model than the main loop, so its messages must
+// not overwrite the panel.
+func TestModelUpdateSkipsSubagentMessages(t *testing.T) {
+	jsonParser := parser.NewParser()
+
+	tests := []struct {
+		name      string
+		line      string
+		wantModel string
+		wantSend  bool
+	}{
+		{
+			// The system init line carries "model" at the top level and is the
+			// only source of the effective model when --model was not passed.
+			name:      "system init line",
+			line:      `{"type":"system","subtype":"init","session_id":"6374d5b9-d485-4579-80c9-d31f1f87c926","model":"claude-sonnet-4-6"}`,
+			wantModel: "claude-sonnet-4-6",
+			wantSend:  true,
+		},
+		{
+			// Main-loop assistant messages carry the model under "message".
+			name:      "main-loop assistant message",
+			line:      `{"type":"assistant","parent_tool_use_id":null,"message":{"id":"msg_01Main","type":"message","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"working"}]}}`,
+			wantModel: "claude-opus-4-8",
+			wantSend:  true,
+		},
+		{
+			// Non-null parent_tool_use_id marks a subagent message: the model is
+			// still readable, but the gate must reject it.
+			name:      "subagent assistant message",
+			line:      `{"type":"assistant","parent_tool_use_id":"toolu_01SubagentTask","message":{"id":"msg_01Sub","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[{"type":"text","text":"subagent working"}]}}`,
+			wantModel: "claude-haiku-4-5",
+			wantSend:  false,
+		},
+		{
+			// No model anywhere → nothing to report.
+			name:      "main-loop assistant message without a model",
+			line:      `{"type":"assistant","parent_tool_use_id":null,"message":{"id":"msg_01NoModel","type":"message","role":"assistant","content":[{"type":"text","text":"no model field"}]}}`,
+			wantModel: "",
+			wantSend:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := jsonParser.ParseLine(tt.line)
+			if parsed == nil {
+				t.Fatalf("ParseLine returned nil for %q", tt.line)
+			}
+			model, send := shouldSendModelUpdate(jsonParser, parsed)
+			if model != tt.wantModel {
+				t.Errorf("GetModel = %q, want %q", model, tt.wantModel)
+			}
+			if send != tt.wantSend {
+				t.Errorf("model-update gate = %v, want %v", send, tt.wantSend)
+			}
+		})
+	}
+
+	// Replay the lines in stream order: the last model that passes the gate is
+	// what the panel ends up showing, and it must be the main loop's model even
+	// though a subagent message with a different model arrived afterwards.
+	lastReported := ""
+	for _, tt := range tests {
+		parsed := jsonParser.ParseLine(tt.line)
+		if parsed == nil {
+			t.Fatalf("ParseLine returned nil for %q", tt.line)
+		}
+		if model, send := shouldSendModelUpdate(jsonParser, parsed); send {
+			lastReported = model
+		}
+	}
+	if lastReported != "claude-opus-4-8" {
+		t.Errorf("last reported model = %q, want %q (subagent model must not win)", lastReported, "claude-opus-4-8")
+	}
+}
+
+// TestTrackSessionRecordsSessionID tests that trackSession keeps the loop's
+// session ID up to date for --resume support, which the three call sites in the
+// TUI message pumps depend on.
+func TestTrackSessionRecordsSessionID(t *testing.T) {
+	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+
+	// A nil program means no TUI to refine the effort level for; the session
+	// bookkeeping still has to happen.
+	trackSession(claudeLoop, "a50b7b11-7b8d-44a7-bdf5-0433d84f3fb1", nil)
+	if got := claudeLoop.GetSessionID(); got != "a50b7b11-7b8d-44a7-bdf5-0433d84f3fb1" {
+		t.Errorf("GetSessionID = %q, want the tracked session", got)
+	}
+
+	// Most stream lines carry no session ID; those must not wipe the stored one
+	// or the next iteration loses its --resume target.
+	trackSession(claudeLoop, "", nil)
+	if got := claudeLoop.GetSessionID(); got != "a50b7b11-7b8d-44a7-bdf5-0433d84f3fb1" {
+		t.Errorf("GetSessionID = %q after an empty ID, want the previously tracked session", got)
+	}
+
+	// A new session replaces it.
+	trackSession(claudeLoop, "b61c8c22-8c9e-4bf8-cfe6-1544981e4c62", nil)
+	if got := claudeLoop.GetSessionID(); got != "b61c8c22-8c9e-4bf8-cfe6-1544981e4c62" {
+		t.Errorf("GetSessionID = %q, want the newest session", got)
 	}
 }

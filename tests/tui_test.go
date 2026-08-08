@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cloudosai/ralph-go/internal/loop"
@@ -806,14 +807,16 @@ func TestViewportScrollPreservedOnTick(t *testing.T) {
 	}
 }
 
-// TestModeDisplayDefault tests that the mode row shows "-" by default
+// TestModeDisplayDefault tests that the mode row renders by default in the
+// Model Details panel. Note "Model:" does not contain the substring "Mode:",
+// so this assertion is specific to the mode row.
 func TestModeDisplayDefault(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	view := model.View()
-	if !strings.Contains(view, "Current Mode:") {
-		t.Error("View should contain 'Current Mode:' label")
+	if !strings.Contains(view, "Mode:") {
+		t.Error("View should contain 'Mode:' label")
 	}
 }
 
@@ -913,7 +916,7 @@ func TestQuitHotkeyAlwaysHighlighted(t *testing.T) {
 	}
 }
 
-// TestCurrentModeDisplayFormat tests the "Current Mode:" display format
+// TestCurrentModeDisplayFormat tests the "Mode: <value>" display format
 func TestCurrentModeDisplayFormat(t *testing.T) {
 	model := tui.NewModel()
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -924,8 +927,8 @@ func TestCurrentModeDisplayFormat(t *testing.T) {
 	model, _ = updateModel(model, modeMsg)
 
 	view := model.View()
-	if !strings.Contains(view, "Current Mode:") {
-		t.Error("View should contain 'Current Mode:' label")
+	if !strings.Contains(view, "Mode:") {
+		t.Error("View should contain 'Mode:' label")
 	}
 	if !strings.Contains(view, "Planning") {
 		t.Error("View should display the mode")
@@ -969,32 +972,6 @@ func TestSetTmuxStatusBar(t *testing.T) {
 	view := model.View()
 	if view == "" {
 		t.Error("View should render with inactive tmux status bar")
-	}
-}
-
-// TestSendCompletedTasksUpdateCmd tests the SendCompletedTasksUpdate helper command
-func TestSendCompletedTasksUpdateCmd(t *testing.T) {
-	cmd := tui.SendCompletedTasksUpdate(3, 8)
-
-	if cmd == nil {
-		t.Error("SendCompletedTasksUpdate should return a command")
-	}
-
-	result := cmd()
-	if result == nil {
-		t.Error("Command should return a completed tasks update message")
-	}
-}
-
-// TestSetCompletedTasks tests the SetCompletedTasks setter method
-func TestSetCompletedTasks(t *testing.T) {
-	model := tui.NewModel()
-	model.SetCompletedTasks(5, 10)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "5/10") {
-		t.Error("View should show '5/10' after SetCompletedTasks")
 	}
 }
 
@@ -1245,117 +1222,230 @@ func TestTUIPauseResumeWithRunningLoop(t *testing.T) {
 
 // ============================================================================
 // Tests: Per-Loop Stats in Tmux Status Bar (Spec 19)
+//
+// Per-loop tokens and elapsed time are observable through the tmux status bar:
+// updateTmuxStatusBar runs once per tick and renders
+// "[repo | branch | loop: N/M, tokens: X, elapsed: HH:MM:SS]" for the CURRENT
+// loop iteration (never the cumulative session). These tests drive a model with
+// a mocked clock and read back tui.FakeStatusBarForTest.LastContent.
 // ============================================================================
 
-// TestSendLoopStartedCmd tests the SendLoopStarted helper command
+// perLoopFakeClock is a mutable clock for the per-loop status bar tests.
+type perLoopFakeClock struct{ now time.Time }
+
+// advance moves the fake clock forward by d.
+func (c *perLoopFakeClock) advance(d time.Duration) { c.now = c.now.Add(d) }
+
+// newPerLoopStatusBarModel builds a ready model wired to a fake tmux status bar
+// and a mocked clock. The clock is installed before tui.NewModel() so both the
+// session start time and the loop start time are the clock's zero point.
+// Pass a non-nil loop to enable the pause/resume hotkeys; it is attached before
+// the tea.WindowSizeMsg because the model is copied by value on every Update.
+// Callers must `defer tui.SetTimeNowForTest(time.Now)`.
+func newPerLoopStatusBarModel(l *loop.Loop) (tui.Model, *tui.FakeStatusBarForTest, *perLoopFakeClock) {
+	clock := &perLoopFakeClock{now: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	tui.SetTimeNowForTest(func() time.Time { return clock.now })
+
+	model := tui.NewModel()
+	if l != nil {
+		model.SetLoop(l)
+	}
+	model.SetGitContext("ralph", "main")
+	model.SetLoopProgress(2, 5)
+	fakeBar := &tui.FakeStatusBarForTest{}
+	model.SetTmuxStatusBar(fakeBar)
+	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	return model, fakeBar, clock
+}
+
+// tickPerLoopBar drives one tick and returns the content pushed to the bar.
+func tickPerLoopBar(m tui.Model, bar *tui.FakeStatusBarForTest) (tui.Model, string) {
+	m, _ = updateModel(m, tui.TickMsgForTest())
+	return m, bar.LastContent
+}
+
+// perLoopBar renders the expected status bar content for the fixture model.
+func perLoopBar(tokens, elapsed string) string {
+	return "[ralph | main | loop: 2/5, tokens: " + tokens + ", elapsed: " + elapsed + "]"
+}
+
+// TestSendLoopStartedCmd tests that SendLoopStarted returns a command whose
+// message resets both per-loop counters visible on the tmux status bar.
 func TestSendLoopStartedCmd(t *testing.T) {
+	defer tui.SetTimeNowForTest(time.Now)
+	model, bar, clock := newPerLoopStatusBarModel(nil)
+
+	// Accumulate per-loop state: 12k tokens over 30 seconds.
+	model, _ = updateModel(model, tui.SendLoopStatsUpdate(12000)())
+	clock.advance(30 * time.Second)
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("12k", "00:00:30"); got != want {
+		t.Fatalf("Precondition: status bar = %q, want %q", got, want)
+	}
+
 	cmd := tui.SendLoopStarted()
 	if cmd == nil {
-		t.Error("SendLoopStarted should return a command")
+		t.Fatal("SendLoopStarted should return a command")
 	}
-	result := cmd()
-	if result == nil {
-		t.Error("Command should return a loopStartedMsg")
+	msg := cmd()
+	if msg == nil {
+		t.Fatal("SendLoopStarted's command should produce a loopStartedMsg")
+	}
+
+	// Feeding that message in must reset both per-loop tokens and elapsed.
+	model, _ = updateModel(model, msg)
+	_, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:00"); got != want {
+		t.Errorf("After loopStartedMsg: status bar = %q, want %q", got, want)
 	}
 }
 
-// TestSendLoopStatsUpdateCmd tests the SendLoopStatsUpdate helper command
+// TestSendLoopStatsUpdateCmd tests that SendLoopStatsUpdate returns a command
+// whose message sets the per-loop token count shown on the tmux status bar.
 func TestSendLoopStatsUpdateCmd(t *testing.T) {
+	defer tui.SetTimeNowForTest(time.Now)
+	model, bar, _ := newPerLoopStatusBarModel(nil)
+
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:00"); got != want {
+		t.Fatalf("Precondition: status bar = %q, want %q", got, want)
+	}
+
 	cmd := tui.SendLoopStatsUpdate(12345)
 	if cmd == nil {
-		t.Error("SendLoopStatsUpdate should return a command")
+		t.Fatal("SendLoopStatsUpdate should return a command")
 	}
-	result := cmd()
-	if result == nil {
-		t.Error("Command should return a loopStatsUpdateMsg")
+	msg := cmd()
+	if msg == nil {
+		t.Fatal("SendLoopStatsUpdate's command should produce a loopStatsUpdateMsg")
+	}
+
+	// 12345 tokens render through stats.FormatTokens as "12.3k".
+	model, _ = updateModel(model, msg)
+	_, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("12.3k", "00:00:00"); got != want {
+		t.Errorf("After loopStatsUpdateMsg: status bar = %q, want %q", got, want)
 	}
 }
 
-// TestPerLoopTokensResetOnNewLoop tests that per-loop tokens reset when a new loop starts
+// TestPerLoopTokensResetOnNewLoop tests that the token count on the tmux status
+// bar drops back to zero when a new loop iteration starts.
 func TestPerLoopTokensResetOnNewLoop(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	defer tui.SetTimeNowForTest(time.Now)
+	model, bar, _ := newPerLoopStatusBarModel(nil)
 
-	// Set loop stats to some value
-	cmd := tui.SendLoopStatsUpdate(50000)
-	model, _ = updateModel(model, cmd())
+	model, _ = updateModel(model, tui.SendLoopStatsUpdate(50000)())
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("50k", "00:00:00"); got != want {
+		t.Fatalf("With 50000 per-loop tokens: status bar = %q, want %q", got, want)
+	}
 
-	// Signal a new loop started
-	cmd = tui.SendLoopStarted()
-	model, _ = updateModel(model, cmd())
+	model, _ = updateModel(model, tui.SendLoopStarted()())
+	model, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:00"); got != want {
+		t.Fatalf("After new loop started: status bar = %q, want %q", got, want)
+	}
 
-	// Per-loop tokens should be reset to 0
-	// Verify by sending another loop stats update with a small value
-	cmd = tui.SendLoopStatsUpdate(100)
-	model, _ = updateModel(model, cmd())
-
-	// The model should work without errors after reset
-	view := model.View()
-	if view == "" {
-		t.Error("View should render after per-loop stats reset")
+	// The counter keeps working after the reset: it counts from zero again.
+	model, _ = updateModel(model, tui.SendLoopStatsUpdate(100)())
+	_, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("100", "00:00:00"); got != want {
+		t.Errorf("After 100 tokens in the new loop: status bar = %q, want %q", got, want)
 	}
 }
 
-// TestPerLoopTimerResetsOnNewLoop tests that per-loop elapsed timer resets when a new loop starts
+// TestPerLoopTimerResetsOnNewLoop tests that the elapsed time on the tmux status
+// bar is per-loop, not per-session: it restarts at 00:00:00 on a new iteration
+// while the session's "Total Time" in the TUI footer keeps counting.
 func TestPerLoopTimerResetsOnNewLoop(t *testing.T) {
-	model := tui.NewModel()
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	defer tui.SetTimeNowForTest(time.Now)
+	model, bar, clock := newPerLoopStatusBarModel(nil)
 
-	// Wait a bit so the loop timer accumulates
-	time.Sleep(50 * time.Millisecond)
+	clock.advance(65 * time.Second)
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:01:05"); got != want {
+		t.Fatalf("After 65s in the first loop: status bar = %q, want %q", got, want)
+	}
 
-	// Signal a new loop started — should reset per-loop timer
-	cmd := tui.SendLoopStarted()
-	model, _ = updateModel(model, cmd())
+	// A new loop iteration begins 65s into the session.
+	model, _ = updateModel(model, tui.SendLoopStarted()())
+	model, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:00"); got != want {
+		t.Fatalf("A new loop must restart the bar's clock: status bar = %q, want %q", got, want)
+	}
+	// ...while the session total is unaffected — that is the per-loop/session split.
+	if view := model.View(); !strings.Contains(view, "00:01:05") {
+		t.Error("Footer 'Total Time' should still show the 65s session elapsed after a new loop starts")
+	}
 
-	// The per-loop timer should now be near-zero (just reset)
-	// We can't directly inspect it, but the view should render without error
-	view := model.View()
-	if view == "" {
-		t.Error("View should render after per-loop timer reset")
+	clock.advance(5 * time.Second)
+	model, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:05"); got != want {
+		t.Errorf("5s into the new loop: status bar = %q, want %q", got, want)
+	}
+	if view := model.View(); !strings.Contains(view, "00:01:10") {
+		t.Error("Footer 'Total Time' should show 00:01:10 while the bar shows 00:00:05")
 	}
 }
 
-// TestPerLoopTimerFreezesOnPause tests that the per-loop timer freezes when paused
+// TestPerLoopTimerFreezesOnPause tests that pausing with 'p' freezes the per-loop
+// elapsed time on the tmux status bar even as the mocked clock keeps moving.
 func TestPerLoopTimerFreezesOnPause(t *testing.T) {
-	model := tui.NewModel()
+	defer tui.SetTimeNowForTest(time.Now)
 	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
-	model.SetLoop(l)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	model, bar, clock := newPerLoopStatusBarModel(l)
 
-	// Pause
-	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
-	model, _ = updateModel(model, keyP)
+	clock.advance(10 * time.Second)
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:10"); got != want {
+		t.Fatalf("Before pause: status bar = %q, want %q", got, want)
+	}
 
-	// After pausing, two consecutive views should be identical
-	// (both total and per-loop timers are frozen)
-	view1 := model.View()
-	time.Sleep(50 * time.Millisecond)
-	view2 := model.View()
+	// Pause at +10s: the per-loop timer freezes at 00:00:10.
+	model, _ = updateModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 
-	if view1 != view2 {
-		t.Error("With paused timers (including per-loop), consecutive views should be identical")
+	clock.advance(35 * time.Second)
+	model, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:10"); got != want {
+		t.Fatalf("35s after pausing: status bar = %q, want %q (frozen)", got, want)
+	}
+
+	clock.advance(2 * time.Minute)
+	_, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:10"); got != want {
+		t.Errorf("2m35s after pausing: status bar = %q, want %q (still frozen)", got, want)
 	}
 }
 
-// TestPerLoopTimerResumesAfterPause tests that the per-loop timer resumes after unpause
+// TestPerLoopTimerResumesAfterPause tests that resuming with 'r' continues the
+// per-loop timer from the frozen value rather than restarting or back-filling
+// the paused interval: 10s before the pause + 10s after the resume = 00:00:20.
 func TestPerLoopTimerResumesAfterPause(t *testing.T) {
-	model := tui.NewModel()
+	defer tui.SetTimeNowForTest(time.Now)
 	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
-	model.SetLoop(l)
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
+	model, bar, clock := newPerLoopStatusBarModel(l)
 
-	// Pause then resume
-	keyP := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}}
-	model, _ = updateModel(model, keyP)
+	// Pause at +10s (10s accumulated), resume at +30s (20s spent paused).
+	clock.advance(10 * time.Second)
+	model, _ = updateModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 
-	keyR := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
-	model, _ = updateModel(model, keyR)
+	clock.advance(20 * time.Second)
+	model, got := tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:10"); got != want {
+		t.Fatalf("While paused: status bar = %q, want %q", got, want)
+	}
 
-	// After resume, view should render without error
-	view := model.View()
-	if view == "" {
-		t.Error("View should render after resuming per-loop timer")
+	model, _ = updateModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:10"); got != want {
+		t.Fatalf("At the instant of resume: status bar = %q, want %q", got, want)
+	}
+
+	// 10s after the resume: the 20s paused interval is never counted.
+	clock.advance(10 * time.Second)
+	_, got = tickPerLoopBar(model, bar)
+	if want := perLoopBar("0", "00:00:20"); got != want {
+		t.Errorf("10s after resuming: status bar = %q, want %q", got, want)
 	}
 }
 
@@ -1371,29 +1461,6 @@ func TestRalphLoopDetailsTitle(t *testing.T) {
 	view := model.View()
 	if !strings.Contains(view, "Ralph Loop Details") {
 		t.Error("View should contain 'Ralph Loop Details' title (renamed from 'Ralph Details')")
-	}
-}
-
-// ============================================================================
-// Tests: Current Task Display in Footer
-// ============================================================================
-
-// TestCurrentTaskDisplayedInFooter tests that the currentTask field renders in the footer
-func TestCurrentTaskDisplayedInFooter(t *testing.T) {
-	model := tui.NewModel()
-	model.SetCurrentTask("#6 Refactor config")
-	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
-
-	view := model.View()
-	if !strings.Contains(view, "Current Task:") {
-		t.Error("View should contain 'Current Task:' label")
-	}
-	// The quarter-width Task Progress panel word-wraps the task text, so
-	// assert the segments rather than one contiguous line.
-	for _, segment := range []string{"#6 Refactor", "config"} {
-		if !strings.Contains(view, segment) {
-			t.Errorf("View should display the current task text segment %q", segment)
-		}
 	}
 }
 
@@ -1585,23 +1652,31 @@ func TestHibernateRoleStyle(t *testing.T) {
 	}
 }
 
-// TestHibernateMsgUpdate tests that hibernateMsg updates the model's hibernate state
-func TestHibernateMsgUpdate(t *testing.T) {
+// TestHibernateStateFollowsLoop tests that the TUI's rate-limit state is read
+// straight off the loop rather than tracked separately: the same model shows no
+// rate limit before the loop hibernates and shows one immediately after, with no
+// message sent to the TUI in between.
+func TestHibernateStateFollowsLoop(t *testing.T) {
 	model := tui.NewModel()
+	l := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
+	model.SetLoop(l)
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	// Send hibernate message
-	hibernateUntil := time.Now().Add(5 * time.Minute)
-	hibernateCmd := tui.SendHibernate(hibernateUntil)
-	hibernateMsg := hibernateCmd()
+	// Before: the loop is not hibernating, so nothing claims a rate limit
+	if strings.Contains(model.View(), "RATE LIMITED") {
+		t.Fatal("Precondition: view should not show 'RATE LIMITED' before the loop hibernates")
+	}
 
-	model, _ = updateModel(model, hibernateMsg)
+	// When: the loop hibernates (no TUI message involved)
+	l.Hibernate(time.Now().Add(5 * time.Minute))
 
-	// After tick, the view should update (we can't directly check internal state,
-	// but we can verify the model renders properly)
+	// Then: the very next render picks the state up from the loop
 	view := model.View()
 	if view == "" || view == "Goodbye!\n" {
-		t.Error("Model should render properly after hibernate message")
+		t.Fatalf("Model should still render properly while hibernating, got: %q", view)
+	}
+	if !strings.Contains(view, "RATE LIMITED") {
+		t.Error("View should contain 'RATE LIMITED' once the loop is hibernating")
 	}
 }
 
@@ -1614,11 +1689,6 @@ func TestHibernateDisplayShowsRateLimited(t *testing.T) {
 
 	// Hibernate the loop
 	l.Hibernate(time.Now().Add(5 * time.Minute))
-
-	// Send hibernate message to TUI
-	hibernateCmd := tui.SendHibernate(time.Now().Add(5 * time.Minute))
-	hibernateMsg := hibernateCmd()
-	model, _ = updateModel(model, hibernateMsg)
 
 	view := model.View()
 
@@ -1636,13 +1706,7 @@ func TestHibernateDisplayShowsCountdown(t *testing.T) {
 	model, _ = updateModel(model, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	// Hibernate for 5 minutes (300 seconds)
-	hibernateUntil := time.Now().Add(5 * time.Minute)
-	l.Hibernate(hibernateUntil)
-
-	// Send hibernate message to TUI
-	hibernateCmd := tui.SendHibernate(hibernateUntil)
-	hibernateMsg := hibernateCmd()
-	model, _ = updateModel(model, hibernateMsg)
+	l.Hibernate(time.Now().Add(5 * time.Minute))
 
 	view := model.View()
 
@@ -1665,11 +1729,6 @@ func TestHibernateRKeyWake(t *testing.T) {
 
 	// Hibernate the loop
 	l.Hibernate(time.Now().Add(10 * time.Second))
-
-	// Send hibernate message to TUI
-	hibernateCmd := tui.SendHibernate(time.Now().Add(10 * time.Second))
-	hibernateMsg := hibernateCmd()
-	model, _ = updateModel(model, hibernateMsg)
 
 	// Verify loop is hibernating
 	if !l.IsHibernating() {
@@ -1697,22 +1756,6 @@ func TestHibernateMessageInActivityFeed(t *testing.T) {
 	// Should show 💤 emoji in activity feed
 	if !strings.Contains(view, "💤") {
 		t.Error("Activity feed should show 💤 emoji for hibernate messages")
-	}
-}
-
-// TestSendHibernateCmd tests the SendHibernate helper function
-func TestSendHibernateCmd(t *testing.T) {
-	until := time.Now().Add(5 * time.Minute)
-	cmd := tui.SendHibernate(until)
-
-	if cmd == nil {
-		t.Error("SendHibernate should return a command")
-	}
-
-	// Execute the command and verify it returns a message
-	result := cmd()
-	if result == nil {
-		t.Error("Command should return a hibernate message")
 	}
 }
 
@@ -1946,3 +1989,325 @@ func TestDeletePlanHotkeyInHotkeyBar(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// Tests: Model Details Footer Panel
+//
+// The fourth footer panel shows what the loop is actually running with:
+// "Model:", "Effort:" and "Mode:" rows. Known model tiers collapse to their
+// short name and unknown ids render verbatim; an unset model reads "default"
+// (whatever the claude CLI resolves on its own, refined once the stream reports
+// it). Effort has no such fallback name — the levels are low/medium/high/xhigh/
+// max — so an unresolved one reads "-", the same placeholder the Mode row uses.
+// ============================================================================
+
+// setupModelDetailsModel builds a ready model with the given --model/--effort
+// flag values. The footer panels are (width-8)/4 wide, so a wide terminal keeps
+// short values on one line and avoids word-wrap-sensitive assertions.
+func setupModelDetailsModel(model, effort string) tui.Model {
+	m := tui.NewModel()
+	m.SetModelInfo(model, effort)
+	m, _ = updateModel(m, tea.WindowSizeMsg{Width: 200, Height: 40})
+	return m
+}
+
+// modelDetailsPanel returns only the "Model Details" footer panel region of a
+// rendered view.
+//
+// Why this exists: the panel's values are extremely short ("opus", "high",
+// "default", "sonnet"). Asserting strings.Contains against the WHOLE view makes
+// those assertions pass or fail for the wrong reason as soon as any other part
+// of the view — another footer row, the hotkey bar, an activity message, a plan
+// line — happens to contain the same characters. Two concrete traps:
+// "high" is a substring of "xhigh" (so a whole-view check cannot distinguish
+// --effort high from --effort xhigh), and a negative check like
+// !Contains(view, "opus") breaks the moment an assistant message mentions opus.
+// Scoping every assertion to this panel makes short substrings unambiguous.
+//
+// Model Details is the RIGHTMOST footer panel, so everything from its left
+// border column through end-of-line belongs to it. Box-drawing runes (│ ╭ ─ ╰)
+// are multi-byte UTF-8, so columns are counted in RUNES, never bytes.
+func modelDetailsPanel(t *testing.T, view string) string {
+	t.Helper()
+
+	const title = "Model Details"
+
+	lines := strings.Split(view, "\n")
+	titleLine := -1
+	startCol := 0
+	for i, line := range lines {
+		byteIdx := strings.Index(line, title)
+		if byteIdx == -1 {
+			continue
+		}
+		titleLine = i
+		// strings.Index gives a BYTE offset; convert it to a rune column.
+		// The panel's left border plus padding ("│ ") sit two runes before
+		// the title, so that is where the panel actually starts.
+		startCol = utf8.RuneCountInString(line[:byteIdx]) - 2
+		if startCol < 0 {
+			startCol = 0
+		}
+		break
+	}
+	if titleLine == -1 {
+		t.Fatalf("%q not found in rendered view:\n%s", title, view)
+	}
+
+	var panel []string
+	for _, line := range lines[titleLine:] {
+		runes := []rune(line)
+		if len(runes) <= startCol {
+			// Too short to reach the panel's column — e.g. the hotkey bar
+			// underneath the footer. Not part of the panel.
+			continue
+		}
+		panel = append(panel, string(runes[startCol:]))
+	}
+	return strings.Join(panel, "\n")
+}
+
+// modelDetailsRows returns the Model Details panel's text rows with the border
+// runes and padding stripped, so tests can assert on COMPLETE rows
+// ("Effort: high") instead of loose substrings ("high").
+func modelDetailsRows(t *testing.T, view string) []string {
+	t.Helper()
+
+	var rows []string
+	for _, line := range strings.Split(modelDetailsPanel(t, view), "\n") {
+		rows = append(rows, strings.Trim(line, "│ "))
+	}
+	return rows
+}
+
+// panelHasRow reports whether one of the panel's rows is exactly want.
+func panelHasRow(rows []string, want string) bool {
+	for _, row := range rows {
+		if row == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestModelDetailsPanelTitleRendered tests that the fourth footer panel is titled
+// "Model Details".
+func TestModelDetailsPanelTitleRendered(t *testing.T) {
+	model := setupModelDetailsModel("", "")
+
+	// modelDetailsRows t.Fatalf's if the title is missing entirely; asserting
+	// the title is the panel's first row also pins it to the panel header.
+	rows := modelDetailsRows(t, model.View())
+	if len(rows) == 0 || rows[0] != "Model Details" {
+		t.Errorf("Expected 'Model Details' as the panel's first row, got rows: %q", rows)
+	}
+}
+
+// TestModelDetailsShowsOpusTierAndEffort tests that a full opus model id collapses
+// to its tier name and the effort level is shown alongside it.
+func TestModelDetailsShowsOpusTierAndEffort(t *testing.T) {
+	model := setupModelDetailsModel("claude-opus-4-8", "high")
+
+	view := model.View()
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	for _, want := range []string{"Model: opus", "Effort: high"} {
+		if !panelHasRow(rows, want) {
+			t.Errorf("Model Details panel should contain the row %q, got rows: %q", want, rows)
+		}
+	}
+	// "high" is a substring of "xhigh", so the exact-row check above is only
+	// meaningful alongside this: the panel must not be showing xhigh.
+	if strings.Contains(panel, "xhigh") {
+		t.Errorf("Effort 'high' should not render as 'xhigh', got panel:\n%s", panel)
+	}
+	// The verbose id should be collapsed, not printed in full.
+	if strings.Contains(panel, "claude-opus-4-8") {
+		t.Errorf("Panel should collapse 'claude-opus-4-8' to the tier name 'opus', got panel:\n%s", panel)
+	}
+}
+
+// TestModelDetailsCollapsesSonnetTier tests the sonnet tier collapse and that an
+// unset effort flag reads "default".
+func TestModelDetailsCollapsesSonnetTier(t *testing.T) {
+	model := setupModelDetailsModel("claude-sonnet-4-6", "")
+
+	view := model.View()
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Model: sonnet") {
+		t.Errorf("Panel should collapse 'claude-sonnet-4-6' to the tier name 'sonnet', got rows: %q", rows)
+	}
+	if strings.Contains(panel, "claude-sonnet-4-6") {
+		t.Errorf("Panel should not print the full model id, got panel:\n%s", panel)
+	}
+	if !panelHasRow(rows, "Effort: -") {
+		t.Errorf("Panel should show 'Effort: -' when no effort level could be resolved, got rows: %q", rows)
+	}
+}
+
+// TestModelDetailsUnresolvedEffortIsNotDefault tests that an unresolved effort
+// renders as the "-" placeholder, not as "default". The claude CLI's levels are
+// low/medium/high/xhigh/max; "default" is not one of them, so showing it reads
+// as a level that does not exist.
+func TestModelDetailsUnresolvedEffortIsNotDefault(t *testing.T) {
+	model := setupModelDetailsModel("", "")
+
+	// The model row keeps its own "default" fallback (the stream refines it
+	// later), so the rows must be asserted independently rather than by counting
+	// "default" occurrences across the whole view.
+	rows := modelDetailsRows(t, model.View())
+	for _, want := range []string{"Model: default", "Effort: -"} {
+		if !panelHasRow(rows, want) {
+			t.Errorf("Model Details panel should contain the row %q, got rows: %q", want, rows)
+		}
+	}
+	if panelHasRow(rows, "Effort: default") {
+		t.Errorf("'default' is not an effort level and must not render as one, got rows: %q", rows)
+	}
+}
+
+// TestModelDetailsUnknownModelRendersVerbatim tests that a model id with no known
+// tier is shown as-is.
+func TestModelDetailsUnknownModelRendersVerbatim(t *testing.T) {
+	model := setupModelDetailsModel("zeta-9", "low")
+
+	view := model.View()
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Model: zeta-9") {
+		t.Errorf("Panel should render an unrecognized model id verbatim, got rows: %q", rows)
+	}
+	if panelHasRow(rows, "Model: default") {
+		t.Errorf("An unrecognized model id should not fall back to 'default', got rows: %q", rows)
+	}
+	if !panelHasRow(rows, "Effort: low") {
+		t.Errorf("Panel should still show the configured effort, got rows: %q", rows)
+	}
+}
+
+// TestModelDetailsEffortLowercased tests that the effort level is lowercased for display.
+func TestModelDetailsEffortLowercased(t *testing.T) {
+	model := setupModelDetailsModel("", "XHIGH")
+
+	view := model.View()
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Effort: xhigh") {
+		t.Errorf("Panel should lowercase the effort level ('XHIGH' -> 'xhigh'), got rows: %q", rows)
+	}
+	if strings.Contains(panel, "XHIGH") {
+		t.Errorf("Panel should not show the raw uppercase effort level, got panel:\n%s", panel)
+	}
+}
+
+// TestModelDetailsStreamModelOverridesFlag tests that the effective model reported
+// by the stream overrides the model set from the --model flag.
+func TestModelDetailsStreamModelOverridesFlag(t *testing.T) {
+	model := setupModelDetailsModel("claude-opus-4-8", "high")
+
+	cmd := tui.SendModelUpdate("claude-haiku-4-5")
+	model, _ = updateModel(model, cmd())
+
+	view := model.View()
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Model: haiku") {
+		t.Errorf("Panel should show 'haiku' after the stream reports the effective model, got rows: %q", rows)
+	}
+	// Scoped to the panel: an activity message mentioning "opus" must not be
+	// able to fail this.
+	if strings.Contains(panel, "opus") {
+		t.Errorf("Panel should no longer show the flag model 'opus' after a stream model update, got panel:\n%s", panel)
+	}
+	// And: effort is untouched by a model update.
+	if !panelHasRow(rows, "Effort: high") {
+		t.Errorf("Effort should persist across a model update, got rows: %q", rows)
+	}
+}
+
+// TestModelDetailsEmptyStreamModelIgnored tests that an empty model update does not
+// clobber the already-known model.
+func TestModelDetailsEmptyStreamModelIgnored(t *testing.T) {
+	model := setupModelDetailsModel("claude-opus-4-8", "high")
+
+	cmd := tui.SendModelUpdate("")
+	model, _ = updateModel(model, cmd())
+
+	rows := modelDetailsRows(t, model.View())
+	if !panelHasRow(rows, "Model: opus") {
+		t.Errorf("An empty model update should not clear the previously-set model, got rows: %q", rows)
+	}
+	if panelHasRow(rows, "Model: default") {
+		t.Errorf("An empty model update should not reset the model row to 'default', got rows: %q", rows)
+	}
+}
+
+// TestModelDetailsTranscriptEffortOverridesFlag tests that the level read back
+// from the session transcript replaces the one Ralph resolved up front. The
+// transcript is what the CLI actually ran at, so it wins even over --effort —
+// enterprise managed settings can override the flag on the command line.
+func TestModelDetailsTranscriptEffortOverridesFlag(t *testing.T) {
+	model := setupModelDetailsModel("claude-opus-4-8", "high")
+
+	cmd := tui.SendEffortUpdate("max")
+	model, _ = updateModel(model, cmd())
+
+	view := model.View()
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Effort: max") {
+		t.Errorf("Panel should show the transcript's effort level, got rows: %q", rows)
+	}
+	if strings.Contains(panel, "high") {
+		t.Errorf("Panel should no longer show the flag's effort level 'high', got panel:\n%s", panel)
+	}
+	// And: the model row is untouched by an effort update.
+	if !panelHasRow(rows, "Model: opus") {
+		t.Errorf("Model should persist across an effort update, got rows: %q", rows)
+	}
+}
+
+// TestModelDetailsUnresolvedEffortRefinedByTranscript tests the case the
+// transcript readback exists for: nothing configured a level up front, so the
+// panel starts at "-" and fills in once the session reports one.
+func TestModelDetailsUnresolvedEffortRefinedByTranscript(t *testing.T) {
+	model := setupModelDetailsModel("", "")
+
+	if rows := modelDetailsRows(t, model.View()); !panelHasRow(rows, "Effort: -") {
+		t.Fatalf("Panel should start at the '-' placeholder, got rows: %q", rows)
+	}
+
+	cmd := tui.SendEffortUpdate("xhigh")
+	model, _ = updateModel(model, cmd())
+
+	rows := modelDetailsRows(t, model.View())
+	if !panelHasRow(rows, "Effort: xhigh") {
+		t.Errorf("Panel should show the effort level once the transcript reports it, got rows: %q", rows)
+	}
+	if panelHasRow(rows, "Effort: -") {
+		t.Errorf("Panel should drop the placeholder once a level is known, got rows: %q", rows)
+	}
+}
+
+// TestModelDetailsEmptyEffortUpdateIgnored tests that an empty effort update —
+// what a transcript read returns before the CLI has recorded a level — does not
+// wipe the value already resolved from the flag or settings.
+func TestModelDetailsEmptyEffortUpdateIgnored(t *testing.T) {
+	model := setupModelDetailsModel("claude-opus-4-8", "medium")
+
+	cmd := tui.SendEffortUpdate("")
+	model, _ = updateModel(model, cmd())
+
+	rows := modelDetailsRows(t, model.View())
+	if !panelHasRow(rows, "Effort: medium") {
+		t.Errorf("An empty effort update should not clear the resolved level, got rows: %q", rows)
+	}
+	if panelHasRow(rows, "Effort: -") {
+		t.Errorf("An empty effort update should not reset the row to the '-' placeholder, got rows: %q", rows)
+	}
+}

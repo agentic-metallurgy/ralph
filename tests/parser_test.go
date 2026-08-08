@@ -1,9 +1,12 @@
 package tests
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cloudosai/ralph-go/internal/parser"
 )
@@ -570,8 +573,103 @@ func TestToolUseTruncation(t *testing.T) {
 		t.Fatalf("Expected 1 tool use, got %d", len(content.ToolUses))
 	}
 
-	if len(content.ToolUses[0].InputJSON) > 150 {
-		t.Errorf("Expected InputJSON to be truncated to 150 chars, got %d", len(content.ToolUses[0].InputJSON))
+	inputJSON := content.ToolUses[0].InputJSON
+	if got := utf8.RuneCountInString(inputJSON); got != 150+len("...") {
+		t.Errorf("Expected InputJSON truncated to 150 runes + ellipsis (%d), got %d runes",
+			150+len("..."), got)
+	}
+	if !strings.HasSuffix(inputJSON, "...") {
+		t.Errorf("Expected truncated InputJSON to end with an ellipsis, got %q", inputJSON)
+	}
+}
+
+// multibyteCommand returns a Bash command whose ASCII prefix is exactly
+// prefixLen characters long, followed by 3-byte CJK runes. Truncating it at any
+// character offset >= prefixLen therefore lands inside a multibyte rune when the
+// cut is made by byte index instead of by rune.
+func multibyteCommand(prefixLen int) string {
+	return strings.Repeat("a", prefixLen) + "日本語のコマンド"
+}
+
+// TestExtractFilePathFromInputRuneSafe guards the Bash-command truncation in
+// ExtractFilePathFromInput against splitting a multibyte rune. The result is
+// user-visible: cmd/ralph/main.go appends it to the tool row shown in the TUI,
+// so a split rune renders as mojibake.
+func TestExtractFilePathFromInputRuneSafe(t *testing.T) {
+	// 48 ASCII chars + CJK puts a 3-byte rune across the 50-character cut.
+	cmd := multibyteCommand(48)
+	got := parser.ExtractFilePathFromInput(map[string]interface{}{"command": cmd})
+
+	if !utf8.ValidString(got) {
+		t.Errorf("Expected valid UTF-8 after truncation, got %q", got)
+	}
+	want := string([]rune(cmd)[:50]) + "..."
+	if got != want {
+		t.Errorf("Expected first 50 runes + ellipsis\n want %q\n  got %q", want, got)
+	}
+	if n := utf8.RuneCountInString(got); n != 53 {
+		t.Errorf("Expected 53 runes (50 + ellipsis), got %d", n)
+	}
+}
+
+// TestToolUseInputJSONRuneSafe guards the 150-character tool-input preview
+// against splitting a multibyte rune.
+func TestToolUseInputJSONRuneSafe(t *testing.T) {
+	p := parser.NewParser()
+
+	// MarshalIndent wraps the command in 19 characters ({\n  "command": "…"\n}),
+	// so a 130-char ASCII prefix followed by CJK puts the 150th character — and
+	// byte offset 150 — inside a 3-byte rune.
+	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"` +
+		multibyteCommand(130) + `"}}]}}`
+
+	content := p.ExtractContent(p.ParseLine(line))
+	if len(content.ToolUses) != 1 {
+		t.Fatalf("Expected 1 tool use, got %d", len(content.ToolUses))
+	}
+
+	inputJSON := content.ToolUses[0].InputJSON
+	if !utf8.ValidString(inputJSON) {
+		t.Errorf("Expected valid UTF-8 after truncation, got %q", inputJSON)
+	}
+	if n := utf8.RuneCountInString(inputJSON); n != 153 {
+		t.Errorf("Expected 153 runes (150 + ellipsis), got %d", n)
+	}
+}
+
+// TestToolTitleRuneSafe locks in rune-safe truncation for the tool titles built
+// from search patterns, Bash commands, and fetch URLs.
+func TestToolTitleRuneSafe(t *testing.T) {
+	p := parser.NewParser()
+
+	tests := []struct {
+		name     string
+		toolName string
+		key      string
+	}{
+		{"Bash command", "Bash", "command"},
+		{"Grep pattern", "Grep", "pattern"},
+		{"WebFetch url", "WebFetch", "url"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"` +
+				tt.toolName + `","input":{"` + tt.key + `":"` + multibyteCommand(48) + `"}}]}}`
+
+			content := p.ExtractContent(p.ParseLine(line))
+			if len(content.ToolUses) != 1 {
+				t.Fatalf("Expected 1 tool use, got %d", len(content.ToolUses))
+			}
+
+			title := content.ToolUses[0].Title
+			if !utf8.ValidString(title) {
+				t.Errorf("Expected valid UTF-8 title, got %q", title)
+			}
+			if !strings.HasSuffix(title, "...") {
+				t.Errorf("Expected truncated title to end with an ellipsis, got %q", title)
+			}
+		})
 	}
 }
 
@@ -883,92 +981,93 @@ func TestSessionIDFieldParsed(t *testing.T) {
 	}
 }
 
-func TestExtractTaskReference(t *testing.T) {
+func TestGetModel(t *testing.T) {
 	p := parser.NewParser()
 
 	tests := []struct {
-		name       string
-		input      string
-		expectNil  bool
-		expectNum  int
-		expectDesc string
+		name     string
+		line     string
+		expected string
 	}{
 		{
-			"no task reference",
-			"Just a regular message about coding",
-			true, 0, "",
+			"system init carries model at top level",
+			`{"type":"system","subtype":"init","session_id":"s1","model":"claude-sonnet-4-6"}`,
+			"claude-sonnet-4-6",
 		},
 		{
-			"empty string",
+			"assistant message carries model under message",
+			`{"type":"assistant","message":{"id":"msg_01","model":"claude-opus-4-8","content":[]}}`,
+			"claude-opus-4-8",
+		},
+		{
+			"message.model wins over top-level model",
+			`{"type":"assistant","model":"claude-sonnet-4-6","message":{"model":"claude-opus-4-8","content":[]}}`,
+			"claude-opus-4-8",
+		},
+		{
+			"top-level model used when message.model is empty",
+			`{"type":"assistant","model":"claude-sonnet-4-6","message":{"content":[]}}`,
+			"claude-sonnet-4-6",
+		},
+		{
+			"no model anywhere",
+			`{"type":"assistant","message":{"id":"msg_01","content":[]}}`,
 			"",
-			true, 0, "",
 		},
 		{
-			"simple TASK N",
-			"I will implement TASK 6 now",
-			false, 6, "",
+			"system message without model",
+			`{"type":"system","subtype":"init","session_id":"s1"}`,
+			"",
 		},
 		{
-			"lowercase task n",
-			"working on task 3 implementation",
-			false, 3, "",
-		},
-		{
-			"TASK with description",
-			"## TASK 6: Track IMPLEMENTATION_PLAN.md Phase/Task",
-			false, 6, "Track IMPLEMENTATION_PLAN.md Phase/Task",
-		},
-		{
-			"TASK with description and status bracket",
-			"## TASK 1: Replace Control Panel with Hotkey Bar [HIGH PRIORITY]",
-			false, 1, "Replace Control Panel with Hotkey Bar",
-		},
-		{
-			"multiple tasks picks last",
-			"After completing TASK 3, I will start TASK 5",
-			false, 5, "",
-		},
-		{
-			"IMPLEMENTATION_PLAN.md content with description",
-			"TASK 2: Fix Message Truncation (spec item 1)",
-			false, 2, "Fix Message Truncation (spec item 1)",
-		},
-		{
-			"task number zero ignored",
-			"TASK 0 should not match",
-			true, 0, "",
-		},
-		{
-			"mixed case",
-			"Let me work on Task 7 next",
-			false, 7, "",
-		},
-		{
-			"task in tool result content",
-			"Read IMPLEMENTATION_PLAN.md:\n## TASK 4: Fix Visual Artifacts [MEDIUM PRIORITY]\n**Status: DONE**",
-			false, 4, "Fix Visual Artifacts",
+			"result message without model",
+			`{"type":"result","total_cost_usd":0.001}`,
+			"",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ref := p.ExtractTaskReference(tt.input)
-			if tt.expectNil {
-				if ref != nil {
-					t.Errorf("Expected nil, got Task %d (desc: %q)", ref.Number, ref.Description)
-				}
-				return
+			msg := p.ParseLine(tt.line)
+			if msg == nil {
+				t.Fatal("Expected non-nil result")
 			}
-			if ref == nil {
-				t.Fatal("Expected non-nil TaskReference")
-			}
-			if ref.Number != tt.expectNum {
-				t.Errorf("Expected number %d, got %d", tt.expectNum, ref.Number)
-			}
-			if ref.Description != tt.expectDesc {
-				t.Errorf("Expected description %q, got %q", tt.expectDesc, ref.Description)
+			result := p.GetModel(msg)
+			if result != tt.expected {
+				t.Errorf("Expected model %q, got %q", tt.expected, result)
 			}
 		})
+	}
+}
+
+func TestGetModelNilMessage(t *testing.T) {
+	p := parser.NewParser()
+	if result := p.GetModel(nil); result != "" {
+		t.Errorf("Expected empty string for nil message, got %q", result)
+	}
+}
+
+// TestGetModelFromFixtureInitLine reads the real recorded session's first line —
+// a genuine system/init emitted by the Claude CLI — to prove GetModel picks up
+// the top-level model field as it actually appears on the wire.
+func TestGetModelFromFixtureInitLine(t *testing.T) {
+	p := parser.NewParser()
+
+	data, err := os.ReadFile(filepath.Join("fixtures", "subagent_cost_session.json"))
+	if err != nil {
+		t.Fatalf("Failed to read fixture: %v", err)
+	}
+
+	firstLine := strings.SplitN(string(data), "\n", 2)[0]
+	msg := p.ParseLine(firstLine)
+	if msg == nil {
+		t.Fatal("Expected first fixture line to parse")
+	}
+	if msg.Type != parser.MessageTypeSystem {
+		t.Fatalf("Expected first fixture line to be a system message, got %q", msg.Type)
+	}
+	if got := p.GetModel(msg); got != "claude-sonnet-4-6" {
+		t.Errorf("Expected model %q from fixture init line, got %q", "claude-sonnet-4-6", got)
 	}
 }
 

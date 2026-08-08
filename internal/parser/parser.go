@@ -172,15 +172,15 @@ type RateLimitInfo struct {
 
 // ContentItem represents a single content item in a message
 type ContentItem struct {
-	Type           ContentType            `json:"type"`
-	Text           string                 `json:"text,omitempty"`
-	ID             string                 `json:"id,omitempty"`          // Tool use ID for tool_use
-	Name           string                 `json:"name,omitempty"`        // Tool name for tool_use
-	Input          map[string]interface{} `json:"input,omitempty"`       // Tool input for tool_use
-	ToolUseID      string                 `json:"tool_use_id,omitempty"` // Tool use ID for tool_result
-	Content        interface{}            `json:"content,omitempty"`     // Tool result content
-	ThinkingText   string                 `json:"thinking,omitempty"`    // Thinking content for thinking items
-	IsError        bool                   `json:"is_error,omitempty"`    // True for failed tool_result
+	Type         ContentType            `json:"type"`
+	Text         string                 `json:"text,omitempty"`
+	ID           string                 `json:"id,omitempty"`          // Tool use ID for tool_use
+	Name         string                 `json:"name,omitempty"`        // Tool name for tool_use
+	Input        map[string]interface{} `json:"input,omitempty"`       // Tool input for tool_use
+	ToolUseID    string                 `json:"tool_use_id,omitempty"` // Tool use ID for tool_result
+	Content      interface{}            `json:"content,omitempty"`     // Tool result content
+	ThinkingText string                 `json:"thinking,omitempty"`    // Thinking content for thinking items
+	IsError      bool                   `json:"is_error,omitempty"`    // True for failed tool_result
 }
 
 // InnerMessage represents the message field within an assistant/user message
@@ -193,16 +193,17 @@ type InnerMessage struct {
 
 // ParsedMessage represents a parsed Claude message
 type ParsedMessage struct {
-	Type            MessageType    `json:"type"`
-	SessionID       string         `json:"session_id,omitempty"`
-	Message         *InnerMessage  `json:"message,omitempty"`
-	TotalCostUSD    float64        `json:"total_cost_usd,omitempty"`
-	CostUSD         float64        `json:"cost_usd,omitempty"`
-	ParentToolUseID *string        `json:"parent_tool_use_id,omitempty"`
-	IsError         bool              `json:"is_error,omitempty"`
-	ErrorRaw        json.RawMessage   `json:"error,omitempty"`
-	RateLimitInfo   *RateLimitInfo    `json:"rate_limit_info,omitempty"`
-	RawJSON         string         `json:"-"` // Original JSON for debugging
+	Type            MessageType     `json:"type"`
+	SessionID       string          `json:"session_id,omitempty"`
+	Model           string          `json:"model,omitempty"` // top-level model (system init messages)
+	Message         *InnerMessage   `json:"message,omitempty"`
+	TotalCostUSD    float64         `json:"total_cost_usd,omitempty"`
+	CostUSD         float64         `json:"cost_usd,omitempty"`
+	ParentToolUseID *string         `json:"parent_tool_use_id,omitempty"`
+	IsError         bool            `json:"is_error,omitempty"`
+	ErrorRaw        json.RawMessage `json:"error,omitempty"`
+	RateLimitInfo   *RateLimitInfo  `json:"rate_limit_info,omitempty"`
+	RawJSON         string          `json:"-"` // Original JSON for debugging
 }
 
 // LoopMarker represents a loop marker extracted from output
@@ -243,19 +244,11 @@ type ToolResult struct {
 	IsError   bool   // True if the tool call failed
 }
 
-// TaskReference represents a detected IMPLEMENTATION_PLAN.md task reference
-type TaskReference struct {
-	Number      int
-	Description string // Optional description (e.g., "Track IMPLEMENTATION_PLAN.md Phase/Task")
-}
-
 // Parser handles parsing of Claude's stream-json output
 type Parser struct {
 	systemReminderRegex *regexp.Regexp
 	loopMarkerRegex     *regexp.Regexp
 	thinkingRegex       *regexp.Regexp
-	taskRegex           *regexp.Regexp
-	taskWithDescRegex   *regexp.Regexp
 }
 
 // NewParser creates a new Parser instance
@@ -264,8 +257,6 @@ func NewParser() *Parser {
 		systemReminderRegex: regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`),
 		loopMarkerRegex:     regexp.MustCompile(`LOOP (\d+)/(\d+)`),
 		thinkingRegex:       regexp.MustCompile(`(?s)<thinking>(.*?)</thinking>`),
-		taskRegex:           regexp.MustCompile(`(?i)TASK\s+(\d+)`),
-		taskWithDescRegex:   regexp.MustCompile(`(?i)TASK\s+(\d+)\s*:\s*([^\[\n]+)`),
 	}
 }
 
@@ -384,10 +375,9 @@ func (p *Parser) ExtractContent(msg *ParsedMessage) *ParsedContent {
 					inputJSON = string(jsonBytes)
 				}
 			}
-			// Truncate to 150 characters like Python version
-			if len(inputJSON) > 150 {
-				inputJSON = inputJSON[:150]
-			}
+			// Keep only a short preview of the input; truncate counts runes so
+			// multibyte UTF-8 is never split mid-rune.
+			inputJSON = truncate(inputJSON, 150)
 			location := ExtractFilePathFromInput(item.Input)
 			kind := ClassifyToolKind(item.Name)
 			content.ToolUses = append(content.ToolUses, ToolUse{
@@ -451,12 +441,17 @@ func (p *Parser) GetUsage(msg *ParsedMessage) *Usage {
 }
 
 // GetModel returns the model identifier from a message (e.g. "claude-opus-4-8"),
-// or empty string if not present.
+// or empty string if not present. Assistant messages carry it under "message";
+// the system init line carries it at the top level, so both are checked — the
+// init line is what tells us the effective model when --model was not passed.
 func (p *Parser) GetModel(msg *ParsedMessage) string {
-	if msg == nil || msg.Message == nil {
+	if msg == nil {
 		return ""
 	}
-	return msg.Message.Model
+	if msg.Message != nil && msg.Message.Model != "" {
+		return msg.Message.Model
+	}
+	return msg.Model
 }
 
 // GetCost extracts the total cost from a result message
@@ -615,10 +610,7 @@ func ExtractFilePathFromInput(input map[string]interface{}) string {
 	}
 	// Try command (Bash) - truncate to first 50 chars
 	if cmd, ok := input["command"].(string); ok && cmd != "" {
-		if len(cmd) > 50 {
-			return cmd[:50] + "..."
-		}
-		return cmd
+		return truncate(cmd, 50)
 	}
 	// Try description (Task)
 	if desc, ok := input["description"].(string); ok && desc != "" {
@@ -669,36 +661,4 @@ func normalizePlanStatus(s string) PlanItemStatus {
 	default:
 		return PlanPending
 	}
-}
-
-// ExtractTaskReference scans text for references to IMPLEMENTATION_PLAN.md tasks
-// (e.g., "TASK 6", "Task 3: Some Description"). Returns the last match found,
-// or nil if no task reference is detected.
-func (p *Parser) ExtractTaskReference(text string) *TaskReference {
-	// Try the more specific pattern first (TASK N: description)
-	descMatches := p.taskWithDescRegex.FindAllStringSubmatch(text, -1)
-	if len(descMatches) > 0 {
-		last := descMatches[len(descMatches)-1]
-		num := parseInt(last[1])
-		if num > 0 {
-			return &TaskReference{
-				Number:      num,
-				Description: strings.TrimSpace(last[2]),
-			}
-		}
-	}
-
-	// Fall back to simple pattern (TASK N)
-	matches := p.taskRegex.FindAllStringSubmatch(text, -1)
-	if len(matches) > 0 {
-		last := matches[len(matches)-1]
-		num := parseInt(last[1])
-		if num > 0 {
-			return &TaskReference{
-				Number: num,
-			}
-		}
-	}
-
-	return nil
 }

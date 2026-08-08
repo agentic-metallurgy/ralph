@@ -96,7 +96,9 @@ func TestBDD_ThinkingDisplay_ThinkingAndAssistantMessagesCoexist(t *testing.T) {
 // TestBDD_ThinkingDisplay_ThinkingViaChannelDelivery
 //
 // Given: a model created with NewModelWithChannels and a thinking message
-//        pre-loaded into the channel
+//
+//	pre-loaded into the channel
+//
 // When: the channel listener delivers the message
 // Then: the thinking icon and content appear in the activity feed
 func TestBDD_ThinkingDisplay_ThinkingViaChannelDelivery(t *testing.T) {

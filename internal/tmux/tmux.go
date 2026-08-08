@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 )
 
@@ -63,9 +64,20 @@ func (s *StatusBar) Restore() {
 }
 
 // FormatStatusRight builds the tmux status bar content string.
-func FormatStatusRight(repo, branch, loopDisplay, timeDisplay string) string {
-	return fmt.Sprintf("[%s | %s | loop: %s, uptime: %s]",
-		repo, branch, loopDisplay, timeDisplay)
+//
+// tokenDisplay and timeDisplay describe the CURRENT loop iteration, not the
+// cumulative session — see Model.updateTmuxStatusBar. Either may be empty (the
+// hibernate variant supplies neither), in which case the field is omitted
+// entirely rather than rendered as a dangling label.
+func FormatStatusRight(repo, branch, loopDisplay, tokenDisplay, timeDisplay string) string {
+	fields := []string{"loop: " + loopDisplay}
+	if tokenDisplay != "" {
+		fields = append(fields, "tokens: "+tokenDisplay)
+	}
+	if timeDisplay != "" {
+		fields = append(fields, "elapsed: "+timeDisplay)
+	}
+	return fmt.Sprintf("[%s | %s | %s]", repo, branch, strings.Join(fields, ", "))
 }
 
 // IsInsideTmux returns true if the current process is running inside a tmux session.

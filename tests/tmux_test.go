@@ -3,6 +3,7 @@ package tests
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/cloudosai/ralph-go/internal/tmux"
@@ -154,8 +155,8 @@ func TestStatusBarNilSafe(t *testing.T) {
 
 // TestFormatStatusRight tests the status bar format string
 func TestFormatStatusRight(t *testing.T) {
-	result := tmux.FormatStatusRight("ralph", "main", "1/5", "07:18:00")
-	expected := "[ralph | main | loop: 1/5, uptime: 07:18:00]"
+	result := tmux.FormatStatusRight("ralph", "main", "1/5", "12.3k", "07:18:00")
+	expected := "[ralph | main | loop: 1/5, tokens: 12.3k, elapsed: 07:18:00]"
 	if result != expected {
 		t.Errorf("FormatStatusRight() = %q, want %q", result, expected)
 	}
@@ -163,12 +164,79 @@ func TestFormatStatusRight(t *testing.T) {
 
 // TestFormatStatusRight_ZeroValues tests formatting with zero/default values
 func TestFormatStatusRight_ZeroValues(t *testing.T) {
-	result := tmux.FormatStatusRight("", "", "0/0", "00:00:00")
+	result := tmux.FormatStatusRight("", "", "0/0", "0", "00:00:00")
 	if result == "" {
 		t.Error("FormatStatusRight should return non-empty string for zero values")
 	}
-	expected := "[ |  | loop: 0/0, uptime: 00:00:00]"
+	expected := "[ |  | loop: 0/0, tokens: 0, elapsed: 00:00:00]"
 	if result != expected {
 		t.Errorf("FormatStatusRight() = %q, want %q", result, expected)
+	}
+}
+
+// TestFormatStatusRight_OmitsEmptyFields tests that an empty tokenDisplay or
+// timeDisplay drops the whole field instead of rendering a dangling label, and
+// that the surviving fields keep the order loop, tokens, elapsed.
+func TestFormatStatusRight_OmitsEmptyFields(t *testing.T) {
+	tests := []struct {
+		name        string
+		repo        string
+		branch      string
+		loopDisplay string
+		tokenDispl  string
+		timeDisplay string
+		expected    string
+	}{
+		{
+			name:        "all fields present",
+			repo:        "ralph",
+			branch:      "main",
+			loopDisplay: "2/5",
+			tokenDispl:  "1.2m",
+			timeDisplay: "00:04:07",
+			expected:    "[ralph | main | loop: 2/5, tokens: 1.2m, elapsed: 00:04:07]",
+		},
+		{
+			name:        "tokens omitted",
+			repo:        "ralph",
+			branch:      "main",
+			loopDisplay: "2/5",
+			tokenDispl:  "",
+			timeDisplay: "00:04:07",
+			expected:    "[ralph | main | loop: 2/5, elapsed: 00:04:07]",
+		},
+		{
+			name:        "elapsed omitted",
+			repo:        "ralph",
+			branch:      "main",
+			loopDisplay: "2/5",
+			tokenDispl:  "1.2m",
+			timeDisplay: "",
+			expected:    "[ralph | main | loop: 2/5, tokens: 1.2m]",
+		},
+		{
+			name:        "both omitted (hibernate)",
+			repo:        "ralph",
+			branch:      "main",
+			loopDisplay: "RATE LIMITED 💤 03:30",
+			tokenDispl:  "",
+			timeDisplay: "",
+			expected:    "[ralph | main | loop: RATE LIMITED 💤 03:30]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tmux.FormatStatusRight(tt.repo, tt.branch, tt.loopDisplay, tt.tokenDispl, tt.timeDisplay)
+			if result != tt.expected {
+				t.Errorf("FormatStatusRight() = %q, want %q", result, tt.expected)
+			}
+			if tt.tokenDispl == "" && strings.Contains(result, "tokens:") {
+				t.Errorf("FormatStatusRight() = %q, want no %q label", result, "tokens:")
+			}
+			if tt.timeDisplay == "" && strings.Contains(result, "elapsed:") {
+				t.Errorf("FormatStatusRight() = %q, want no %q label", result, "elapsed:")
+			}
+		})
 	}
 }

@@ -115,11 +115,6 @@ func TestTotalTokens(t *testing.T) {
 	}
 }
 
-
-
-
-
-
 func TestAddUsage_ZeroValues(t *testing.T) {
 	s := stats.NewTokenStats()
 	s.AddUsage(0, 0, 0, 0)
@@ -178,8 +173,6 @@ func TestAddCost_SmallValues(t *testing.T) {
 	}
 }
 
-
-
 func TestAccumulationMatchesPython(t *testing.T) {
 	// Test that accumulation matches the Python version behavior
 	s := stats.NewTokenStats()
@@ -230,8 +223,6 @@ func TestAccumulationMatchesPython(t *testing.T) {
 	}
 }
 
-
-
 func TestTotalTokensCount_UpdatedAfterAddUsage(t *testing.T) {
 	s := stats.NewTokenStats()
 
@@ -246,7 +237,6 @@ func TestTotalTokensCount_UpdatedAfterAddUsage(t *testing.T) {
 		t.Errorf("TotalTokensCount (%d) should match TotalTokens() (%d)", s.TotalTokensCount, s.TotalTokens())
 	}
 }
-
 
 func TestEstimateCostFromTokens(t *testing.T) {
 	tests := []struct {
@@ -285,6 +275,35 @@ func TestEstimateCostFromTokens(t *testing.T) {
 			if diff < -tolerance || diff > tolerance {
 				t.Errorf("EstimateCostFromTokens(%q, %d, %d, %d, %d) = %f, expected %f",
 					tt.model, tt.input, tt.output, tt.cacheCreation, tt.cacheRead, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestModelTier(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  string
+	}{
+		{"opus", "claude-opus-4-8", "opus"},
+		{"sonnet", "claude-sonnet-4-6", "sonnet"},
+		{"haiku", "claude-haiku-4-5", "haiku"},
+		{"fable", "claude-fable-5", "fable"},
+		{"opus dated snapshot", "claude-opus-4-5-20251101", "opus"},
+		{"bedrock prefix", "anthropic.claude-sonnet-4-6", "sonnet"},
+		{"mixed case", "Claude-OPUS-4-8", "opus"},
+		{"uppercase bare tier", "HAIKU", "haiku"},
+		{"bare tier name without claude prefix", "sonnet", "sonnet"},
+		{"empty", "", ""},
+		{"unknown", "gpt-4", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stats.ModelTier(tt.model)
+			if got != tt.want {
+				t.Errorf("ModelTier(%q) = %q, want %q", tt.model, got, tt.want)
 			}
 		})
 	}
@@ -558,17 +577,17 @@ func TestFlushCheckpoint(t *testing.T) {
 
 	ts := time.Now().UTC().Format(time.RFC3339)
 	p := stats.CheckpointParams{
-		LoopID:            "abc123-1",
-		SessionID:         "abc123",
-		Owner:             "testowner",
-		Repo:              "testrepo",
-		Branch:            "main",
-		DeltaCost:         0.05,
-		DeltaInputTokens:  1000,
-		DeltaOutputTokens: 500,
+		LoopID:             "abc123-1",
+		SessionID:          "abc123",
+		Owner:              "testowner",
+		Repo:               "testrepo",
+		Branch:             "main",
+		DeltaCost:          0.05,
+		DeltaInputTokens:   1000,
+		DeltaOutputTokens:  500,
 		DeltaCacheCreation: 200,
-		DeltaCacheRead:    100,
-		Timestamp:         ts,
+		DeltaCacheRead:     100,
+		Timestamp:          ts,
 	}
 
 	if err := stats.FlushCheckpoint(db, p); err != nil {
@@ -850,7 +869,6 @@ func TestGetGitContext(t *testing.T) {
 	}
 }
 
-
 func TestQueryRollingHourCost_NilDB(t *testing.T) {
 	cost, err := stats.QueryRollingHourCost(nil, "", "")
 	if err != nil {
@@ -973,7 +991,6 @@ func TestQueryRollingWakeTime_FallbackSingleLargeCheckpoint(t *testing.T) {
 		t.Errorf("Expected fallback wake time ~%v, got %v (diff=%v)", expectedWake, wakeTime, diff)
 	}
 }
-
 
 func TestReconcileCostThreadSafe(t *testing.T) {
 	s := stats.NewTokenStats()

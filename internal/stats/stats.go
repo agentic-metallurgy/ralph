@@ -83,19 +83,38 @@ var (
 // was made model-aware.
 var DefaultPricing = pricingSonnet
 
+// ModelTier returns the short tier name for a Claude model identifier
+// ("claude-opus-4-8" → "opus"), matching by substring so new point releases
+// within a tier need no code change. Returns "" when the identifier is empty
+// or belongs to no known tier.
+func ModelTier(model string) string {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "opus"):
+		return "opus"
+	case strings.Contains(m, "sonnet"):
+		return "sonnet"
+	case strings.Contains(m, "haiku"):
+		return "haiku"
+	case strings.Contains(m, "fable"):
+		return "fable"
+	default:
+		return ""
+	}
+}
+
 // PricingForModel returns the price set for a Claude model identifier (e.g.
 // "claude-opus-4-8"), matching by tier substring. Empty or unrecognized
 // identifiers fall back to DefaultPricing.
 func PricingForModel(model string) ModelPricing {
-	m := strings.ToLower(model)
-	switch {
-	case strings.Contains(m, "opus"):
+	switch ModelTier(model) {
+	case "opus":
 		return pricingOpus
-	case strings.Contains(m, "sonnet"):
+	case "sonnet":
 		return pricingSonnet
-	case strings.Contains(m, "haiku"):
+	case "haiku":
 		return pricingHaiku
-	case strings.Contains(m, "fable"):
+	case "fable":
 		return pricingFable
 	default:
 		return DefaultPricing
@@ -177,7 +196,6 @@ func FormatTokens(count int64) string {
 		return fmt.Sprintf("%d", count)
 	}
 }
-
 
 // GenerateSessionID returns a 6-char lowercase hex string from crypto/rand.
 func GenerateSessionID() (string, error) {
@@ -389,17 +407,17 @@ func ProjectKey(owner, repo string) string {
 
 // CheckpointParams holds parameters for a checkpoint row insert.
 type CheckpointParams struct {
-	LoopID            string
-	SessionID         string
-	Owner             string
-	Repo              string
-	Branch            string
-	DeltaCost         float64
-	DeltaInputTokens  int64
-	DeltaOutputTokens int64
+	LoopID             string
+	SessionID          string
+	Owner              string
+	Repo               string
+	Branch             string
+	DeltaCost          float64
+	DeltaInputTokens   int64
+	DeltaOutputTokens  int64
 	DeltaCacheCreation int64
-	DeltaCacheRead    int64
-	Timestamp         string
+	DeltaCacheRead     int64
+	Timestamp          string
 }
 
 // FlushCheckpoint inserts a checkpoint row into the database.
@@ -543,4 +561,3 @@ func QueryRollingWakeTime(db *sql.DB, owner, repo string, limit float64) (time.T
 	// Fallback: no single row's aging-out is sufficient
 	return time.Now().UTC().Add(60 * time.Minute), nil
 }
-

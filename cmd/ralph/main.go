@@ -424,10 +424,7 @@ func main() {
 	model.SetTmuxStatusBar(tmuxBar)
 	model.SetGitContext(dbCtx.repo, dbCtx.branch)
 	model.SetPlanFile(cfg.PlanFile)
-
-	// Parse implementation plan for task counts
-	completedTasks, totalTasks := parseTaskCounts(cfg.PlanFile)
-	model.SetCompletedTasks(completedTasks, totalTasks)
+	model.SetModelInfo(cfg.Model, config.ResolveEffort(cfg.Effort))
 
 	// Set current mode for TUI display
 	if cfg.IsPlanMode() {
@@ -491,19 +488,18 @@ func processLoopOutput(
 	defer close(msgChan)
 
 	loopOutput := claudeLoop.Output()
-	var loopTotalTokens int64       // per-loop token tracking for tmux status bar
-	var iterEstimate float64        // per-iteration estimated cost from token counts
-	var subagentCostAccum float64   // per-iteration accumulated subagent actual costs for reconciliation
-	var lastResultCost float64      // tracks previous result's cumulative total_cost_usd for delta computation
-	var iterToolUseCount int        // per-iteration tool use count for exit loop detection
-	var noopStreak int              // consecutive no-op iterations for exit loop detection
+	var loopTotalTokens int64           // per-loop token tracking for tmux status bar
+	var iterEstimate float64            // per-iteration estimated cost from token counts
+	var subagentCostAccum float64       // per-iteration accumulated subagent actual costs for reconciliation
+	var lastResultCost float64          // tracks previous result's cumulative total_cost_usd for delta computation
+	var iterToolUseCount int            // per-iteration tool use count for exit loop detection
+	var noopStreak int                  // consecutive no-op iterations for exit loop detection
 	seenMsgIDs := make(map[string]bool) // dedup: CLI emits multiple chunks per message ID with identical usage
 	lt := &loopTracker{}
 	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
 	// Startup budget check — hibernate before first iteration if budget already exceeded
 	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, claudeLoop); exceeded {
-		program.Send(tui.SendHibernate(nextHour)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr) at startup, pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
@@ -522,7 +518,6 @@ func processLoopOutput(
 		case <-ticker.C:
 			lt.flushDelta(dbCtx, tokenStats)
 			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, claudeLoop); exceeded {
-				program.Send(tui.SendHibernate(nextHour)())
 				msgChan <- tui.Message{
 					Role:    tui.RoleHibernate,
 					Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
@@ -542,6 +537,46 @@ func processLoopOutput(
 
 			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, dbCtx, lt, apiBackoff, seenMsgIDs)
 		}
+	}
+}
+
+// transcriptEffortInterval and transcriptEffortAttempts bound the wait for the
+// claude CLI to write its first assistant record, which is where the transcript
+// first names the effort level. ~30s covers a slow first turn; giving up leaves
+// the settings-derived value in the panel.
+const (
+	transcriptEffortInterval = 500 * time.Millisecond
+	transcriptEffortAttempts = 60
+)
+
+// trackSession records the session ID for --resume support and, whenever the
+// session changes, starts one background read of that session's transcript for
+// the effort level the CLI resolved. An empty ID means the message did not
+// carry one and is ignored.
+func trackSession(claudeLoop *loop.Loop, sessionID string, program *tea.Program) {
+	if sessionID == "" {
+		return
+	}
+	// GetSessionID still holds the previous session here, so this fires once
+	// per session rather than once per system message.
+	if program != nil && sessionID != claudeLoop.GetSessionID() {
+		go refineEffortFromTranscript(sessionID, program)
+	}
+	claudeLoop.SetSessionID(sessionID)
+}
+
+// refineEffortFromTranscript polls the session transcript until the claude CLI
+// records the effort level it is running at, then reports it to the Model
+// Details panel. The stream never carries the effort, so this readback is the
+// only runtime source; it is best-effort and silently gives up, since the panel
+// already shows the level resolved from --effort or the settings chain.
+func refineEffortFromTranscript(sessionID string, program *tea.Program) {
+	for range transcriptEffortAttempts {
+		if effort := config.TranscriptEffort(sessionID); effort != "" {
+			program.Send(tui.SendEffortUpdate(effort)())
+			return
+		}
+		time.Sleep(transcriptEffortInterval)
 	}
 }
 
@@ -578,9 +613,7 @@ func processMessage(
 		parsed := jsonParser.ParseLine(msg.Content)
 		if parsed != nil {
 			// Capture session ID from system messages for --resume support
-			if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
-				claudeLoop.SetSessionID(sessionID)
-			}
+			trackSession(claudeLoop, jsonParser.GetSessionID(parsed), program)
 			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile, iterEstimate, subagentCostAccum, lastResultCost, iterToolUseCount, noopStreak, apiBackoff, seenMsgIDs)
 		} else {
 			// Check if it's a loop marker in the output stream
@@ -689,7 +722,6 @@ func handleParsedMessage(
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
 		claudeLoop.Hibernate(resetsAt)
-		program.Send(tui.SendHibernate(resetsAt)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("Rate limited until %s", resetsAt.Format(time.Kitchen)),
@@ -710,7 +742,6 @@ func handleParsedMessage(
 		}
 		resetsAt := time.Now().Add(backoffDuration)
 		claudeLoop.Hibernate(resetsAt)
-		program.Send(tui.SendHibernate(resetsAt)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("API overloaded (529), retry %d/%d, hibernating %s until %s", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen)),
@@ -731,7 +762,6 @@ func handleParsedMessage(
 		}
 		resetsAt := time.Now().Add(backoffDuration)
 		claudeLoop.Hibernate(resetsAt)
-		program.Send(tui.SendHibernate(resetsAt)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("API server error (500), retry %d/%d, hibernating %s until %s", retryNum, apiBackoff.MaxRetries(), backoffDuration.Round(time.Second), resetsAt.Format(time.Kitchen)),
@@ -772,13 +802,20 @@ func handleParsedMessage(
 				usage.CacheReadInputTokens,
 			)
 			// Estimate cost from token counts and update in real-time
+			msgModel := jsonParser.GetModel(parsed)
 			estimate := stats.EstimateCostFromTokens(
-				jsonParser.GetModel(parsed),
+				msgModel,
 				usage.InputTokens,
 				usage.OutputTokens,
 				usage.CacheCreationInputTokens,
 				usage.CacheReadInputTokens,
 			)
+			// Report the effective model to the Model Details panel. Subagent
+			// messages are skipped — they may run a different model than the
+			// main loop.
+			if msgModel != "" && !jsonParser.IsSubagentMessage(parsed) {
+				program.Send(tui.SendModelUpdate(msgModel)())
+			}
 			tokenStats.AddCost(estimate)
 			*iterEstimate += estimate
 			program.Send(tui.SendStatsUpdate(tokenStats)())
@@ -818,7 +855,12 @@ func handleParsedMessage(
 	// Process message content based on type
 	switch parsed.Type {
 	case parser.MessageTypeSystem:
-		// Skip system messages (as Python version does)
+		// System messages aren't displayed, but the init line names the model
+		// the session actually resolved to — the only source when --model was
+		// not passed. Feed it to the Model Details panel before dropping it.
+		if mdl := jsonParser.GetModel(parsed); mdl != "" && !jsonParser.IsSubagentMessage(parsed) {
+			program.Send(tui.SendModelUpdate(mdl)())
+		}
 		return
 
 	case parser.MessageTypeAssistant:
@@ -840,7 +882,7 @@ func handleParsedMessage(
 			fmt.Fprintf(logFile, "[thinking] %s\n\n", content.Thinking)
 		}
 
-		// Display text content and scan for task references
+		// Display text content
 		for _, text := range content.TextContent {
 			if text != "" {
 				msgChan <- tui.Message{
@@ -848,14 +890,6 @@ func handleParsedMessage(
 					Content: text,
 				}
 				fmt.Fprintf(logFile, "[assistant] %s\n\n", text)
-				// Detect IMPLEMENTATION_PLAN.md task references
-				if ref := jsonParser.ExtractTaskReference(text); ref != nil {
-					taskLabel := fmt.Sprintf("#%d", ref.Number)
-					if ref.Description != "" {
-						taskLabel = fmt.Sprintf("#%d %s", ref.Number, ref.Description)
-					}
-					program.Send(tui.SendTaskUpdate(taskLabel)())
-				}
 			}
 		}
 
@@ -888,8 +922,7 @@ func handleParsedMessage(
 
 	case parser.MessageTypeUser:
 		// Skip tool result content in TUI mode (file dumps are too verbose).
-		// Flip the matching tool row to completed/failed, and still scan for
-		// task references in the results.
+		// Flip the matching tool row to completed/failed.
 		content := jsonParser.ExtractContent(parsed)
 		for _, toolResult := range content.ToolResults {
 			if toolResult.ToolUseID != "" {
@@ -898,15 +931,6 @@ func handleParsedMessage(
 					status = parser.ToolStatusFailed
 				}
 				program.Send(tui.SendToolStatusUpdate(toolResult.ToolUseID, string(status))())
-			}
-			if toolResult.Content != "" {
-				if ref := jsonParser.ExtractTaskReference(toolResult.Content); ref != nil {
-					taskLabel := fmt.Sprintf("#%d", ref.Number)
-					if ref.Description != "" {
-						taskLabel = fmt.Sprintf("#%d %s", ref.Number, ref.Description)
-					}
-					program.Send(tui.SendTaskUpdate(taskLabel)())
-				}
 			}
 		}
 
@@ -1492,10 +1516,7 @@ func runPlanAndBuild(cfg *config.Config, tokenStats *stats.TokenStats, logFile i
 	model.SetTmuxStatusBar(tmuxBar)
 	model.SetGitContext(dbCtx.repo, dbCtx.branch)
 	model.SetPlanFile(cfg.PlanFile)
-
-	// Parse implementation plan for task counts
-	completedTasks, totalTasks := parseTaskCounts(cfg.PlanFile)
-	model.SetCompletedTasks(completedTasks, totalTasks)
+	model.SetModelInfo(cfg.Model, config.ResolveEffort(cfg.Effort))
 
 	// Start in planning mode
 	model.SetCurrentMode("Planning")
@@ -1642,7 +1663,6 @@ func processPlanPhase(
 
 	// Startup budget check — hibernate before first iteration if budget already exceeded
 	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, planLoop); exceeded {
-		program.Send(tui.SendHibernate(nextHour)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr) at startup, pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
@@ -1661,7 +1681,6 @@ func processPlanPhase(
 		case <-ticker.C:
 			lt.flushDelta(dbCtx, tokenStats)
 			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, planLoop); exceeded {
-				program.Send(tui.SendHibernate(nextHour)())
 				msgChan <- tui.Message{
 					Role:    tui.RoleHibernate,
 					Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
@@ -1684,9 +1703,7 @@ func processPlanPhase(
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
 				if parsed != nil {
-					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
-						planLoop.SetSessionID(sessionID)
-					}
+					trackSession(planLoop, jsonParser.GetSessionID(parsed), program)
 					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
@@ -1748,7 +1765,6 @@ func processBuildPhase(
 
 	// Startup budget check — hibernate before first iteration if budget already exceeded
 	if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, buildLoop); exceeded {
-		program.Send(tui.SendHibernate(nextHour)())
 		msgChan <- tui.Message{
 			Role:    tui.RoleHibernate,
 			Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr) at startup, pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
@@ -1767,7 +1783,6 @@ func processBuildPhase(
 		case <-ticker.C:
 			lt.flushDelta(dbCtx, tokenStats)
 			if exceeded, hourCost, nextHour := checkCostPacing(dbCtx, maxCostPerHour, buildLoop); exceeded {
-				program.Send(tui.SendHibernate(nextHour)())
 				msgChan <- tui.Message{
 					Role:    tui.RoleHibernate,
 					Content: fmt.Sprintf("Cost budget exceeded ($%.4f/$%.2f/hr), pausing until %s", hourCost, maxCostPerHour, nextHour.Format(time.Kitchen)),
@@ -1794,9 +1809,7 @@ func processBuildPhase(
 			case "output":
 				parsed := jsonParser.ParseLine(msg.Content)
 				if parsed != nil {
-					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
-						buildLoop.SetSessionID(sessionID)
-					}
+					trackSession(buildLoop, jsonParser.GetSessionID(parsed), program)
 					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
@@ -1846,24 +1859,4 @@ func isNewLoopStart(content string) bool {
 // (the iteration is being retried after a 529/500 hibernate, not a fresh start).
 func isRetryLoopStart(content string) bool {
 	return strings.Contains(content, "LOOP") && strings.Contains(content, "RETRY")
-}
-
-// parseTaskCounts reads an IMPLEMENTATION_PLAN.md file and returns the number of
-// completed (DONE) tasks and the total number of tasks.
-func parseTaskCounts(filepath string) (completed, total int) {
-	data, err := os.ReadFile(filepath)
-	if err != nil {
-		return 0, 0
-	}
-
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "## TASK ") {
-			total++
-		}
-		if strings.Contains(trimmed, "**Status: DONE**") || strings.Contains(trimmed, "**Status: NOT NEEDED**") {
-			completed++
-		}
-	}
-	return completed, total
 }
