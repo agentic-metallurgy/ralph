@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cloudosai/ralph-go/internal/loop"
@@ -1918,14 +1919,95 @@ func setupModelDetailsModel(model, effort string) tui.Model {
 	return m
 }
 
+// modelDetailsPanel returns only the "Model Details" footer panel region of a
+// rendered view.
+//
+// Why this exists: the panel's values are extremely short ("opus", "high",
+// "default", "sonnet"). Asserting strings.Contains against the WHOLE view makes
+// those assertions pass or fail for the wrong reason as soon as any other part
+// of the view — another footer row, the hotkey bar, an activity message, a plan
+// line — happens to contain the same characters. Two concrete traps:
+// "high" is a substring of "xhigh" (so a whole-view check cannot distinguish
+// --effort high from --effort xhigh), and a negative check like
+// !Contains(view, "opus") breaks the moment an assistant message mentions opus.
+// Scoping every assertion to this panel makes short substrings unambiguous.
+//
+// Model Details is the RIGHTMOST footer panel, so everything from its left
+// border column through end-of-line belongs to it. Box-drawing runes (│ ╭ ─ ╰)
+// are multi-byte UTF-8, so columns are counted in RUNES, never bytes.
+func modelDetailsPanel(t *testing.T, view string) string {
+	t.Helper()
+
+	const title = "Model Details"
+
+	lines := strings.Split(view, "\n")
+	titleLine := -1
+	startCol := 0
+	for i, line := range lines {
+		byteIdx := strings.Index(line, title)
+		if byteIdx == -1 {
+			continue
+		}
+		titleLine = i
+		// strings.Index gives a BYTE offset; convert it to a rune column.
+		// The panel's left border plus padding ("│ ") sit two runes before
+		// the title, so that is where the panel actually starts.
+		startCol = utf8.RuneCountInString(line[:byteIdx]) - 2
+		if startCol < 0 {
+			startCol = 0
+		}
+		break
+	}
+	if titleLine == -1 {
+		t.Fatalf("%q not found in rendered view:\n%s", title, view)
+	}
+
+	var panel []string
+	for _, line := range lines[titleLine:] {
+		runes := []rune(line)
+		if len(runes) <= startCol {
+			// Too short to reach the panel's column — e.g. the hotkey bar
+			// underneath the footer. Not part of the panel.
+			continue
+		}
+		panel = append(panel, string(runes[startCol:]))
+	}
+	return strings.Join(panel, "\n")
+}
+
+// modelDetailsRows returns the Model Details panel's text rows with the border
+// runes and padding stripped, so tests can assert on COMPLETE rows
+// ("Effort: high") instead of loose substrings ("high").
+func modelDetailsRows(t *testing.T, view string) []string {
+	t.Helper()
+
+	var rows []string
+	for _, line := range strings.Split(modelDetailsPanel(t, view), "\n") {
+		rows = append(rows, strings.Trim(line, "│ "))
+	}
+	return rows
+}
+
+// panelHasRow reports whether one of the panel's rows is exactly want.
+func panelHasRow(rows []string, want string) bool {
+	for _, row := range rows {
+		if row == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestModelDetailsPanelTitleRendered tests that the fourth footer panel is titled
 // "Model Details".
 func TestModelDetailsPanelTitleRendered(t *testing.T) {
 	model := setupModelDetailsModel("", "")
 
-	view := model.View()
-	if !strings.Contains(view, "Model Details") {
-		t.Error("View should contain the 'Model Details' panel title")
+	// modelDetailsRows t.Fatalf's if the title is missing entirely; asserting
+	// the title is the panel's first row also pins it to the panel header.
+	rows := modelDetailsRows(t, model.View())
+	if len(rows) == 0 || rows[0] != "Model Details" {
+		t.Errorf("Expected 'Model Details' as the panel's first row, got rows: %q", rows)
 	}
 }
 
@@ -1935,14 +2017,22 @@ func TestModelDetailsShowsOpusTierAndEffort(t *testing.T) {
 	model := setupModelDetailsModel("claude-opus-4-8", "high")
 
 	view := model.View()
-	for _, want := range []string{"Model:", "opus", "Effort:", "high"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("View should contain %q in the Model Details panel", want)
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	for _, want := range []string{"Model: opus", "Effort: high"} {
+		if !panelHasRow(rows, want) {
+			t.Errorf("Model Details panel should contain the row %q, got rows: %q", want, rows)
 		}
 	}
+	// "high" is a substring of "xhigh", so the exact-row check above is only
+	// meaningful alongside this: the panel must not be showing xhigh.
+	if strings.Contains(panel, "xhigh") {
+		t.Errorf("Effort 'high' should not render as 'xhigh', got panel:\n%s", panel)
+	}
 	// The verbose id should be collapsed, not printed in full.
-	if strings.Contains(view, "claude-opus-4-8") {
-		t.Error("View should collapse 'claude-opus-4-8' to the tier name 'opus'")
+	if strings.Contains(panel, "claude-opus-4-8") {
+		t.Errorf("Panel should collapse 'claude-opus-4-8' to the tier name 'opus', got panel:\n%s", panel)
 	}
 }
 
@@ -1952,11 +2042,17 @@ func TestModelDetailsCollapsesSonnetTier(t *testing.T) {
 	model := setupModelDetailsModel("claude-sonnet-4-6", "")
 
 	view := model.View()
-	if !strings.Contains(view, "sonnet") {
-		t.Error("View should collapse 'claude-sonnet-4-6' to the tier name 'sonnet'")
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Model: sonnet") {
+		t.Errorf("Panel should collapse 'claude-sonnet-4-6' to the tier name 'sonnet', got rows: %q", rows)
 	}
-	if !strings.Contains(view, "default") {
-		t.Error("View should show 'default' effort when --effort was not passed")
+	if strings.Contains(panel, "claude-sonnet-4-6") {
+		t.Errorf("Panel should not print the full model id, got panel:\n%s", panel)
+	}
+	if !panelHasRow(rows, "Effort: default") {
+		t.Errorf("Panel should show 'Effort: default' when --effort was not passed, got rows: %q", rows)
 	}
 }
 
@@ -1965,14 +2061,13 @@ func TestModelDetailsCollapsesSonnetTier(t *testing.T) {
 func TestModelDetailsEmptyFlagsShowDefault(t *testing.T) {
 	model := setupModelDetailsModel("", "")
 
-	view := model.View()
-	if !strings.Contains(view, "Model:") || !strings.Contains(view, "Effort:") {
-		t.Fatal("View should contain the 'Model:' and 'Effort:' rows")
-	}
-	// "default" is only ever produced by the model and effort rows, so both
-	// rows falling back means exactly two occurrences.
-	if got := strings.Count(view, "default"); got != 2 {
-		t.Errorf("Expected both the model and effort rows to read 'default' (2 occurrences), got %d", got)
+	// Both rows must fall back independently — asserted as complete rows rather
+	// than by counting "default" occurrences across the whole view.
+	rows := modelDetailsRows(t, model.View())
+	for _, want := range []string{"Model: default", "Effort: default"} {
+		if !panelHasRow(rows, want) {
+			t.Errorf("Model Details panel should contain the row %q, got rows: %q", want, rows)
+		}
 	}
 }
 
@@ -1982,11 +2077,16 @@ func TestModelDetailsUnknownModelRendersVerbatim(t *testing.T) {
 	model := setupModelDetailsModel("zeta-9", "low")
 
 	view := model.View()
-	if !strings.Contains(view, "zeta-9") {
-		t.Error("View should render an unrecognized model id verbatim")
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Model: zeta-9") {
+		t.Errorf("Panel should render an unrecognized model id verbatim, got rows: %q", rows)
 	}
-	if strings.Contains(view, "Model: default") {
-		t.Error("An unrecognized model id should not fall back to 'default'")
+	if panelHasRow(rows, "Model: default") {
+		t.Errorf("An unrecognized model id should not fall back to 'default', got rows: %q", rows)
+	}
+	if !panelHasRow(rows, "Effort: low") {
+		t.Errorf("Panel should still show the configured effort, got rows: %q", rows)
 	}
 }
 
@@ -1995,11 +2095,14 @@ func TestModelDetailsEffortLowercased(t *testing.T) {
 	model := setupModelDetailsModel("", "XHIGH")
 
 	view := model.View()
-	if !strings.Contains(view, "xhigh") {
-		t.Error("View should lowercase the effort level ('XHIGH' -> 'xhigh')")
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Effort: xhigh") {
+		t.Errorf("Panel should lowercase the effort level ('XHIGH' -> 'xhigh'), got rows: %q", rows)
 	}
-	if strings.Contains(view, "XHIGH") {
-		t.Error("View should not show the raw uppercase effort level")
+	if strings.Contains(panel, "XHIGH") {
+		t.Errorf("Panel should not show the raw uppercase effort level, got panel:\n%s", panel)
 	}
 }
 
@@ -2012,11 +2115,20 @@ func TestModelDetailsStreamModelOverridesFlag(t *testing.T) {
 	model, _ = updateModel(model, cmd())
 
 	view := model.View()
-	if !strings.Contains(view, "haiku") {
-		t.Error("View should show 'haiku' after the stream reports the effective model")
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Model: haiku") {
+		t.Errorf("Panel should show 'haiku' after the stream reports the effective model, got rows: %q", rows)
 	}
-	if strings.Contains(view, "opus") {
-		t.Error("View should no longer show the flag model 'opus' after a stream model update")
+	// Scoped to the panel: an activity message mentioning "opus" must not be
+	// able to fail this.
+	if strings.Contains(panel, "opus") {
+		t.Errorf("Panel should no longer show the flag model 'opus' after a stream model update, got panel:\n%s", panel)
+	}
+	// And: effort is untouched by a model update.
+	if !panelHasRow(rows, "Effort: high") {
+		t.Errorf("Effort should persist across a model update, got rows: %q", rows)
 	}
 }
 
@@ -2028,11 +2140,11 @@ func TestModelDetailsEmptyStreamModelIgnored(t *testing.T) {
 	cmd := tui.SendModelUpdate("")
 	model, _ = updateModel(model, cmd())
 
-	view := model.View()
-	if !strings.Contains(view, "opus") {
-		t.Error("An empty model update should not clear the previously-set model")
+	rows := modelDetailsRows(t, model.View())
+	if !panelHasRow(rows, "Model: opus") {
+		t.Errorf("An empty model update should not clear the previously-set model, got rows: %q", rows)
 	}
-	if strings.Contains(view, "Model: default") {
-		t.Error("An empty model update should not reset the model row to 'default'")
+	if panelHasRow(rows, "Model: default") {
+		t.Errorf("An empty model update should not reset the model row to 'default', got rows: %q", rows)
 	}
 }

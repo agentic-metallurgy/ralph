@@ -325,21 +325,24 @@ func TestBDD_UserMonitorsBuildProgress_ModelDetailsShowModelAndEffort(t *testing
 	view := m.View()
 
 	// Then: the Model Details panel shows both labels with the model collapsed
-	// to its tier (the quarter-width panel has no room for the full identifier)
-	if !strings.Contains(view, "Model:") {
-		t.Errorf("Expected 'Model:' label in footer, got:\n%s", view)
+	// to its tier (the quarter-width panel has no room for the full
+	// identifier). Assertions are scoped to the panel — see modelDetailsPanel —
+	// so short values like "opus"/"high" cannot match text elsewhere.
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Model: opus") {
+		t.Errorf("Expected the row 'Model: opus' in the Model Details panel, got rows: %q", rows)
 	}
-	if !strings.Contains(view, "Effort:") {
-		t.Errorf("Expected 'Effort:' label in footer, got:\n%s", view)
+	// Exact row, so this cannot be satisfied by "xhigh".
+	if !panelHasRow(rows, "Effort: high") {
+		t.Errorf("Expected the row 'Effort: high' in the Model Details panel, got rows: %q", rows)
 	}
-	if !strings.Contains(view, "opus") {
-		t.Errorf("Expected model tier 'opus' in footer, got:\n%s", view)
+	if strings.Contains(panel, "xhigh") {
+		t.Errorf("Effort 'high' should not render as 'xhigh', got panel:\n%s", panel)
 	}
-	if !strings.Contains(view, "high") {
-		t.Errorf("Expected effort 'high' in footer, got:\n%s", view)
-	}
-	if strings.Contains(view, "claude-opus-4-8") {
-		t.Errorf("Expected the full model identifier to be collapsed to its tier, got:\n%s", view)
+	if strings.Contains(panel, "claude-opus-4-8") {
+		t.Errorf("Expected the full model identifier to be collapsed to its tier, got panel:\n%s", panel)
 	}
 }
 
@@ -347,23 +350,29 @@ func TestBDD_UserMonitorsBuildProgress_ModelUpdateRefinesModel(t *testing.T) {
 	// Given: a model started with --model claude-sonnet-4-5
 	m := setupReadyModel()
 	m.SetModelInfo("claude-sonnet-4-5", "medium")
-	if !viewContains(m, "sonnet") {
+	if !panelHasRow(modelDetailsRows(t, m.View()), "Model: sonnet") {
 		t.Fatal("Precondition: footer should show the configured 'sonnet' tier")
 	}
 
 	// When: the stream reports a different effective model at runtime
 	m, _ = sendTuiMsg(m, tui.SendModelUpdate("claude-opus-4-8"))
 
-	// Then: the footer shows the effective model and no longer the configured one
-	if !viewContains(m, "opus") {
-		t.Errorf("Expected refined model tier 'opus' in footer, got:\n%s", m.View())
+	// Then: the footer shows the effective model and no longer the configured
+	// one. Scoped to the Model Details panel so unrelated view text cannot
+	// satisfy (or break) these short substrings.
+	view := m.View()
+	panel := modelDetailsPanel(t, view)
+	rows := modelDetailsRows(t, view)
+
+	if !panelHasRow(rows, "Model: opus") {
+		t.Errorf("Expected refined row 'Model: opus' in the Model Details panel, got rows: %q", rows)
 	}
-	if viewContains(m, "sonnet") {
-		t.Error("Stale model tier 'sonnet' should be replaced by the effective model")
+	if strings.Contains(panel, "sonnet") {
+		t.Errorf("Stale model tier 'sonnet' should be replaced by the effective model, got panel:\n%s", panel)
 	}
 	// And: effort is untouched by a model update
-	if !viewContains(m, "medium") {
-		t.Error("Effort should persist across a model update")
+	if !panelHasRow(rows, "Effort: medium") {
+		t.Errorf("Effort should persist across a model update, got rows: %q", rows)
 	}
 }
 
@@ -374,12 +383,14 @@ func TestBDD_UserMonitorsBuildProgress_ModelDetailsDefaultWhenUnset(t *testing.T
 	// When: the view is rendered
 	view := m.View()
 
-	// Then: both rows read "default" — i.e. whatever the claude CLI resolves
-	if !strings.Contains(view, "Model:") || !strings.Contains(view, "Effort:") {
-		t.Fatalf("Expected 'Model:' and 'Effort:' labels in footer, got:\n%s", view)
-	}
-	if n := strings.Count(view, "default"); n < 2 {
-		t.Errorf("Expected model and effort to both render as 'default' (found %d), got:\n%s", n, view)
+	// Then: both rows read "default" — i.e. whatever the claude CLI resolves.
+	// Asserted as complete rows in the Model Details panel rather than by
+	// counting "default" occurrences across the whole view.
+	rows := modelDetailsRows(t, view)
+	for _, want := range []string{"Model: default", "Effort: default"} {
+		if !panelHasRow(rows, want) {
+			t.Errorf("Expected the row %q in the Model Details panel, got rows: %q", want, rows)
+		}
 	}
 }
 
@@ -423,30 +434,42 @@ func TestBDD_UserMonitorsBuildProgress_FooterFieldOrdering(t *testing.T) {
 	//
 	// Note "Model:" and "Mode:" both start with "Mo" but neither is a prefix of
 	// the other ("Model:" is not matched by "Mode:"), so plain Index is safe.
+	//
+	// The left-to-right panel ordering is genuinely a whole-view property, so
+	// those indices stay on the full view. The vertical ordering *within* the
+	// Model Details panel is scoped to the extracted panel instead.
 	loopIdx := strings.Index(view, "Loop:")
 	timeIdx := strings.Index(view, "Total Time:")
 	statusIdx := strings.Index(view, "Status:")
 	modelIdx := strings.Index(view, "Model:")
-	effortIdx := strings.Index(view, "Effort:")
-	modeIdx := strings.Index(view, "Mode:")
 
-	if loopIdx == -1 || timeIdx == -1 || statusIdx == -1 ||
-		modelIdx == -1 || effortIdx == -1 || modeIdx == -1 {
-		t.Fatalf("Not all footer fields found. Loop=%d Time=%d Status=%d Model=%d Effort=%d Mode=%d",
-			loopIdx, timeIdx, statusIdx, modelIdx, effortIdx, modeIdx)
+	if loopIdx == -1 || timeIdx == -1 || statusIdx == -1 || modelIdx == -1 {
+		t.Fatalf("Not all footer fields found. Loop=%d Time=%d Status=%d Model=%d",
+			loopIdx, timeIdx, statusIdx, modelIdx)
 	}
 
 	if !(loopIdx < timeIdx && timeIdx < statusIdx) {
 		t.Errorf("Ralph Loop Details fields not in vertical order: Loop@%d < Time@%d < Status@%d",
 			loopIdx, timeIdx, statusIdx)
 	}
-	if !(modelIdx < effortIdx && effortIdx < modeIdx) {
-		t.Errorf("Model Details fields not in vertical order: Model@%d < Effort@%d < Mode@%d",
-			modelIdx, effortIdx, modeIdx)
-	}
 	if !(loopIdx < modelIdx) {
 		t.Errorf("Ralph Loop Details panel should be left of Model Details panel: Loop@%d < Model@%d",
 			loopIdx, modelIdx)
+	}
+
+	// Within the Model Details panel: Model → Effort → Mode, top to bottom.
+	panel := modelDetailsPanel(t, view)
+	panelModelIdx := strings.Index(panel, "Model:")
+	panelEffortIdx := strings.Index(panel, "Effort:")
+	panelModeIdx := strings.Index(panel, "Mode:")
+
+	if panelModelIdx == -1 || panelEffortIdx == -1 || panelModeIdx == -1 {
+		t.Fatalf("Not all Model Details rows found. Model=%d Effort=%d Mode=%d, panel:\n%s",
+			panelModelIdx, panelEffortIdx, panelModeIdx, panel)
+	}
+	if !(panelModelIdx < panelEffortIdx && panelEffortIdx < panelModeIdx) {
+		t.Errorf("Model Details fields not in vertical order: Model@%d < Effort@%d < Mode@%d, panel:\n%s",
+			panelModelIdx, panelEffortIdx, panelModeIdx, panel)
 	}
 }
 
