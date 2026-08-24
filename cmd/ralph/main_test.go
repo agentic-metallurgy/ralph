@@ -155,16 +155,14 @@ func TestExitLoopDetection_ConsecutiveNoops(t *testing.T) {
 	tokenStats := stats.NewTokenStats()
 	apiBackoff := loop.NewBackoff()
 
-	var iterEstimate float64
-	var subagentCostAccum float64
-	var lastResultCost float64
+	acct := newUsageAccounting()
 	var iterToolUseCount int
 	var noopStreak int
 
 	// First no-op iteration result
 	handleParsedMessageCLI(
 		makeNoopResult(0.005), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
+		acct, &iterToolUseCount, &noopStreak, apiBackoff,
 	)
 
 	if noopStreak != 1 {
@@ -173,13 +171,12 @@ func TestExitLoopDetection_ConsecutiveNoops(t *testing.T) {
 
 	// Simulate new loop start — reset iterToolUseCount but not noopStreak
 	iterToolUseCount = 0
-	iterEstimate = 0
-	subagentCostAccum = 0
+	acct.resetIteration()
 
 	// Second no-op iteration result — should trigger stop
 	handleParsedMessageCLI(
 		makeNoopResult(0.003), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
+		acct, &iterToolUseCount, &noopStreak, apiBackoff,
 	)
 
 	if noopStreak != 2 {
@@ -199,16 +196,14 @@ func TestExitLoopDetection_ProductiveIterationResetsStreak(t *testing.T) {
 	tokenStats := stats.NewTokenStats()
 	apiBackoff := loop.NewBackoff()
 
-	var iterEstimate float64
-	var subagentCostAccum float64
-	var lastResultCost float64
+	acct := newUsageAccounting()
 	var iterToolUseCount int
 	var noopStreak int
 
 	// First no-op iteration
 	handleParsedMessageCLI(
 		makeNoopResult(0.005), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
+		acct, &iterToolUseCount, &noopStreak, apiBackoff,
 	)
 	if noopStreak != 1 {
 		t.Fatalf("expected noopStreak=1, got %d", noopStreak)
@@ -216,18 +211,17 @@ func TestExitLoopDetection_ProductiveIterationResetsStreak(t *testing.T) {
 
 	// Simulate new loop start
 	iterToolUseCount = 0
-	iterEstimate = 0
-	subagentCostAccum = 0
+	acct.resetIteration()
 
 	// Productive iteration: assistant message with tool use, then result with higher cost
 	handleParsedMessageCLI(
 		makeAssistantWithToolUse(), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
+		acct, &iterToolUseCount, &noopStreak, apiBackoff,
 	)
 
 	handleParsedMessageCLI(
 		makeNoopResult(0.50), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
+		acct, &iterToolUseCount, &noopStreak, apiBackoff,
 	)
 
 	if noopStreak != 0 {
@@ -242,16 +236,14 @@ func TestExitLoopDetection_HighCostNoToolsIsNotNoop(t *testing.T) {
 	tokenStats := stats.NewTokenStats()
 	apiBackoff := loop.NewBackoff()
 
-	var iterEstimate float64
-	var subagentCostAccum float64
-	var lastResultCost float64
+	acct := newUsageAccounting()
 	var iterToolUseCount int
 	var noopStreak int
 
 	// High cost result with no tool use — this is legitimate thinking work
 	handleParsedMessageCLI(
 		makeNoopResult(0.50), claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
+		acct, &iterToolUseCount, &noopStreak, apiBackoff,
 	)
 
 	if noopStreak != 0 {
@@ -266,9 +258,7 @@ func TestExitLoopDetection_SubagentResultIgnored(t *testing.T) {
 	tokenStats := stats.NewTokenStats()
 	apiBackoff := loop.NewBackoff()
 
-	var iterEstimate float64
-	var subagentCostAccum float64
-	var lastResultCost float64
+	acct := newUsageAccounting()
 	var iterToolUseCount int
 	var noopStreak int
 
@@ -281,7 +271,7 @@ func TestExitLoopDetection_SubagentResultIgnored(t *testing.T) {
 
 	handleParsedMessageCLI(
 		subagentResult, claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
+		acct, &iterToolUseCount, &noopStreak, apiBackoff,
 	)
 
 	if noopStreak != 0 {
@@ -318,7 +308,7 @@ func TestHandleParsedMessageCLI_AuthError_StopsLoop(t *testing.T) {
 	tokenStats := stats.NewTokenStats()
 	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
 	apiBackoff := loop.NewBackoff()
-	var iterEstimate, subagentCostAccum, lastResultCost float64
+	acct := newUsageAccounting()
 	var iterToolUseCount, noopStreak int
 
 	line := `{"type":"assistant","is_error":true,"error":"authentication_error"}`
@@ -329,7 +319,7 @@ func TestHandleParsedMessageCLI_AuthError_StopsLoop(t *testing.T) {
 
 	handleParsedMessageCLI(
 		parsed, claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
+		acct, &iterToolUseCount, &noopStreak, apiBackoff,
 	)
 
 	if claudeLoop.IsRunning() {
@@ -422,7 +412,7 @@ func TestHandleParsedMessageCLI_AuthError_WithAPIKey(t *testing.T) {
 	tokenStats := stats.NewTokenStats()
 	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
 	apiBackoff := loop.NewBackoff()
-	var iterEstimate, subagentCostAccum, lastResultCost float64
+	acct := newUsageAccounting()
 	var iterToolUseCount, noopStreak int
 
 	line := `{"type":"assistant","is_error":true,"error":"authentication_error"}`
@@ -433,7 +423,7 @@ func TestHandleParsedMessageCLI_AuthError_WithAPIKey(t *testing.T) {
 
 	handleParsedMessageCLI(
 		parsed, claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
+		acct, &iterToolUseCount, &noopStreak, apiBackoff,
 	)
 
 	if claudeLoop.IsRunning() {
@@ -449,7 +439,7 @@ func TestHandleParsedMessageCLI_AuthError_WithoutAPIKey(t *testing.T) {
 	tokenStats := stats.NewTokenStats()
 	claudeLoop := loop.New(loop.Config{Iterations: 5, Prompt: "test"})
 	apiBackoff := loop.NewBackoff()
-	var iterEstimate, subagentCostAccum, lastResultCost float64
+	acct := newUsageAccounting()
 	var iterToolUseCount, noopStreak int
 
 	line := `{"type":"assistant","is_error":true,"error":"authentication_error"}`
@@ -460,7 +450,7 @@ func TestHandleParsedMessageCLI_AuthError_WithoutAPIKey(t *testing.T) {
 
 	handleParsedMessageCLI(
 		parsed, claudeLoop, jsonParser, tokenStats, io.Discard,
-		&iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, make(map[string]bool),
+		acct, &iterToolUseCount, &noopStreak, apiBackoff,
 	)
 
 	if claudeLoop.IsRunning() {

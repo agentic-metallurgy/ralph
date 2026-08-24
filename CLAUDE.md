@@ -22,6 +22,13 @@
 - `tests/` — BDD and unit tests for internal packages
 - `cmd/ralph/main_test.go` — tests for main.go functions (isNewLoopStart, isRetryLoopStart, checkCostPacing)
 - `specs/` — feature specifications
+- `scripts/token-audit.sh` — ground-truth token/cost accounting from Claude Code transcripts; `--stream <capture>` diffs streamed usage against a result line's settled figures
+
+## Token accounting
+- The streamed `assistant` events report `output_tokens` as a snapshot of what had been generated when the event was flushed, and the CLI never re-emits a corrected one — accumulating them undercounts output by 1-2 orders of magnitude
+- The settled figures arrive on the `result` line's **top-level** `usage` (not under `message`); `parser.GetResultUsage` reads it and `usageAccounting.reconcileResult` swaps the streamed counts for it
+- A result line's `usage` covers the main loop only, while its `total_cost_usd` includes subagents — so only main-loop token deltas are reconciled
+- Cache writes bill at 2x input for a 1-hour TTL and 1.25x for 5 minutes; the CLI defaults to 1 hour. Use `stats.EstimateCost` with the per-TTL split, not `EstimateCostFromTokens`
 
 ## Subcommands
 - `ralph` — default build mode (uses embedded build prompt)

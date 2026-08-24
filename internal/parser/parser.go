@@ -155,12 +155,47 @@ func truncate(s string, n int) string {
 	return string(r[:n]) + "..."
 }
 
-// Usage represents token usage information from Claude
+// CacheTTLBreakdown splits cache-creation tokens by the TTL they were written
+// at. The two TTLs bill differently — a 5-minute write costs 1.25x the input
+// rate, a 1-hour write 2x — so the split is required to price a cache write.
+type CacheTTLBreakdown struct {
+	Ephemeral1h int64 `json:"ephemeral_1h_input_tokens"`
+	Ephemeral5m int64 `json:"ephemeral_5m_input_tokens"`
+}
+
+// Usage represents token usage information from Claude.
+//
+// Note that OutputTokens is only trustworthy on a `result` line. On streamed
+// `assistant` events it is a snapshot taken when the event was flushed, and the
+// CLI never re-emits a corrected value — see GetResultUsage.
 type Usage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	InputTokens              int64              `json:"input_tokens"`
+	OutputTokens             int64              `json:"output_tokens"`
+	CacheCreationInputTokens int64              `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64              `json:"cache_read_input_tokens"`
+	CacheCreation            *CacheTTLBreakdown `json:"cache_creation,omitempty"`
+}
+
+// CacheCreation1h returns the cache-creation tokens written at the 1-hour TTL.
+func (u *Usage) CacheCreation1h() int64 {
+	if u == nil || u.CacheCreation == nil {
+		return 0
+	}
+	return u.CacheCreation.Ephemeral1h
+}
+
+// CacheCreation5m returns the cache-creation tokens written at the 5-minute TTL.
+// When the CLI omits the per-TTL breakdown, the whole cache-creation figure is
+// attributed to the 5-minute TTL, which is how it was priced before the split
+// existed.
+func (u *Usage) CacheCreation5m() int64 {
+	if u == nil {
+		return 0
+	}
+	if u.CacheCreation == nil {
+		return u.CacheCreationInputTokens
+	}
+	return u.CacheCreation.Ephemeral5m
 }
 
 // RateLimitInfo holds rate limit event data from Claude CLI
@@ -197,6 +232,7 @@ type ParsedMessage struct {
 	SessionID       string          `json:"session_id,omitempty"`
 	Model           string          `json:"model,omitempty"` // top-level model (system init messages)
 	Message         *InnerMessage   `json:"message,omitempty"`
+	Usage           *Usage          `json:"usage,omitempty"` // top-level; only `result` lines carry it
 	TotalCostUSD    float64         `json:"total_cost_usd,omitempty"`
 	CostUSD         float64         `json:"cost_usd,omitempty"`
 	ParentToolUseID *string         `json:"parent_tool_use_id,omitempty"`
@@ -438,6 +474,25 @@ func (p *Parser) GetUsage(msg *ParsedMessage) *Usage {
 		return nil
 	}
 	return msg.Message.Usage
+}
+
+// GetResultUsage returns the authoritative token usage carried on a `result`
+// line, or nil for any other message.
+//
+// This is the only accurate source of output_tokens in the stream. The streamed
+// `assistant` events report the tokens generated *so far* when the event was
+// flushed — typically a single-digit placeholder — and no corrected event
+// follows, so accumulating them undercounts output by one to two orders of
+// magnitude. Input and cache counts are settled at message start and are exact
+// on both.
+//
+// The figures cover the main loop only: a subagent's tokens are absent here even
+// though total_cost_usd does include its cost.
+func (p *Parser) GetResultUsage(msg *ParsedMessage) *Usage {
+	if msg == nil || msg.Type != MessageTypeResult {
+		return nil
+	}
+	return msg.Usage
 }
 
 // GetModel returns the model identifier from a message (e.g. "claude-opus-4-8"),

@@ -53,16 +53,60 @@ func (t *TokenStats) AddUsage(input, output, cacheCreation, cacheRead int64) {
 	t.TotalTokensCount = t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens
 }
 
+// TokenDelta is a plain token tuple, used to reconcile a set of estimated counts
+// against the actual counts that arrive later.
+type TokenDelta struct {
+	Input         int64
+	Output        int64
+	CacheCreation int64
+	CacheRead     int64
+}
+
+// Add accumulates another delta into d.
+func (d *TokenDelta) Add(input, output, cacheCreation, cacheRead int64) {
+	d.Input += input
+	d.Output += output
+	d.CacheCreation += cacheCreation
+	d.CacheRead += cacheRead
+}
+
+// Total returns the sum of all four counters.
+func (d TokenDelta) Total() int64 {
+	return d.Input + d.Output + d.CacheCreation + d.CacheRead
+}
+
+// ReconcileUsage replaces a set of estimated token counts with the actual ones,
+// subtracting the estimate and adding the actual. Counters are floored at zero
+// so a mismatched reconciliation can never render a negative total.
+func (t *TokenStats) ReconcileUsage(estimated, actual TokenDelta) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.InputTokens = nonNegative(t.InputTokens - estimated.Input + actual.Input)
+	t.OutputTokens = nonNegative(t.OutputTokens - estimated.Output + actual.Output)
+	t.CacheCreationTokens = nonNegative(t.CacheCreationTokens - estimated.CacheCreation + actual.CacheCreation)
+	t.CacheReadTokens = nonNegative(t.CacheReadTokens - estimated.CacheRead + actual.CacheRead)
+	t.TotalTokensCount = t.InputTokens + t.OutputTokens + t.CacheCreationTokens + t.CacheReadTokens
+}
+
+func nonNegative(v int64) int64 {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
 // ModelPricing holds per-token USD list prices for a Claude model tier.
-// CacheCreation uses the 5-minute cache-write rate (1.25x input); CacheRead is
-// the cache-read rate (0.1x input). The Claude CLI usage stream reports a single
-// cache_creation_input_tokens figure with no TTL breakdown, so the 5-minute rate
-// is used for the estimate (matching behavior from before pricing was model-aware).
+// CacheCreation is the 5-minute cache-write rate (1.25x input) and
+// CacheCreation1h the 1-hour rate (2x input); CacheRead is the cache-read rate
+// (0.1x input). The CLI reports the split under usage.cache_creation, and
+// defaults to the 1-hour TTL — pricing every write at the 5-minute rate
+// understates a cache-heavy iteration by roughly a third.
 type ModelPricing struct {
-	Input         float64
-	Output        float64
-	CacheCreation float64
-	CacheRead     float64
+	Input           float64
+	Output          float64
+	CacheCreation   float64
+	CacheRead       float64
+	CacheCreation1h float64
 }
 
 // Per-token price sets by model tier (list prices, USD per token) for the
@@ -72,10 +116,10 @@ type ModelPricing struct {
 // $15/$75) would be under-estimated, but those aren't current-gen and any
 // estimate reconciles to the CLI's actual cost once a result arrives.
 var (
-	pricingOpus   = ModelPricing{5.00 / 1_000_000, 25.00 / 1_000_000, 6.25 / 1_000_000, 0.50 / 1_000_000}
-	pricingSonnet = ModelPricing{3.00 / 1_000_000, 15.00 / 1_000_000, 3.75 / 1_000_000, 0.30 / 1_000_000}
-	pricingHaiku  = ModelPricing{1.00 / 1_000_000, 5.00 / 1_000_000, 1.25 / 1_000_000, 0.10 / 1_000_000}
-	pricingFable  = ModelPricing{10.00 / 1_000_000, 50.00 / 1_000_000, 12.50 / 1_000_000, 1.00 / 1_000_000}
+	pricingOpus   = ModelPricing{Input: 5.00 / 1_000_000, Output: 25.00 / 1_000_000, CacheCreation: 6.25 / 1_000_000, CacheRead: 0.50 / 1_000_000, CacheCreation1h: 10.00 / 1_000_000}
+	pricingSonnet = ModelPricing{Input: 3.00 / 1_000_000, Output: 15.00 / 1_000_000, CacheCreation: 3.75 / 1_000_000, CacheRead: 0.30 / 1_000_000, CacheCreation1h: 6.00 / 1_000_000}
+	pricingHaiku  = ModelPricing{Input: 1.00 / 1_000_000, Output: 5.00 / 1_000_000, CacheCreation: 1.25 / 1_000_000, CacheRead: 0.10 / 1_000_000, CacheCreation1h: 2.00 / 1_000_000}
+	pricingFable  = ModelPricing{Input: 10.00 / 1_000_000, Output: 50.00 / 1_000_000, CacheCreation: 12.50 / 1_000_000, CacheRead: 1.00 / 1_000_000, CacheCreation1h: 20.00 / 1_000_000}
 )
 
 // DefaultPricing is used when the model identifier is empty or unrecognized.
@@ -121,15 +165,24 @@ func PricingForModel(model string) ModelPricing {
 	}
 }
 
-// EstimateCostFromTokens computes estimated cost from token counts using the
-// price set for the given model. An empty or unrecognized model uses
-// DefaultPricing.
-func EstimateCostFromTokens(model string, input, output, cacheCreation, cacheRead int64) float64 {
+// EstimateCost computes estimated cost from token counts using the price set for
+// the given model, billing cache writes at the rate for the TTL they were
+// written at. An empty or unrecognized model uses DefaultPricing.
+func EstimateCost(model string, input, output, cacheCreate5m, cacheCreate1h, cacheRead int64) float64 {
 	p := PricingForModel(model)
 	return float64(input)*p.Input +
 		float64(output)*p.Output +
-		float64(cacheCreation)*p.CacheCreation +
+		float64(cacheCreate5m)*p.CacheCreation +
+		float64(cacheCreate1h)*p.CacheCreation1h +
 		float64(cacheRead)*p.CacheRead
+}
+
+// EstimateCostFromTokens computes estimated cost from token counts, attributing
+// every cache write to the 5-minute TTL. Prefer EstimateCost when the per-TTL
+// split is available — the CLI defaults to 1-hour caching, which bills at 2x
+// input rather than 1.25x.
+func EstimateCostFromTokens(model string, input, output, cacheCreation, cacheRead int64) float64 {
+	return EstimateCost(model, input, output, cacheCreation, 0, cacheRead)
 }
 
 // AddCost adds cost to the total cost
