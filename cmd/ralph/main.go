@@ -473,6 +473,141 @@ func main() {
 }
 
 // processLoopOutput reads from the loop's output channel, parses JSON, and updates the TUI
+// usageAccounting holds the per-iteration token and cost bookkeeping shared by
+// the TUI and CLI output handlers.
+//
+// Streamed assistant events are booked as they arrive so the display moves in
+// real time, but their output_tokens is only a snapshot of what had been
+// generated when the event was flushed. The `result` line closing each iteration
+// carries the settled figures, and both the token counts and the cost estimate
+// are reconciled against it there.
+type usageAccounting struct {
+	seenMsgIDs        map[string]bool  // dedup: the CLI emits one chunk per content block, all carrying identical usage
+	iterEstimate      float64          // estimated cost booked this iteration, replaced at reconciliation
+	subagentCostAccum float64          // subagent actual costs booked this iteration, replaced at reconciliation
+	lastResultCost    float64          // previous result's total_cost_usd, for the incremental cost
+	iterMainTokens    stats.TokenDelta // main-loop tokens booked this iteration, replaced at reconciliation
+}
+
+func newUsageAccounting() *usageAccounting {
+	return &usageAccounting{seenMsgIDs: make(map[string]bool)}
+}
+
+// resetIteration clears the per-iteration accumulators at a loop boundary.
+// lastResultCost deliberately survives it: that tracks the CLI's running total
+// across the iterations of a resumed session.
+func (a *usageAccounting) resetIteration() {
+	a.iterEstimate = 0
+	a.subagentCostAccum = 0
+	a.iterMainTokens = stats.TokenDelta{}
+	clear(a.seenMsgIDs)
+}
+
+// recordUsage books a streamed assistant message's usage, returning the number
+// of tokens added and whether the message was new. Repeat chunks of a message
+// already seen are ignored.
+func (a *usageAccounting) recordUsage(jsonParser *parser.Parser, parsed *parser.ParsedMessage, tokenStats *stats.TokenStats) (int64, bool) {
+	usage := jsonParser.GetUsage(parsed)
+	if usage == nil {
+		return 0, false
+	}
+	msgID := jsonParser.GetMessageID(parsed)
+	if msgID != "" {
+		if a.seenMsgIDs[msgID] {
+			return 0, false
+		}
+		a.seenMsgIDs[msgID] = true
+	}
+
+	tokenStats.AddUsage(
+		usage.InputTokens,
+		usage.OutputTokens,
+		usage.CacheCreationInputTokens,
+		usage.CacheReadInputTokens,
+	)
+
+	// Estimate cost from token counts so the display moves in real time. Cache
+	// writes are priced by the TTL they were written at — the CLI defaults to
+	// 1 hour, which bills at 2x input rather than 1.25x.
+	estimate := stats.EstimateCost(
+		jsonParser.GetModel(parsed),
+		usage.InputTokens,
+		usage.OutputTokens,
+		usage.CacheCreation5m(),
+		usage.CacheCreation1h(),
+		usage.CacheReadInputTokens,
+	)
+	tokenStats.AddCost(estimate)
+	a.iterEstimate += estimate
+
+	// Only main-loop tokens are reconciled later: a result line's usage covers
+	// the main loop alone, so subagent tokens have to stand as booked here.
+	if !jsonParser.IsSubagentMessage(parsed) {
+		a.iterMainTokens.Add(
+			usage.InputTokens,
+			usage.OutputTokens,
+			usage.CacheCreationInputTokens,
+			usage.CacheReadInputTokens,
+		)
+	}
+
+	return usage.InputTokens + usage.OutputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens, true
+}
+
+// reconcileResult replaces this iteration's estimates with the settled figures
+// from a `result` line. It returns the iteration's actual cost (zero for a
+// subagent result, whose cost the main result already covers), the correction to
+// apply to any per-loop token counter, and whether a result was handled at all.
+func (a *usageAccounting) reconcileResult(jsonParser *parser.Parser, parsed *parser.ParsedMessage, tokenStats *stats.TokenStats) (iterActualCost float64, tokenCorrection int64, ok bool) {
+	cost := jsonParser.GetCost(parsed)
+	if cost <= 0 {
+		return 0, 0, false
+	}
+
+	if jsonParser.IsSubagentMessage(parsed) {
+		// Subagent result: book the actual cost for real-time visibility and
+		// remember it, since the main result's total_cost_usd already includes it.
+		tokenStats.AddCost(cost)
+		a.subagentCostAccum += cost
+		return 0, 0, true
+	}
+
+	// Main iteration result. total_cost_usd is cumulative within a resumed
+	// session, so take the increment whenever it has grown.
+	iterActualCost = cost
+	if cost >= a.lastResultCost {
+		iterActualCost = cost - a.lastResultCost
+	}
+	a.lastResultCost = cost
+	tokenStats.ReconcileCost(a.iterEstimate+a.subagentCostAccum, iterActualCost)
+
+	// Swap the streamed main-loop token counts for the settled ones. This is
+	// where the partial output_tokens booked by recordUsage gets corrected.
+	if settled := jsonParser.GetResultUsage(parsed); settled != nil {
+		actual := stats.TokenDelta{
+			Input:         settled.InputTokens,
+			Output:        settled.OutputTokens,
+			CacheCreation: settled.CacheCreationInputTokens,
+			CacheRead:     settled.CacheReadInputTokens,
+		}
+		tokenStats.ReconcileUsage(a.iterMainTokens, actual)
+		tokenCorrection = actual.Total() - a.iterMainTokens.Total()
+	}
+
+	a.iterEstimate = 0
+	a.subagentCostAccum = 0
+	a.iterMainTokens = stats.TokenDelta{}
+	return iterActualCost, tokenCorrection, true
+}
+
+// applyTokenCorrection folds a reconciliation correction into a per-loop token
+// counter, keeping it non-negative.
+func applyTokenCorrection(loopTotalTokens *int64, correction int64) {
+	if *loopTotalTokens += correction; *loopTotalTokens < 0 {
+		*loopTotalTokens = 0
+	}
+}
+
 func processLoopOutput(
 	ctx context.Context,
 	claudeLoop *loop.Loop,
@@ -488,13 +623,10 @@ func processLoopOutput(
 	defer close(msgChan)
 
 	loopOutput := claudeLoop.Output()
-	var loopTotalTokens int64           // per-loop token tracking for tmux status bar
-	var iterEstimate float64            // per-iteration estimated cost from token counts
-	var subagentCostAccum float64       // per-iteration accumulated subagent actual costs for reconciliation
-	var lastResultCost float64          // tracks previous result's cumulative total_cost_usd for delta computation
-	var iterToolUseCount int            // per-iteration tool use count for exit loop detection
-	var noopStreak int                  // consecutive no-op iterations for exit loop detection
-	seenMsgIDs := make(map[string]bool) // dedup: CLI emits multiple chunks per message ID with identical usage
+	var loopTotalTokens int64    // per-loop token tracking for tmux status bar
+	acct := newUsageAccounting() // per-iteration token/cost bookkeeping, reconciled at each result line
+	var iterToolUseCount int     // per-iteration tool use count for exit loop detection
+	var noopStreak int           // consecutive no-op iterations for exit loop detection
 	lt := &loopTracker{}
 	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
@@ -535,7 +667,7 @@ func processLoopOutput(
 				return
 			}
 
-			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, dbCtx, lt, apiBackoff, seenMsgIDs)
+			processMessage(msg, claudeLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, acct, &iterToolUseCount, &noopStreak, dbCtx, lt, apiBackoff)
 		}
 	}
 }
@@ -590,19 +722,16 @@ func processMessage(
 	program *tea.Program,
 	loopTotalTokens *int64,
 	logFile io.Writer,
-	iterEstimate *float64,
-	subagentCostAccum *float64,
-	lastResultCost *float64,
+	acct *usageAccounting,
 	iterToolUseCount *int,
 	noopStreak *int,
 	dbCtx *dbContext,
 	lt *loopTracker,
 	apiBackoff *loop.Backoff,
-	seenMsgIDs map[string]bool,
 ) {
 	switch msg.Type {
 	case "loop_marker":
-		handleLoopMarker(msg, msgChan, program, loopTotalTokens, iterEstimate, subagentCostAccum, iterToolUseCount, dbCtx, lt, tokenStats, seenMsgIDs)
+		handleLoopMarker(msg, msgChan, program, loopTotalTokens, acct, iterToolUseCount, dbCtx, lt, tokenStats)
 		// Reset 529 backoff on successful new loop start (iteration completed without 529)
 		if isNewLoopStart(msg.Content) {
 			apiBackoff.Reset()
@@ -614,7 +743,7 @@ func processMessage(
 		if parsed != nil {
 			// Capture session ID from system messages for --resume support
 			trackSession(claudeLoop, jsonParser.GetSessionID(parsed), program)
-			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile, iterEstimate, subagentCostAccum, lastResultCost, iterToolUseCount, noopStreak, apiBackoff, seenMsgIDs)
+			handleParsedMessage(parsed, claudeLoop, jsonParser, tokenStats, msgChan, program, loopTotalTokens, logFile, acct, iterToolUseCount, noopStreak, apiBackoff)
 		} else {
 			// Check if it's a loop marker in the output stream
 			loopMarker := jsonParser.ParseLoopMarker(msg.Content)
@@ -659,24 +788,21 @@ func processMessage(
 
 // handleLoopMarker processes a loop_marker message for TUI mode.
 // Shared by processMessage, processPlanPhase, and processBuildPhase.
-func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64, iterEstimate *float64, subagentCostAccum *float64, iterToolUseCount *int, dbCtx *dbContext, lt *loopTracker, tokenStats *stats.TokenStats, seenMsgIDs map[string]bool) {
+func handleLoopMarker(msg loop.Message, msgChan chan<- tui.Message, program *tea.Program, loopTotalTokens *int64, acct *usageAccounting, iterToolUseCount *int, dbCtx *dbContext, lt *loopTracker, tokenStats *stats.TokenStats) {
 	program.Send(tui.SendLoopUpdate(msg.Loop, msg.Total)())
 	// Detect new loop iteration start (not STOPPED/COMPLETED/RESUMED/RETRY)
 	if isNewLoopStart(msg.Content) {
 		lt.startNewLoop(dbCtx, tokenStats, msg.Loop)
 		*loopTotalTokens = 0
-		*iterEstimate = 0
-		*subagentCostAccum = 0
+		acct.resetIteration()
 		*iterToolUseCount = 0
-		clear(seenMsgIDs)
 		program.Send(tui.SendLoopStarted()())
 		program.Send(tui.SendLoopStatsUpdate(0)())
 	} else if isRetryLoopStart(msg.Content) {
 		// Hibernate retry: reset iteration counters but do NOT create a new DB entry
 		// and do NOT reset apiBackoff (callers handle that separately)
 		*loopTotalTokens = 0
-		*iterEstimate = 0
-		*subagentCostAccum = 0
+		acct.resetIteration()
 		*iterToolUseCount = 0
 	}
 	// Use stop sign emoji for STOPPED messages
@@ -711,13 +837,10 @@ func handleParsedMessage(
 	program *tea.Program,
 	loopTotalTokens *int64,
 	logFile io.Writer,
-	iterEstimate *float64,
-	subagentCostAccum *float64,
-	lastResultCost *float64,
+	acct *usageAccounting,
 	iterToolUseCount *int,
 	noopStreak *int,
 	apiBackoff *loop.Backoff,
-	seenMsgIDs map[string]bool,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -786,70 +909,27 @@ func handleParsedMessage(
 		return
 	}
 
-	// Extract usage information — deduplicate by message ID.
-	// The CLI emits multiple chunks per message ID (one per content block),
-	// each carrying identical cumulative usage. Only process usage once per message.
-	if usage := jsonParser.GetUsage(parsed); usage != nil {
-		msgID := jsonParser.GetMessageID(parsed)
-		if msgID == "" || !seenMsgIDs[msgID] {
-			if msgID != "" {
-				seenMsgIDs[msgID] = true
-			}
-			tokenStats.AddUsage(
-				usage.InputTokens,
-				usage.OutputTokens,
-				usage.CacheCreationInputTokens,
-				usage.CacheReadInputTokens,
-			)
-			// Estimate cost from token counts and update in real-time
-			msgModel := jsonParser.GetModel(parsed)
-			estimate := stats.EstimateCostFromTokens(
-				msgModel,
-				usage.InputTokens,
-				usage.OutputTokens,
-				usage.CacheCreationInputTokens,
-				usage.CacheReadInputTokens,
-			)
-			// Report the effective model to the Model Details panel. Subagent
-			// messages are skipped — they may run a different model than the
-			// main loop.
-			if msgModel != "" && !jsonParser.IsSubagentMessage(parsed) {
-				program.Send(tui.SendModelUpdate(msgModel)())
-			}
-			tokenStats.AddCost(estimate)
-			*iterEstimate += estimate
-			program.Send(tui.SendStatsUpdate(tokenStats)())
-			// Also track per-loop tokens for tmux status bar
-			loopTokens := usage.InputTokens + usage.OutputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
-			*loopTotalTokens += loopTokens
-			program.Send(tui.SendLoopStatsUpdate(*loopTotalTokens)())
-		}
-	}
-
-	// Extract cost from result messages — reconcile estimate with actual.
-	// The CLI's total_cost_usd is session-cumulative in --resume sessions,
-	// so we compute the incremental cost by subtracting the previous result's value.
-	var iterActualCost float64
-	if cost := jsonParser.GetCost(parsed); cost > 0 {
-		if !jsonParser.IsSubagentMessage(parsed) {
-			// Main iteration result: compute incremental cost from cumulative total_cost_usd
-			if cost >= *lastResultCost {
-				iterActualCost = cost - *lastResultCost
-			} else {
-				iterActualCost = cost
-			}
-			*lastResultCost = cost
-			// Replace accumulated estimates AND subagent actuals with actual cost
-			// The main result's total_cost_usd already includes subagent costs
-			tokenStats.ReconcileCost(*iterEstimate+*subagentCostAccum, iterActualCost)
-			*iterEstimate = 0
-			*subagentCostAccum = 0
-		} else {
-			// Subagent result: add actual cost for real-time visibility, track for later reconciliation
-			tokenStats.AddCost(cost)
-			*subagentCostAccum += cost
+	// Book streamed usage as it arrives so the panels move in real time; the
+	// result line below corrects it.
+	if added, isNew := acct.recordUsage(jsonParser, parsed, tokenStats); isNew {
+		// Report the effective model to the Model Details panel. Subagent
+		// messages are skipped — they may run a different model than the
+		// main loop.
+		if msgModel := jsonParser.GetModel(parsed); msgModel != "" && !jsonParser.IsSubagentMessage(parsed) {
+			program.Send(tui.SendModelUpdate(msgModel)())
 		}
 		program.Send(tui.SendStatsUpdate(tokenStats)())
+		// Also track per-loop tokens for tmux status bar
+		*loopTotalTokens += added
+		program.Send(tui.SendLoopStatsUpdate(*loopTotalTokens)())
+	}
+
+	// Reconcile this iteration's estimates against the result line's actuals.
+	iterActualCost, tokenCorrection, reconciled := acct.reconcileResult(jsonParser, parsed, tokenStats)
+	if reconciled {
+		applyTokenCorrection(loopTotalTokens, tokenCorrection)
+		program.Send(tui.SendStatsUpdate(tokenStats)())
+		program.Send(tui.SendLoopStatsUpdate(*loopTotalTokens)())
 	}
 
 	// Process message content based on type
@@ -969,13 +1049,10 @@ func handleParsedMessageCLI(
 	jsonParser *parser.Parser,
 	tokenStats *stats.TokenStats,
 	logFile io.Writer,
-	iterEstimate *float64,
-	subagentCostAccum *float64,
-	lastResultCost *float64,
+	acct *usageAccounting,
 	iterToolUseCount *int,
 	noopStreak *int,
 	apiBackoff *loop.Backoff,
-	seenMsgIDs map[string]bool,
 ) {
 	// Check for rate limit rejection — enter hibernate state
 	if rejected, resetsAt := jsonParser.IsRateLimitRejected(parsed); rejected {
@@ -1018,54 +1095,9 @@ func handleParsedMessageCLI(
 		claudeLoop.Stop()
 		return
 	}
-	// Track stats — deduplicate by message ID (same fix as TUI mode)
-	if usage := jsonParser.GetUsage(parsed); usage != nil {
-		msgID := jsonParser.GetMessageID(parsed)
-		if msgID == "" || !seenMsgIDs[msgID] {
-			if msgID != "" {
-				seenMsgIDs[msgID] = true
-			}
-			tokenStats.AddUsage(
-				usage.InputTokens,
-				usage.OutputTokens,
-				usage.CacheCreationInputTokens,
-				usage.CacheReadInputTokens,
-			)
-			// Estimate cost from token counts and update in real-time
-			estimate := stats.EstimateCostFromTokens(
-				jsonParser.GetModel(parsed),
-				usage.InputTokens,
-				usage.OutputTokens,
-				usage.CacheCreationInputTokens,
-				usage.CacheReadInputTokens,
-			)
-			tokenStats.AddCost(estimate)
-			*iterEstimate += estimate
-		}
-	}
-	// Extract cost from result messages — reconcile estimate with actual.
-	// The CLI's total_cost_usd is session-cumulative in --resume sessions,
-	// so we compute the incremental cost by subtracting the previous result's value.
-	var iterActualCost float64
-	if cost := jsonParser.GetCost(parsed); cost > 0 {
-		if !jsonParser.IsSubagentMessage(parsed) {
-			// Main iteration result: compute incremental cost from cumulative total_cost_usd
-			if cost >= *lastResultCost {
-				iterActualCost = cost - *lastResultCost
-			} else {
-				iterActualCost = cost
-			}
-			*lastResultCost = cost
-			// Replace accumulated estimates AND subagent actuals with actual cost
-			tokenStats.ReconcileCost(*iterEstimate+*subagentCostAccum, iterActualCost)
-			*iterEstimate = 0
-			*subagentCostAccum = 0
-		} else {
-			// Subagent result: add actual cost for real-time visibility, track for later reconciliation
-			tokenStats.AddCost(cost)
-			*subagentCostAccum += cost
-		}
-	}
+	// Track stats — booked as streamed, then corrected against the result line.
+	acct.recordUsage(jsonParser, parsed, tokenStats)
+	iterActualCost, _, _ := acct.reconcileResult(jsonParser, parsed, tokenStats)
 	// Print assistant text and tool use
 	if parsed.Type == parser.MessageTypeAssistant {
 		content := jsonParser.ExtractContent(parsed)
@@ -1172,13 +1204,10 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 	claudeLoop.Start(ctx)
 
 	jsonParser := parser.NewParser()
-	var iterEstimate float64
-	var subagentCostAccum float64
-	var lastResultCost float64
+	acct := newUsageAccounting()
 	var iterToolUseCount int
 	var noopStreak int
 	var authFailed bool
-	seenMsgIDs := make(map[string]bool)
 	lt := &loopTracker{}
 	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
@@ -1218,16 +1247,14 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 			case "loop_marker":
 				if isNewLoopStart(msg.Content) {
 					lt.startNewLoop(dbCtx, tokenStats, msg.Loop)
-					iterEstimate = 0
-					subagentCostAccum = 0
+					acct.resetIteration()
 					iterToolUseCount = 0
-					seenMsgIDs = make(map[string]bool)
+
 					apiBackoff.Reset()
 				} else if isRetryLoopStart(msg.Content) {
 					// Hibernate retry: reset iteration counters but do NOT create
 					// a new DB entry and do NOT reset apiBackoff
-					iterEstimate = 0
-					subagentCostAccum = 0
+					acct.resetIteration()
 					iterToolUseCount = 0
 				}
 				fmt.Printf("[loop] %s\n", msg.Content)
@@ -1238,7 +1265,7 @@ func runCLI(cfg *config.Config, promptContent string, tokenStats *stats.TokenSta
 					if sessionID := jsonParser.GetSessionID(parsed); sessionID != "" {
 						claudeLoop.SetSessionID(sessionID)
 					}
-					handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
+					handleParsedMessageCLI(parsed, claudeLoop, jsonParser, tokenStats, logFile, acct, &iterToolUseCount, &noopStreak, apiBackoff)
 					if jsonParser.IsAuthenticationError(parsed) {
 						authFailed = true
 					}
@@ -1324,12 +1351,10 @@ func runPlanAndBuildCLI(cfg *config.Config, tokenStats *stats.TokenStats, logFil
 	planLoop.Start(ctx)
 
 	var sessionID string
-	var planIterEstimate float64
-	var planSubagentCostAccum float64
-	var planLastResultCost float64
+	planAcct := newUsageAccounting()
 	var planIterToolUseCount int
 	var planNoopStreak int
-	planSeenMsgIDs := make(map[string]bool)
+
 	planLt := &loopTracker{}
 	planBackoff := loop.NewBackoff() // exponential backoff for API 529 errors (plan phase)
 
@@ -1360,8 +1385,7 @@ planLoop:
 			case "loop_marker":
 				if isNewLoopStart(msg.Content) {
 					planLt.startNewLoop(dbCtx, tokenStats, msg.Loop)
-					planIterEstimate = 0
-					planSubagentCostAccum = 0
+					planAcct.resetIteration()
 					planIterToolUseCount = 0
 				}
 				fmt.Printf("[loop] %s\n", msg.Content)
@@ -1373,7 +1397,7 @@ planLoop:
 						planLoop.SetSessionID(sid)
 						sessionID = sid
 					}
-					handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, &planIterEstimate, &planSubagentCostAccum, &planLastResultCost, &planIterToolUseCount, &planNoopStreak, planBackoff, planSeenMsgIDs)
+					handleParsedMessageCLI(parsed, planLoop, jsonParser, tokenStats, logFile, planAcct, &planIterToolUseCount, &planNoopStreak, planBackoff)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						fmt.Fprintf(os.Stderr, "[error] Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.\n")
@@ -1428,12 +1452,10 @@ planLoop:
 
 	buildLoop.Start(ctx)
 
-	var buildIterEstimate float64
-	var buildSubagentCostAccum float64
-	var buildLastResultCost float64
+	buildAcct := newUsageAccounting()
 	var buildIterToolUseCount int
 	var buildNoopStreak int
-	buildSeenMsgIDs := make(map[string]bool)
+
 	buildLt := &loopTracker{}
 	buildBackoff := loop.NewBackoff() // exponential backoff for API 529 errors (build phase)
 
@@ -1463,8 +1485,7 @@ planLoop:
 			case "loop_marker":
 				if isNewLoopStart(msg.Content) {
 					buildLt.startNewLoop(dbCtx, tokenStats, msg.Loop)
-					buildIterEstimate = 0
-					buildSubagentCostAccum = 0
+					buildAcct.resetIteration()
 					buildIterToolUseCount = 0
 				}
 				fmt.Printf("[loop] %s\n", msg.Content)
@@ -1475,7 +1496,7 @@ planLoop:
 					if sid := jsonParser.GetSessionID(parsed); sid != "" {
 						buildLoop.SetSessionID(sid)
 					}
-					handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, &buildIterEstimate, &buildSubagentCostAccum, &buildLastResultCost, &buildIterToolUseCount, &buildNoopStreak, buildBackoff, buildSeenMsgIDs)
+					handleParsedMessageCLI(parsed, buildLoop, jsonParser, tokenStats, logFile, buildAcct, &buildIterToolUseCount, &buildNoopStreak, buildBackoff)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						fmt.Fprintf(os.Stderr, "[error] Authentication failed: ANTHROPIC_API_KEY is set but appears to be invalid. Please check your API key.\n")
@@ -1652,12 +1673,10 @@ func processPlanPhase(
 ) string {
 	loopOutput := planLoop.Output()
 	var loopTotalTokens int64
-	var iterEstimate float64
-	var subagentCostAccum float64
-	var lastResultCost float64
+	acct := newUsageAccounting()
 	var iterToolUseCount int
 	var noopStreak int
-	seenMsgIDs := make(map[string]bool)
+
 	lt := &loopTracker{}
 	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
@@ -1695,7 +1714,7 @@ func processPlanPhase(
 
 			switch msg.Type {
 			case "loop_marker":
-				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate, &subagentCostAccum, &iterToolUseCount, dbCtx, lt, tokenStats, seenMsgIDs)
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, acct, &iterToolUseCount, dbCtx, lt, tokenStats)
 				if isNewLoopStart(msg.Content) {
 					apiBackoff.Reset()
 				}
@@ -1704,7 +1723,7 @@ func processPlanPhase(
 				parsed := jsonParser.ParseLine(msg.Content)
 				if parsed != nil {
 					trackSession(planLoop, jsonParser.GetSessionID(parsed), program)
-					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
+					handleParsedMessage(parsed, planLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, acct, &iterToolUseCount, &noopStreak, apiBackoff)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						msgChan <- tui.Message{
@@ -1754,12 +1773,10 @@ func processBuildPhase(
 ) {
 	loopOutput := buildLoop.Output()
 	var loopTotalTokens int64
-	var iterEstimate float64
-	var subagentCostAccum float64
-	var lastResultCost float64
+	acct := newUsageAccounting()
 	var iterToolUseCount int
 	var noopStreak int
-	seenMsgIDs := make(map[string]bool)
+
 	lt := &loopTracker{}
 	apiBackoff := loop.NewBackoff() // exponential backoff for API 529 errors
 
@@ -1801,7 +1818,7 @@ func processBuildPhase(
 
 			switch msg.Type {
 			case "loop_marker":
-				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, &iterEstimate, &subagentCostAccum, &iterToolUseCount, dbCtx, lt, tokenStats, seenMsgIDs)
+				handleLoopMarker(msg, msgChan, program, &loopTotalTokens, acct, &iterToolUseCount, dbCtx, lt, tokenStats)
 				if isNewLoopStart(msg.Content) {
 					apiBackoff.Reset()
 				}
@@ -1810,7 +1827,7 @@ func processBuildPhase(
 				parsed := jsonParser.ParseLine(msg.Content)
 				if parsed != nil {
 					trackSession(buildLoop, jsonParser.GetSessionID(parsed), program)
-					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, &iterEstimate, &subagentCostAccum, &lastResultCost, &iterToolUseCount, &noopStreak, apiBackoff, seenMsgIDs)
+					handleParsedMessage(parsed, buildLoop, jsonParser, tokenStats, msgChan, program, &loopTotalTokens, logFile, acct, &iterToolUseCount, &noopStreak, apiBackoff)
 				} else if isAuthenticationText(msg.Content) {
 					if os.Getenv("ANTHROPIC_API_KEY") != "" {
 						msgChan <- tui.Message{

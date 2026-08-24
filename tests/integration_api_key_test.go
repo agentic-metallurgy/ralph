@@ -3,6 +3,7 @@
 package tests
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cloudosai/ralph-go/internal/parser"
 )
 
 // ralphBinary is set by TestMain to point at the built ralph binary.
@@ -66,13 +69,6 @@ type initMsg struct {
 	APIKeySource string `json:"apiKeySource"`
 }
 
-// assistantMsg captures error fields from an assistant message.
-type assistantMsg struct {
-	Type    string `json:"type"`
-	Error   string `json:"error"`
-	IsError bool   `json:"is_error"`
-}
-
 // --- Claude CLI integration tests ---
 
 func TestIntegration_ClaudeCLI_APIKeyInherited(t *testing.T) {
@@ -110,12 +106,22 @@ func TestIntegration_ClaudeCLI_APIKeyInherited(t *testing.T) {
 	}
 }
 
+// TestIntegration_ClaudeCLI_InvalidKey_AuthError asserts the contract ralph
+// depends on: that a bad API key produces something parser.IsAuthenticationError
+// recognizes. It deliberately asks ralph's own detector rather than re-checking a
+// specific message shape — the CLI has moved the signal before. It used to arrive
+// as an `assistant` message carrying an error; it now arrives as
+// `{"type":"system","subtype":"api_retry","error_status":401,"error":"authentication_failed"}`.
+//
+// The CLI retries a 401 up to ten times with exponential backoff, so the stream is
+// scanned line by line and the process killed as soon as the signal appears,
+// rather than waiting out the retries.
 func TestIntegration_ClaudeCLI_InvalidKey_AuthError(t *testing.T) {
 	if _, err := exec.LookPath("claude"); err != nil {
 		t.Skip("claude CLI not found on PATH")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "claude",
@@ -126,21 +132,35 @@ func TestIntegration_ClaudeCLI_InvalidKey_AuthError(t *testing.T) {
 	)
 	cmd.Env = cleanEnv("ANTHROPIC_API_KEY=sk-ant-test-invalid-key")
 
-	out, _ := cmd.CombinedOutput()
-	lines := strings.Split(string(out), "\n")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("creating stdout pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting claude: %v", err)
+	}
 
+	jsonParser := parser.NewParser()
 	var gotAuthError bool
-	for _, line := range lines {
-		var msg assistantMsg
-		if json.Unmarshal([]byte(line), &msg) == nil && msg.Type == "assistant" {
-			if strings.Contains(msg.Error, "authentication") {
-				gotAuthError = true
-				break
-			}
+	var seen strings.Builder
+
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 0, 1024*1024), 8*1024*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		seen.WriteString(line)
+		seen.WriteByte('\n')
+		if jsonParser.IsAuthenticationError(jsonParser.ParseLine(line)) {
+			gotAuthError = true
+			break
 		}
 	}
+
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+
 	if !gotAuthError {
-		t.Errorf("expected authentication error from claude with invalid API key, output:\n%s", string(out))
+		t.Errorf("expected an authentication error from claude with an invalid API key, output:\n%s", seen.String())
 	}
 }
 
